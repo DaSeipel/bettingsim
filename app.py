@@ -469,7 +469,7 @@ def _bet_history_table(records: list) -> None:
         },
     )
 
-tab_overview, tab_basketball, tab_nba_totals = st.tabs(["Overview", "Basketball", "NBA Totals"])
+tab_overview, tab_basketball, tab_nba = st.tabs(["Overview", "Basketball", "NBA"])
 
 with tab_overview:
     c1, c2, c3 = st.columns(3)
@@ -512,13 +512,26 @@ with tab_basketball:
     st.subheader("Bet history")
     _bet_history_table(results_basketball["bet_history"])
 
-with tab_nba_totals:
-    st.subheader("NBA Totals")
-    st.caption("Pace-adjusted Over/Under vs bookmaker line. Back-to-back (B2B) teams: Pace −1.5%, Off Rating −2%. Value Over if projection > line + 3; Value Under if projection < line − 3.")
+with tab_nba:
+    st.subheader("NBA")
+    st.caption("One model across the app: in-house line (power ratings), pace-adjusted totals, B2B, key numbers, fractional Kelly half-units.")
     if (odds_api_key or "").strip():
         if st.button("Refresh", help="Pull latest NBA odds from The Odds API (also refreshes every 15 min automatically)"):
             st.session_state["odds_refresh_key"] = st.session_state.get("odds_refresh_key", 0) + 1
             st.rerun()
+    # NBA slice of the same value plays (one model)
+    nba_value = value_plays_df[value_plays_df["League"] == "NBA"] if not value_plays_df.empty and "League" in value_plays_df.columns else pd.DataFrame()
+    if not nba_value.empty:
+        nba_best = nba_value.sort_values("Value (%)", ascending=False).groupby("Event").head(1).reset_index(drop=True)
+        st.caption("**Best value plays (NBA)** — same model as main table")
+        _vp = nba_best.copy()
+        _vp["Odds"] = _vp["Odds"].apply(format_american)
+        if "Recommended Stake" in _vp.columns:
+            _vp["Recommended Stake"] = _vp["Recommended Stake"].apply(lambda x: format_currency(x) if pd.notna(x) else "—")
+        if "Market" in _vp.columns:
+            _vp["Market"] = _vp["Market"].map(lambda x: MARKET_LABELS.get(x, x) if pd.notna(x) else x)
+        st.dataframe(_vp.rename(columns={"Event": "Game"}), use_container_width=True, hide_index=True)
+    st.caption("**Totals tracker** — in-house projected total vs market O/U")
     nba_totals_df = pd.DataFrame()
     if not live_odds_df.empty and "sport_key" in live_odds_df.columns:
         totals_only = live_odds_df[
