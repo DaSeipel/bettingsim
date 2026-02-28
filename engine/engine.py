@@ -13,6 +13,8 @@ import requests
 from bs4 import BeautifulSoup
 from typing import Callable, Any
 
+from strategies.strategies import american_to_decimal, decimal_to_american
+
 # Football-Data.co.uk fixtures CSV (no API key required)
 FIXTURES_CSV_URL = "https://www.football-data.co.uk/fixtures.csv"
 
@@ -74,20 +76,16 @@ def get_daily_fixtures(source_url: str | None = None) -> pd.DataFrame:
         "away_team": df.get("AwayTeam", pd.Series(dtype=object)),
     })
     out["event_name"] = out["home_team"].astype(str) + " vs " + out["away_team"].astype(str)
-    out["odds_home"] = pd.to_numeric(odds_home, errors="coerce") if odds_home is not None else None
-    out["odds_draw"] = pd.to_numeric(odds_draw, errors="coerce") if odds_draw is not None else None
-    out["odds_away"] = pd.to_numeric(odds_away, errors="coerce") if odds_away is not None else None
+    # Football-data.co.uk uses decimal odds; convert to American for project standard
+    def _dec_to_am(s: pd.Series | None) -> pd.Series | None:
+        if s is None:
+            return None
+        num = pd.to_numeric(s, errors="coerce")
+        return num.apply(lambda x: decimal_to_american(x) if pd.notna(x) and x > 1 else None)
+    out["odds_home"] = _dec_to_am(odds_home)
+    out["odds_draw"] = _dec_to_am(odds_draw)
+    out["odds_away"] = _dec_to_am(odds_away)
     return out.dropna(how="all", subset=["home_team", "away_team"]).reset_index(drop=True)
-
-
-def _american_to_decimal(american: int | float) -> float:
-    """Convert American odds to decimal. Handles both positive and negative."""
-    a = float(american)
-    if a >= 100:
-        return 1.0 + a / 100.0
-    if a <= -100:
-        return 1.0 + 100.0 / abs(a)
-    return 1.0
 
 
 def get_basketball_odds(
@@ -95,17 +93,18 @@ def get_basketball_odds(
     sports: list[str] | None = None,
     regions: str = "us",
     markets: list[str] | None = None,
-    odds_format: str = "decimal",
+    odds_format: str = "american",
 ) -> pd.DataFrame:
     """
     Fetch NBA and NCAA basketball odds from The Odds API (v4).
     Uses sport keys basketball_nba and basketball_ncaab.
     Returns spreads and totals (Over/Under) as well as moneyline (h2h).
+    Odds are returned in American format (+150, -110).
 
     Requires an API key from https://the-odds-api.com (free tier available).
     Returns a DataFrame with columns: sport_key, league, event_id, commence_time,
     home_team, away_team, event_name, market_type (h2h|spreads|totals),
-    selection, point (spread or total line; NaN for h2h), odds (decimal).
+    selection, point (spread or total line; NaN for h2h), odds (American).
     """
     if not (api_key or "").strip():
         return pd.DataFrame(
@@ -163,12 +162,12 @@ def get_basketball_odds(
                             p = float(price)
                         except (TypeError, ValueError):
                             continue
-                        # API may return American (e.g. -110, 240) or decimal (e.g. 1.91)
+                        # Store American: API returns American when oddsFormat=american; else convert decimal to American
                         if isinstance(price, (int, float)) and (price >= 100 or price <= -100):
-                            odds = _american_to_decimal(float(price))
+                            odds_american = int(p)
                         else:
-                            odds = p
-                        if odds < 1.01:
+                            odds_american = int(round(decimal_to_american(p)))
+                        if abs(odds_american) < 100:
                             continue
                         point = out.get("point")
                         if point is not None:
@@ -194,7 +193,7 @@ def get_basketball_odds(
                             "market_type": market_type,
                             "selection": selection,
                             "point": point,
-                            "odds": round(odds, 2),
+                            "odds": odds_american,
                         })
 
     if not rows:
@@ -273,21 +272,23 @@ class Scraper:
                 odds_values = [self._parse_odds_cell(c) for c in cells]
                 odds_nums = [x for x in odds_values if x is not None and 1.0 < x < 50.0]
                 if len(odds_nums) >= 2:
-                    # Heuristic: assume order H, D, A if we have 3, else take first
+                    # Heuristic: assume order H, D, A if we have 3; convert decimal to American
+                    def _to_american(d: float) -> int:
+                        return int(round(decimal_to_american(d)))
                     event_name = " ".join(c for c in cells[:3] if c and not re.match(r"^\d+\.\d+", c)) or "Unknown"
                     if len(odds_nums) >= 3:
                         rows_data.append({
                             "event_name": event_name[:80],
-                            "odds_home": round(odds_nums[0], 2),
-                            "odds_draw": round(odds_nums[1], 2),
-                            "odds_away": round(odds_nums[2], 2),
+                            "odds_home": _to_american(odds_nums[0]),
+                            "odds_draw": _to_american(odds_nums[1]),
+                            "odds_away": _to_american(odds_nums[2]),
                         })
                     else:
                         rows_data.append({
                             "event_name": event_name[:80],
-                            "odds_home": round(odds_nums[0], 2),
+                            "odds_home": _to_american(odds_nums[0]),
                             "odds_draw": None,
-                            "odds_away": round(odds_nums[1], 2) if len(odds_nums) > 1 else None,
+                            "odds_away": _to_american(odds_nums[1]) if len(odds_nums) > 1 else None,
                         })
 
         if not rows_data:
@@ -350,12 +351,13 @@ class BettingEngine:
                 self._bankroll_curve.append(bankroll)
                 continue
 
-            odds = float(row["odds"])
+            odds_american = float(row["odds"])
             result = int(row["result"])
             total_staked += stake
+            odds_decimal = american_to_decimal(odds_american)
 
             if result == 1:
-                profit = stake * (odds - 1.0)
+                profit = stake * (odds_decimal - 1.0)
                 wins += 1
                 result_str = "Won"
             else:
@@ -371,8 +373,8 @@ class BettingEngine:
                 "step": step + 1,
                 "event_id": row.get("event_id", idx),
                 "event_name": row.get("event_name", f"Event {idx + 1}"),
-                "odds": odds,
-                "model_prob": row.get("model_prob", 1.0 / odds),
+                "odds": odds_american,
+                "model_prob": row.get("model_prob", 1.0 / odds_decimal),
                 "stake": round(stake, 2),
                 "result": result_str,
                 "profit": round(profit, 2),

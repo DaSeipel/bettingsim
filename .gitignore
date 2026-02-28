@@ -15,6 +15,7 @@ build/
 .streamlit/secrets.toml
 
 # IDE / OS
+.cursor/
 .idea/
 .vscode/
 .DS_Store

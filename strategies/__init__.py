@@ -1,5 +1,7 @@
-"""Betting strategies."""
+"""Betting strategies. All odds are American (+150, -110)."""
 from .strategies import (
+    american_to_decimal,
+    decimal_to_american,
     kelly_fraction,
     is_value_bet,
     find_value_bets,
@@ -12,6 +14,8 @@ from .strategies import (
 )
 
 __all__ = [
+    "american_to_decimal",
+    "decimal_to_american",
     "kelly_fraction",
     "is_value_bet",
     "find_value_bets",
