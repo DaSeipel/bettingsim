@@ -4,10 +4,14 @@ from .engine import (
     get_daily_fixtures,
     get_basketball_odds,
     get_live_odds,
+    get_nba_team_pace_stats,
+    get_nba_teams_back_to_back,
     Scraper,
     BASKETBALL_NBA,
     BASKETBALL_NCAAB,
     BASKETBALL_SPORT_KEYS,
+    NBA_LEAGUE_AVG_PACE,
+    NBA_LEAGUE_AVG_OFF_RATING,
 )
 
 __all__ = [
@@ -15,8 +19,12 @@ __all__ = [
     "get_daily_fixtures",
     "get_basketball_odds",
     "get_live_odds",
+    "get_nba_team_pace_stats",
+    "get_nba_teams_back_to_back",
     "Scraper",
     "BASKETBALL_NBA",
     "BASKETBALL_NCAAB",
     "BASKETBALL_SPORT_KEYS",
+    "NBA_LEAGUE_AVG_PACE",
+    "NBA_LEAGUE_AVG_OFF_RATING",
 ]

@@ -39,6 +39,30 @@ def implied_probability(odds_american: float) -> float:
     return 1.0 / dec if dec > 0 else 0.0
 
 
+# Vig adjustment: assume 4.5% sportsbook hold; no-vig implied prob for EV comparison
+VIG_HOLD = 0.045
+
+
+def implied_probability_no_vig(odds_american: float) -> float:
+    """No-vig implied probability (fair market). Raw implied / (1 + vig hold)."""
+    raw = implied_probability(odds_american)
+    return raw / (1.0 + VIG_HOLD) if raw > 0 else 0.0
+
+
+# Probability damping: pull extreme predictions toward league average (more realistic for NBA)
+DAMPING_FACTOR = 0.8
+LEAGUE_AVG_PROB = 0.5
+
+
+def damp_probability(
+    prob: float,
+    league_avg: float = LEAGUE_AVG_PROB,
+    damping: float = DAMPING_FACTOR,
+) -> float:
+    """Pull probability toward league average: damped = league_avg + damping * (prob - league_avg)."""
+    return league_avg + damping * (float(prob) - league_avg)
+
+
 def is_value_bet(odds_american: float, model_prob: float) -> bool:
     """
     True when our model's probability exceeds the bookie's implied probability.
@@ -81,6 +105,63 @@ def value_bet_spread(odds_american: float, model_prob: float) -> dict[str, float
 def value_bet_total(odds_american: float, model_prob: float) -> dict[str, float | bool]:
     """Value and EV for a total (Over/Under) line. Odds are American."""
     return find_value_bets(odds_american, model_prob)
+
+
+# -----------------------------------------------------------------------------
+# NBA Pace-Adjusted Totals
+# -----------------------------------------------------------------------------
+
+# League averages when team not in pace_stats (must match engine.NBA_LEAGUE_AVG_* if no data)
+_NBA_DEFAULT_PACE = 100.0
+_NBA_DEFAULT_OFF_RATING = 115.0
+
+
+def predict_nba_total(
+    home_team: str,
+    away_team: str,
+    pace_stats: dict[str, dict[str, float]],
+    default_pace: float = _NBA_DEFAULT_PACE,
+    default_off_rating: float = _NBA_DEFAULT_OFF_RATING,
+    b2b_teams: set[str] | None = None,
+    b2b_pace_mult: float = 0.985,
+    b2b_off_rating_mult: float = 0.98,
+) -> float:
+    """
+    Pace-adjusted projected game total.
+    Projected Pace = avg of both teams' Pace (possessions/48m).
+    Projected Score = (Projected Pace * Team OffRating) / 100 per team.
+    If a team is in b2b_teams (played last night), their Pace is reduced by (1 - b2b_pace_mult)
+    and Off Rating by (1 - b2b_off_rating_mult) for fatigue. Default: -1.5% pace, -2% off_rating.
+    Returns sum of home and away projected scores.
+    """
+    h = pace_stats.get(home_team) or {"pace": default_pace, "off_rating": default_off_rating}
+    a = pace_stats.get(away_team) or {"pace": default_pace, "off_rating": default_off_rating}
+    b2b = b2b_teams or set()
+    if home_team in b2b:
+        h = {"pace": h["pace"] * b2b_pace_mult, "off_rating": h["off_rating"] * b2b_off_rating_mult}
+    if away_team in b2b:
+        a = {"pace": a["pace"] * b2b_pace_mult, "off_rating": a["off_rating"] * b2b_off_rating_mult}
+    projected_pace = (h["pace"] + a["pace"]) / 2.0
+    home_pts = (projected_pace * h["off_rating"]) / 100.0
+    away_pts = (projected_pace * a["off_rating"]) / 100.0
+    return home_pts + away_pts
+
+
+def get_totals_value(
+    predicted_total: float,
+    market_total: float,
+    threshold: float = 3.0,
+) -> str | None:
+    """
+    Compare predicted total to bookmaker O/U line.
+    Returns "over" if prediction > market + threshold (Value Over),
+    "under" if prediction < market - threshold (Value Under), else None.
+    """
+    if predicted_total > market_total + threshold:
+        return "over"
+    if predicted_total < market_total - threshold:
+        return "under"
+    return None
 
 
 def kelly_fraction(

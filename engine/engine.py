@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import io
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -341,6 +341,49 @@ def get_live_odds(
             ]
         )
     return pd.DataFrame(rows)
+
+
+# NBA pace-adjusted totals: league averages when per-team data is unavailable
+NBA_LEAGUE_AVG_PACE = 100.0
+NBA_LEAGUE_AVG_OFF_RATING = 115.0
+
+# Back-to-back fatigue: reduce Pace by 1.5%, Off Rating by 2%
+B2B_PACE_MULTIPLIER = 0.985
+B2B_OFF_RATING_MULTIPLIER = 0.98
+
+
+def get_nba_teams_back_to_back(api_key: str, as_of_date: date) -> set[str]:
+    """
+    Return set of NBA team names that played the night before as_of_date (B2B fatigue).
+    Fetches yesterday's events from The Odds API; returns empty set if unavailable.
+    """
+    if not (api_key or "").strip():
+        return set()
+    yesterday = as_of_date - timedelta(days=1)
+    df = get_live_odds(
+        api_key=api_key.strip(),
+        sport_keys=[BASKETBALL_NBA],
+        commence_on_date=yesterday,
+    )
+    teams: set[str] = set()
+    for _, row in df.iterrows():
+        h = row.get("home_team")
+        a = row.get("away_team")
+        if h and str(h).strip():
+            teams.add(str(h).strip())
+        if a and str(a).strip():
+            teams.add(str(a).strip())
+    return teams
+
+
+def get_nba_team_pace_stats() -> dict[str, dict[str, float]]:
+    """
+    Fetch or provide NBA team pace stats (possessions/48m, offensive rating).
+    Returns dict: team_name -> {"pace": float, "off_rating": float}.
+    When live data is unavailable, returns empty dict; callers use NBA_LEAGUE_AVG_*.
+    """
+    # TODO: fetch from NBA stats API when available
+    return {}
 
 
 class Scraper:
