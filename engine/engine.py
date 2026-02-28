@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import re
+from datetime import date, datetime, timezone
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -18,11 +19,17 @@ from strategies.strategies import american_to_decimal, decimal_to_american
 # Football-Data.co.uk fixtures CSV (no API key required)
 FIXTURES_CSV_URL = "https://www.football-data.co.uk/fixtures.csv"
 
-# The Odds API (https://the-odds-api.com) — basketball sport keys
+# The Odds API (https://api.the-odds-api.com) — sport keys
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 BASKETBALL_NBA = "basketball_nba"
 BASKETBALL_NCAAB = "basketball_ncaab"
 BASKETBALL_SPORT_KEYS = [BASKETBALL_NBA, BASKETBALL_NCAAB]
+
+# Display names for sport_key (for Best Value Plays table)
+SPORT_KEY_TO_LEAGUE: dict[str, str] = {
+    BASKETBALL_NBA: "NBA",
+    BASKETBALL_NCAAB: "NCAAB",
+}
 
 REQUEST_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -163,6 +170,136 @@ def get_basketball_odds(
                         except (TypeError, ValueError):
                             continue
                         # Store American: API returns American when oddsFormat=american; else convert decimal to American
+                        if isinstance(price, (int, float)) and (price >= 100 or price <= -100):
+                            odds_american = int(p)
+                        else:
+                            odds_american = int(round(decimal_to_american(p)))
+                        if abs(odds_american) < 100:
+                            continue
+                        point = out.get("point")
+                        if point is not None:
+                            try:
+                                point = float(point)
+                            except (TypeError, ValueError):
+                                point = None
+                        selection = name
+                        if market_type == "totals" and point is not None:
+                            selection = f"{name} {point}"
+                        key = (event_id, market_type, selection, point)
+                        if key in seen_outcomes:
+                            continue
+                        seen_outcomes.add(key)
+                        rows.append({
+                            "sport_key": sport_key,
+                            "league": league,
+                            "event_id": event_id,
+                            "commence_time": commence,
+                            "home_team": home,
+                            "away_team": away,
+                            "event_name": event_name,
+                            "market_type": market_type,
+                            "selection": selection,
+                            "point": point,
+                            "odds": odds_american,
+                        })
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "sport_key", "league", "event_id", "commence_time", "home_team", "away_team",
+                "event_name", "market_type", "selection", "point", "odds",
+            ]
+        )
+    return pd.DataFrame(rows)
+
+
+def _parse_commence_date(commence_time: str) -> date | None:
+    """Parse ISO 8601 commence_time to a date (UTC). Returns None if invalid."""
+    if not commence_time:
+        return None
+    try:
+        # API returns e.g. 2026-02-28T20:30:00Z
+        dt = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+        return dt.date() if dt.tzinfo else None
+    except (ValueError, TypeError):
+        return None
+
+
+def get_live_odds(
+    api_key: str,
+    sport_keys: list[str],
+    regions: str = "us",
+    markets: list[str] | None = None,
+    odds_format: str = "american",
+    commence_on_date: date | None = None,
+) -> pd.DataFrame:
+    """
+    Fetch live odds from The Odds API (v4) for multiple sports.
+    Uses requests to GET https://api.the-odds-api.com/v4/sports/{sport_key}/odds for each key.
+    If commence_on_date is set, only events whose commence_time falls on that date (UTC) are included.
+    Returns a single DataFrame with columns: sport_key, league, event_id, commence_time,
+    home_team, away_team, event_name, market_type, selection, point, odds (American).
+    League name is derived from SPORT_KEY_TO_LEAGUE or sport_key.
+    """
+    if not (api_key or "").strip() or not sport_keys:
+        return pd.DataFrame(
+            columns=[
+                "sport_key", "league", "event_id", "commence_time", "home_team", "away_team",
+                "event_name", "market_type", "selection", "point", "odds",
+            ]
+        )
+    today = commence_on_date if commence_on_date is not None else date.today()
+    markets = markets if markets is not None else ["h2h", "spreads", "totals"]
+    markets_param = ",".join(markets)
+    rows: list[dict[str, Any]] = []
+    session = requests.Session()
+    session.headers.update(REQUEST_HEADERS)
+
+    for sport_key in sport_keys:
+        url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
+        params = {
+            "regions": regions,
+            "markets": markets_param,
+            "oddsFormat": odds_format,
+            "apiKey": api_key.strip(),
+        }
+        try:
+            resp = session.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            continue
+        if not isinstance(data, list):
+            continue
+        league = SPORT_KEY_TO_LEAGUE.get(sport_key, sport_key.replace("_", " ").title())
+        for event in data:
+            if not isinstance(event, dict):
+                continue
+            event_id = event.get("id", "")
+            home = event.get("home_team", "")
+            away = event.get("away_team", "")
+            commence = event.get("commence_time", "")
+            event_date = _parse_commence_date(commence)
+            if event_date is None or event_date != today:
+                continue
+            event_name = f"{away} @ {home}"
+            bookmakers = event.get("bookmakers") or []
+            seen_outcomes: set[tuple[str, str, str | float | None]] = set()
+            for bm in bookmakers:
+                for mkt in bm.get("markets") or []:
+                    mkt_key = mkt.get("key", "")
+                    if mkt_key not in ("h2h", "spreads", "totals"):
+                        continue
+                    market_type = "h2h" if mkt_key == "h2h" else mkt_key
+                    for out in mkt.get("outcomes") or []:
+                        name = out.get("name", "")
+                        price = out.get("price")
+                        if price is None:
+                            continue
+                        try:
+                            p = float(price)
+                        except (TypeError, ValueError):
+                            continue
                         if isinstance(price, (int, float)) and (price >= 100 or price <= -100):
                             odds_american = int(p)
                         else:
