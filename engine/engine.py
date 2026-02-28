@@ -1,12 +1,302 @@
 """
 Betting simulation engine.
 Runs a strategy over a historical dataset and tracks bankroll, wins/losses, ROI.
+Also provides get_daily_fixtures (football-data.co.uk CSV) and Scraper for odds.
 """
 
 from __future__ import annotations
 
+import io
+import re
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 from typing import Callable, Any
+
+# Football-Data.co.uk fixtures CSV (no API key required)
+FIXTURES_CSV_URL = "https://www.football-data.co.uk/fixtures.csv"
+
+# The Odds API (https://the-odds-api.com) — basketball sport keys
+ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+BASKETBALL_NBA = "basketball_nba"
+BASKETBALL_NCAAB = "basketball_ncaab"
+BASKETBALL_SPORT_KEYS = [BASKETBALL_NBA, BASKETBALL_NCAAB]
+
+REQUEST_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/csv,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+
+def get_daily_fixtures(source_url: str | None = None) -> pd.DataFrame:
+    """
+    Load upcoming fixtures (and odds) from football-data.co.uk CSV.
+    No API key required. Data is updated Fridays (weekend) and Tuesdays (midweek).
+
+    Uses source_url if provided, otherwise the default fixtures.csv URL.
+    Returns a DataFrame with columns: date, time, league, home_team, away_team,
+    event_name, odds_home, odds_draw, odds_away (from first available bookmaker).
+    """
+    url = source_url or FIXTURES_CSV_URL
+    try:
+        # Prefer pandas direct read; fallback to requests if blocked or error
+        try:
+            df = pd.read_csv(url, encoding="utf-8", on_bad_lines="skip")
+        except Exception:
+            resp = requests.get(url, headers=REQUEST_HEADERS, timeout=15)
+            resp.raise_for_status()
+            df = pd.read_csv(io.StringIO(resp.text), encoding="utf-8", on_bad_lines="skip")
+    except Exception:
+        return pd.DataFrame(
+            columns=["date", "time", "league", "home_team", "away_team", "event_name", "odds_home", "odds_draw", "odds_away"]
+        )
+
+    if df.empty:
+        return df
+
+    # Normalize column names (football-data uses mixed case)
+    df = df.rename(columns=lambda c: c.strip() if isinstance(c, str) else c)
+    # Prefer Bet365 1X2; else first of PSH/PH, MaxH/AvgH (avoid "Series or ..." — truth value ambiguous)
+    def _first_col(df: pd.DataFrame, names: list[str]) -> pd.Series | None:
+        for n in names:
+            if n in df.columns:
+                return df[n]
+        return None
+    odds_home = _first_col(df, ["B365H", "PSH", "PH", "MaxH", "AvgH"])
+    odds_draw = _first_col(df, ["B365D", "PSD", "PD", "MaxD", "AvgD"])
+    odds_away = _first_col(df, ["B365A", "PSA", "PA", "MaxA", "AvgA"])
+
+    out = pd.DataFrame({
+        "date": df.get("Date", pd.Series(dtype=object)),
+        "time": df.get("Time", pd.Series(dtype=object)),
+        "league": df.get("Div", pd.Series(dtype=object)),
+        "home_team": df.get("HomeTeam", pd.Series(dtype=object)),
+        "away_team": df.get("AwayTeam", pd.Series(dtype=object)),
+    })
+    out["event_name"] = out["home_team"].astype(str) + " vs " + out["away_team"].astype(str)
+    out["odds_home"] = pd.to_numeric(odds_home, errors="coerce") if odds_home is not None else None
+    out["odds_draw"] = pd.to_numeric(odds_draw, errors="coerce") if odds_draw is not None else None
+    out["odds_away"] = pd.to_numeric(odds_away, errors="coerce") if odds_away is not None else None
+    return out.dropna(how="all", subset=["home_team", "away_team"]).reset_index(drop=True)
+
+
+def _american_to_decimal(american: int | float) -> float:
+    """Convert American odds to decimal. Handles both positive and negative."""
+    a = float(american)
+    if a >= 100:
+        return 1.0 + a / 100.0
+    if a <= -100:
+        return 1.0 + 100.0 / abs(a)
+    return 1.0
+
+
+def get_basketball_odds(
+    api_key: str,
+    sports: list[str] | None = None,
+    regions: str = "us",
+    markets: list[str] | None = None,
+    odds_format: str = "decimal",
+) -> pd.DataFrame:
+    """
+    Fetch NBA and NCAA basketball odds from The Odds API (v4).
+    Uses sport keys basketball_nba and basketball_ncaab.
+    Returns spreads and totals (Over/Under) as well as moneyline (h2h).
+
+    Requires an API key from https://the-odds-api.com (free tier available).
+    Returns a DataFrame with columns: sport_key, league, event_id, commence_time,
+    home_team, away_team, event_name, market_type (h2h|spreads|totals),
+    selection, point (spread or total line; NaN for h2h), odds (decimal).
+    """
+    if not (api_key or "").strip():
+        return pd.DataFrame(
+            columns=[
+                "sport_key", "league", "event_id", "commence_time", "home_team", "away_team",
+                "event_name", "market_type", "selection", "point", "odds",
+            ]
+        )
+    sport_keys = sports if sports is not None else BASKETBALL_SPORT_KEYS.copy()
+    markets = markets if markets is not None else ["h2h", "spreads", "totals"]
+    markets_param = ",".join(markets)
+    rows: list[dict[str, Any]] = []
+    session = requests.Session()
+    session.headers.update(REQUEST_HEADERS)
+
+    for sport_key in sport_keys:
+        url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
+        params = {
+            "regions": regions,
+            "markets": markets_param,
+            "oddsFormat": odds_format,
+            "apiKey": api_key.strip(),
+        }
+        try:
+            resp = session.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            continue
+        if not isinstance(data, list):
+            continue
+        league = "NBA" if sport_key == BASKETBALL_NBA else "NCAAB"
+        for event in data:
+            if not isinstance(event, dict):
+                continue
+            event_id = event.get("id", "")
+            home = event.get("home_team", "")
+            away = event.get("away_team", "")
+            commence = event.get("commence_time", "")
+            event_name = f"{away} @ {home}"
+            bookmakers = event.get("bookmakers") or []
+            seen_outcomes: set[tuple[str, str, str | float | None]] = set()
+            for bm in bookmakers:
+                for mkt in bm.get("markets") or []:
+                    mkt_key = mkt.get("key", "")
+                    if mkt_key not in ("h2h", "spreads", "totals"):
+                        continue
+                    market_type = "h2h" if mkt_key == "h2h" else mkt_key
+                    for out in mkt.get("outcomes") or []:
+                        name = out.get("name", "")
+                        price = out.get("price")
+                        if price is None:
+                            continue
+                        try:
+                            p = float(price)
+                        except (TypeError, ValueError):
+                            continue
+                        # API may return American (e.g. -110, 240) or decimal (e.g. 1.91)
+                        if isinstance(price, (int, float)) and (price >= 100 or price <= -100):
+                            odds = _american_to_decimal(float(price))
+                        else:
+                            odds = p
+                        if odds < 1.01:
+                            continue
+                        point = out.get("point")
+                        if point is not None:
+                            try:
+                                point = float(point)
+                            except (TypeError, ValueError):
+                                point = None
+                        selection = name
+                        if market_type == "totals" and point is not None:
+                            selection = f"{name} {point}"
+                        key = (event_id, market_type, selection, point)
+                        if key in seen_outcomes:
+                            continue
+                        seen_outcomes.add(key)
+                        rows.append({
+                            "sport_key": sport_key,
+                            "league": league,
+                            "event_id": event_id,
+                            "commence_time": commence,
+                            "home_team": home,
+                            "away_team": away,
+                            "event_name": event_name,
+                            "market_type": market_type,
+                            "selection": selection,
+                            "point": point,
+                            "odds": round(odds, 2),
+                        })
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "sport_key", "league", "event_id", "commence_time", "home_team", "away_team",
+                "event_name", "market_type", "selection", "point", "odds",
+            ]
+        )
+    return pd.DataFrame(rows)
+
+
+class Scraper:
+    """
+    Scrape today's odds from a public odds comparison (or similar) HTML page
+    when no API key is available. Uses requests + BeautifulSoup.
+    Configure base_url and optionally table/row selectors for your target site.
+    """
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        table_selector: str = "table",
+        row_selector: str = "tr",
+        timeout: int = 15,
+    ) -> None:
+        self.base_url = base_url or ""
+        self.table_selector = table_selector
+        self.row_selector = row_selector
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.headers.update(REQUEST_HEADERS)
+
+    def _fetch(self, url: str) -> str:
+        resp = self.session.get(url, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.text
+
+    def _parse_odds_cell(self, cell: str) -> float | None:
+        """Try to extract a decimal odds value from a cell string."""
+        if not cell or not isinstance(cell, str):
+            return None
+        # Match decimal odds (e.g. 2.50, 1.95, 11/4 as fraction later if needed)
+        m = re.search(r"\d+\.\d{2}", cell.strip())
+        if m:
+            return float(m.group())
+        m = re.search(r"\d+\.\d+", cell.strip())
+        if m:
+            return float(m.group())
+        return None
+
+    def scrape_odds(self, url: str | None = None) -> pd.DataFrame:
+        """
+        Fetch the given URL (or base_url), parse HTML with BeautifulSoup,
+        find tables and extract rows into a DataFrame with columns:
+        event_name, odds_home, odds_draw, odds_away (where available).
+        Sites that load odds via JavaScript may need a different approach;
+        adjust table_selector / row logic for your target page.
+        """
+        target = (url or self.base_url).strip()
+        if not target:
+            return pd.DataFrame(columns=["event_name", "odds_home", "odds_draw", "odds_away"])
+
+        html = self._fetch(target)
+        soup = BeautifulSoup(html, "html.parser")
+        tables = soup.select(self.table_selector)
+        rows_data: list[dict[str, Any]] = []
+
+        for table in tables:
+            rows = table.select(self.row_selector)
+            for tr in rows:
+                cells = [td.get_text(separator=" ", strip=True) for td in tr.find_all(["td", "th"])]
+                if len(cells) < 2:
+                    continue
+                # Try to interpret: first columns often match name, then odds
+                odds_values = [self._parse_odds_cell(c) for c in cells]
+                odds_nums = [x for x in odds_values if x is not None and 1.0 < x < 50.0]
+                if len(odds_nums) >= 2:
+                    # Heuristic: assume order H, D, A if we have 3, else take first
+                    event_name = " ".join(c for c in cells[:3] if c and not re.match(r"^\d+\.\d+", c)) or "Unknown"
+                    if len(odds_nums) >= 3:
+                        rows_data.append({
+                            "event_name": event_name[:80],
+                            "odds_home": round(odds_nums[0], 2),
+                            "odds_draw": round(odds_nums[1], 2),
+                            "odds_away": round(odds_nums[2], 2),
+                        })
+                    else:
+                        rows_data.append({
+                            "event_name": event_name[:80],
+                            "odds_home": round(odds_nums[0], 2),
+                            "odds_draw": None,
+                            "odds_away": round(odds_nums[1], 2) if len(odds_nums) > 1 else None,
+                        })
+
+        if not rows_data:
+            return pd.DataFrame(columns=["event_name", "odds_home", "odds_draw", "odds_away"])
+        return pd.DataFrame(rows_data)
+
+    def get_today_odds(self, url: str | None = None) -> pd.DataFrame:
+        """Alias for scrape_odds; fetches and returns today's odds from the given or default URL."""
+        return self.scrape_odds(url=url)
 
 
 # Row dict passed to strategy: at least odds, model_prob, result; optionally event_id, event_name.

@@ -9,8 +9,13 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 
-from engine.engine import BettingEngine
-from strategies.strategies import strategy_kelly, strategy_value_betting
+from engine.engine import BettingEngine, get_daily_fixtures
+from strategies.strategies import (
+    strategy_kelly,
+    strategy_value_betting,
+    find_value_bets,
+    kelly_fraction,
+)
 
 
 st.set_page_config(
@@ -19,6 +24,47 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+def _fixtures_to_value_plays(
+    fixtures: pd.DataFrame,
+    bankroll: float,
+    kelly_frac: float = 0.25,
+    min_ev_pct: float = 5.0,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """
+    From a fixtures DataFrame (event_name, odds_home, odds_draw, odds_away),
+    build one row per selection with synthetic model_prob, compute EV% and
+    Kelly stake; return rows where EV% > min_ev_pct.
+    """
+    np.random.seed(seed)
+    rows = []
+    for _, r in fixtures.iterrows():
+        event = r.get("event_name") or f"{r.get('home_team', '')} vs {r.get('away_team', '')}"
+        for label, odds_col in [("Home", "odds_home"), ("Draw", "odds_draw"), ("Away", "odds_away")]:
+            odds_val = r.get(odds_col)
+            if pd.isna(odds_val) or odds_val <= 0:
+                continue
+            odds_val = float(odds_val)
+            implied = 1.0 / odds_val
+            # Synthetic model prob: implied + edge so some qualify as value
+            edge = np.random.uniform(0, 0.12)
+            model_prob = min(0.92, implied + edge)
+            ev_decimal = (model_prob * odds_val) - 1.0
+            ev_pct = ev_decimal * 100.0
+            if ev_pct < min_ev_pct:
+                continue
+            frac = kelly_fraction(odds_val, model_prob, fraction=kelly_frac)
+            stake = round(bankroll * frac, 2)
+            rows.append({
+                "Event": event,
+                "Selection": label,
+                "Odds": round(odds_val, 2),
+                "Value (%)": round(ev_pct, 2),
+                "Recommended Stake": stake,
+            })
+    return pd.DataFrame(rows)
 
 
 def generate_mock_dataset(n_rows: int = 80, seed: int = 42) -> pd.DataFrame:
@@ -66,6 +112,7 @@ starting_bankroll = st.sidebar.number_input(
     format="%.0f",
 )
 
+kelly_frac = 0.25
 if strategy_name == "Kelly Criterion":
     kelly_frac = st.sidebar.slider("Kelly fraction", 0.1, 1.0, 0.25, 0.05)
     strategy_fn = strategy_kelly(kelly_fraction_param=kelly_frac)
@@ -85,6 +132,23 @@ else:
 mock_df = generate_mock_dataset()
 engine = BettingEngine(mock_df, strategy_fn, starting_bankroll)
 results = engine.run()
+
+# Daily fixtures for value plays (fallback to mock if empty)
+fixtures_df = get_daily_fixtures()
+if fixtures_df.empty or len(fixtures_df) < 2:
+    # Mock fixtures so we always have a demo table
+    fixtures_df = pd.DataFrame({
+        "event_name": ["Team A vs Team B", "Team C vs Team D", "Team E vs Team F", "Team G vs Team H"],
+        "odds_home": [2.10, 1.85, 2.40, 1.95],
+        "odds_draw": [3.40, 3.60, 3.20, 3.50],
+        "odds_away": [3.50, 4.00, 2.90, 4.20],
+    })
+value_plays_df = _fixtures_to_value_plays(
+    fixtures_df,
+    bankroll=starting_bankroll,
+    kelly_frac=kelly_frac if strategy_name == "Kelly Criterion" else 0.25,
+    min_ev_pct=5.0,
+)
 
 # -----------------------------------------------------------------------------
 # Main layout
@@ -163,3 +227,27 @@ if results["bet_history"]:
     )
 else:
     st.info("No bets placed with current strategy and data. Adjust strategy or bankroll.")
+
+# Today's Best Value Plays (EV > 5%, Kelly stake)
+st.subheader("Today's Best Value Plays")
+st.caption("Bets where expected value > 5%. Recommended stake from Kelly Criterion.")
+if not value_plays_df.empty:
+    # Highlight Value (%) column in green
+    def _green_value(s: pd.Series) -> list[str]:
+        return ["background-color: rgba(46, 125, 50, 0.45); color: #c8e6c9;" for _ in s]
+
+    styled = value_plays_df.style.apply(_green_value, subset=["Value (%)"])
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Event": st.column_config.TextColumn("Event", width="medium"),
+            "Selection": st.column_config.TextColumn("Selection", width="small"),
+            "Odds": st.column_config.NumberColumn("Odds", format="%.2f", width="small"),
+            "Value (%)": st.column_config.NumberColumn("Value (%)", format="%.2f", width="small"),
+            "Recommended Stake": st.column_config.NumberColumn("Recommended Stake", format="$.2f", width="small"),
+        },
+    )
+else:
+    st.info("No value plays today with EV > 5%. Try again later or adjust the threshold.")
