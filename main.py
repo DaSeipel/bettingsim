@@ -1,5 +1,5 @@
 """
-Sports Betting Simulator - Main Entry Point
+Bobby Bottle's Betting Model - Main Entry Point
 Bridges the engine and strategies to the Streamlit UI.
 Launch the dashboard with: python main.py
 """

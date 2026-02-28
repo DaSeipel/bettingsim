@@ -1,5 +1,5 @@
 """
-Sports Betting Simulator - Streamlit Dashboard
+Bobby Bottle's Betting Model - Streamlit Dashboard
 Dark theme, strategy/bankroll sidebar, bankroll chart, bet history table.
 Uses real data only: live odds from The Odds API; simulation runs on user-provided or empty historical data.
 """
@@ -9,18 +9,23 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 import os
-from datetime import date
+from datetime import date, datetime, timezone
+from typing import Optional
+from zoneinfo import ZoneInfo
 from engine.engine import (
     BettingEngine,
     get_live_odds,
     get_nba_team_pace_stats,
     get_nba_teams_back_to_back,
+    get_team_power_ratings,
+    get_schedule_fatigue_penalty,
     BASKETBALL_NBA,
     BASKETBALL_NCAAB,
+    NBA_LEAGUE_AVG_PACE,
+    NBA_LEAGUE_AVG_OFF_RATING,
 )
 from strategies.strategies import (
     strategy_kelly,
-    strategy_value_betting,
     kelly_fraction,
     implied_probability,
     implied_probability_no_vig,
@@ -28,6 +33,13 @@ from strategies.strategies import (
     damp_probability,
     predict_nba_total,
     get_totals_value,
+    key_number_value_adjustment,
+    fractional_kelly_half_units,
+    in_house_spread_from_ratings,
+    model_prob_from_in_house_total,
+    model_prob_from_in_house_spread,
+    HALF_UNIT_PCT,
+    MAX_KELLY_PCT_WALTERS,
 )
 
 
@@ -51,9 +63,27 @@ def format_currency(val: float) -> str:
 # Human-readable market labels (replaces h2h, spreads, totals in UI)
 MARKET_LABELS = {"h2h": "Winner", "spreads": "Spread", "totals": "Over/Under"}
 
+# Odds > +500 (6.0 decimal) flagged as high-risk; excluded from Best Value unless toggled
+HIGH_RISK_ODDS_AMERICAN = 500
+
+
+def format_start_time(commence_time: str) -> str:
+    """Format ISO commence_time for display in Eastern Time (e.g. Feb 28, 7:30 PM ET)."""
+    if not commence_time or not str(commence_time).strip():
+        return "—"
+    try:
+        s = str(commence_time).replace("Z", "+00:00")
+        dt_utc = datetime.fromisoformat(s)
+        if dt_utc.tzinfo is None:
+            return dt_utc.strftime("%b %d, %I:%M %p")
+        dt_et = dt_utc.astimezone(ZoneInfo("America/New_York"))
+        return dt_et.strftime("%b %d, %I:%M %p ET")
+    except (ValueError, TypeError):
+        return "—"
+
 
 st.set_page_config(
-    page_title="Sports Betting Simulator",
+    page_title="Bobby Bottle's Betting Model",
     page_icon="🎲",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -181,50 +211,85 @@ def _live_odds_to_value_plays(
     kelly_frac: float = 0.25,
     min_ev_pct: float = EV_EPSILON_MIN_PCT,
     max_ev_pct: float = EV_EPSILON_MAX_PCT,
+    include_high_risk: bool = False,
+    pace_stats: Optional[dict] = None,
+    b2b_teams: Optional[set] = None,
+    as_of_date: Optional[date] = None,
     seed: int = 44,
 ) -> tuple[pd.DataFrame, int]:
     """
-    From live odds DataFrame: no-vig implied prob, damped model prob. Only includes rows with
-    Value % in [min_ev_pct, max_ev_pct). Returns (df, n_potential_data_error) where
-    n_potential_data_error is the count of plays with Value % >= max_ev_pct (flagged).
+    In-house line (power ratings) vs market; key-number adjustment; fractional Kelly rounded to half-units (1–3%).
+    Only includes Value % in [min_ev_pct, max_ev_pct). Excludes odds > +500 unless include_high_risk.
     """
     if odds_df.empty:
         return (
             pd.DataFrame(
-                columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert"]
+                columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"]
             ),
             0,
         )
     np.random.seed(seed)
+    pace_stats = pace_stats or {}
+    b2b_teams = b2b_teams or set()
+    as_of_date = as_of_date or date.today()
+    power_ratings = get_team_power_ratings(pace_stats, NBA_LEAGUE_AVG_PACE, NBA_LEAGUE_AVG_OFF_RATING)
+    default_rating = (NBA_LEAGUE_AVG_PACE * NBA_LEAGUE_AVG_OFF_RATING) / 100.0
     rows = []
     n_flagged = 0
     for _, r in odds_df.iterrows():
         odds_val = r.get("odds")
         if pd.isna(odds_val) or abs(float(odds_val)) < 100:
             continue
-        odds_val = float(odds_val)  # American
-        implied = implied_probability_no_vig(odds_val)  # No-vig for EV comparison
-        edge = np.random.uniform(0, 0.12)
-        model_prob_raw = min(0.92, implied + edge)
-        model_prob = damp_probability(model_prob_raw)  # Pull toward 50% (NBA calibration)
+        odds_val = float(odds_val)
+        if odds_val > HIGH_RISK_ODDS_AMERICAN and not include_high_risk:
+            continue
+        home_team = r.get("home_team", "")
+        away_team = r.get("away_team", "")
+        market_type = r.get("market_type", "")
+        point = r.get("point")
+        selection = str(r.get("selection", ""))
+        league = str(r.get("league", ""))
+
+        if market_type == "totals" and point is not None:
+            market_total = float(point)
+            in_house_total = predict_nba_total(home_team, away_team, pace_stats, b2b_teams=b2b_teams)
+            prefer_over = "Over" in selection or "over" in selection.lower()
+            model_prob = model_prob_from_in_house_total(in_house_total, market_total, prefer_over)
+        elif market_type == "spreads" and point is not None:
+            market_spread = -float(point)
+            home_rating = power_ratings.get(home_team, default_rating) - get_schedule_fatigue_penalty(home_team, as_of_date)
+            away_rating = power_ratings.get(away_team, default_rating) - get_schedule_fatigue_penalty(away_team, as_of_date)
+            in_house_spread = in_house_spread_from_ratings(home_rating, away_rating)
+            we_cover_favorite = "-" in selection
+            model_prob = model_prob_from_in_house_spread(in_house_spread, market_spread, we_cover_favorite)
+        else:
+            implied = implied_probability_no_vig(odds_val)
+            edge = np.random.uniform(0, 0.08)
+            model_prob = damp_probability(min(0.92, implied + edge))
+
         ev_decimal = (model_prob * american_to_decimal(odds_val)) - 1.0
         ev_pct = ev_decimal * 100.0
+        line_for_key = float(point) if point is not None else 0.0
+        ev_pct += key_number_value_adjustment(line_for_key, league, market_type)
         if ev_pct < min_ev_pct:
             continue
         if ev_pct >= max_ev_pct:
             n_flagged += 1
             continue
-        frac = kelly_fraction(odds_val, model_prob, fraction=kelly_frac)
-        stake = round(bankroll * frac, 2)
+        full_kelly = kelly_fraction(odds_val, model_prob, fraction=1.0)
+        stake = fractional_kelly_half_units(bankroll, full_kelly, HALF_UNIT_PCT, MAX_KELLY_PCT_WALTERS)
+        if stake <= 0:
+            continue
         rows.append({
-            "League": r.get("league", ""),
+            "League": league,
             "Event": r.get("event_name", ""),
-            "Selection": r.get("selection", ""),
-            "Market": r.get("market_type", ""),
+            "Selection": selection,
+            "Market": market_type,
             "Odds": int(round(odds_val)),
             "Value (%)": round(ev_pct, 2),
             "Recommended Stake": stake,
             "Injury Alert": "—",
+            "Start Time": format_start_time(r.get("commence_time", "")),
         })
     return pd.DataFrame(rows), n_flagged
 
@@ -234,15 +299,10 @@ BASKETBALL_HISTORICAL_COLUMNS = ["event_id", "event_name", "odds", "model_prob",
 
 
 # -----------------------------------------------------------------------------
-# Sidebar
+# Sidebar — single combined model (no strategy dropdown)
 # -----------------------------------------------------------------------------
 
-st.sidebar.header("Simulation settings")
-strategy_name = st.sidebar.selectbox(
-    "Strategy",
-    ["Kelly Criterion", "Value Betting"],
-    index=0,
-)
+st.sidebar.header("Settings")
 starting_bankroll = st.sidebar.number_input(
     "Starting bankroll",
     min_value=100.0,
@@ -250,20 +310,12 @@ starting_bankroll = st.sidebar.number_input(
     value=1000.0,
     step=100.0,
     format="%.0f",
+    help="Used for recommended stakes and simulation.",
 )
 
+# Single model: value + Kelly (quarter Kelly) for stakes
 kelly_frac = 0.25
-if strategy_name == "Kelly Criterion":
-    kelly_frac = st.sidebar.slider("Kelly fraction", 0.1, 1.0, 0.25, 0.05)
-    strategy_fn = strategy_kelly(kelly_fraction_param=kelly_frac)
-else:
-    use_flat = st.sidebar.checkbox("Use flat stake", value=False)
-    if use_flat:
-        flat_stake = st.sidebar.number_input("Flat stake", min_value=5.0, value=20.0, step=5.0)
-        strategy_fn = strategy_value_betting(flat_stake=flat_stake)
-    else:
-        stake_pct = st.sidebar.slider("Stake % of bankroll", 0.01, 0.1, 0.02, 0.01)
-        strategy_fn = strategy_value_betting(stake_pct=stake_pct)
+strategy_fn = strategy_kelly(kelly_fraction_param=kelly_frac)
 
 # API key: Streamlit secrets (best practice) → env → sidebar only when missing
 def _get_odds_api_key() -> str:
@@ -290,6 +342,12 @@ if not odds_api_key:
 else:
     st.sidebar.caption("Odds API key loaded from secrets")
 
+include_high_risk_odds = st.sidebar.checkbox(
+    "Include high-risk odds (+500 or higher)",
+    value=False,
+    help="By default, odds greater than +500 are excluded from Best Value (flagged as High Risk).",
+)
+
 # -----------------------------------------------------------------------------
 # Engine run — basketball (real historical data only; empty until user provides data)
 # -----------------------------------------------------------------------------
@@ -299,7 +357,7 @@ engine_basketball = BettingEngine(basketball_historical_df, strategy_fn, startin
 results_basketball = engine_basketball.run()
 
 # Value plays: live NBA + NCAAB from The Odds API; cached 15 min to stay under 500 requests/month
-kelly_frac_val = kelly_frac if strategy_name == "Kelly Criterion" else 0.25
+kelly_frac_val = kelly_frac
 ODDS_CACHE_TTL_SECONDS = 900  # 15 minutes
 
 
@@ -334,12 +392,20 @@ if (odds_api_key or "").strip():
         date.today().isoformat(),
         refresh_key=st.session_state["odds_refresh_key"],
     )
+    b2b_teams = _get_b2b_teams_cached(
+        date.today().isoformat(),
+        refresh_key=st.session_state.get("odds_refresh_key", 0),
+    )
     value_plays_df, value_plays_flagged_count = _live_odds_to_value_plays(
         live_odds_df,
         bankroll=starting_bankroll,
         kelly_frac=kelly_frac_val,
         min_ev_pct=EV_EPSILON_MIN_PCT,
         max_ev_pct=EV_EPSILON_MAX_PCT,
+        include_high_risk=include_high_risk_odds,
+        pace_stats=get_nba_team_pace_stats(),
+        b2b_teams=b2b_teams,
+        as_of_date=date.today(),
     )
     value_plays_df = add_injury_alerts_to_value_plays(value_plays_df, "Basketball")
 else:
@@ -351,14 +417,14 @@ else:
         ]
     )
     value_plays_df = pd.DataFrame(
-        columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert"]
+        columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"]
     )
 
 # -----------------------------------------------------------------------------
 # Main layout — tabbed (Overview, Basketball)
 # -----------------------------------------------------------------------------
 
-st.title("Sports Betting Simulator")
+st.title("Bobby Bottle's Betting Model")
 st.caption("Basketball focus • All odds American (+150, -110)")
 
 basketball_profit = results_basketball["final_bankroll"] - starting_bankroll
@@ -529,7 +595,8 @@ st.caption(
     "**Live** from The Odds API (NBA + NCAAB, today's games). Data refreshes every 15 min." if using_live
     else "Set Odds API key in sidebar for live NBA & NCAAB value plays."
 )
-st.caption("Value (%) = No-vig implied vs damped model • 3% ≤ Value % < 15% • Recommended stake from Kelly. One best value play per game (highest EV).")
+st.caption("Value (%) = In-house line (power ratings) vs market • Key-number adjusted • Stake: fractional Kelly, half-units (1–3%). One best value play per game.")
+st.info("**Market Timing (Walters):** Bet early for favorites, bet late for underdogs.")
 if value_plays_flagged_count > 0:
     st.warning(f"**Potential Data Error:** {value_plays_flagged_count} play(s) had Value % ≥ 15% and were excluded.")
 if not value_plays_df.empty:
@@ -558,14 +625,19 @@ if not value_plays_df.empty:
         )
     if "Market" in display_vp.columns:
         display_vp["Market"] = display_vp["Market"].map(lambda x: MARKET_LABELS.get(x, x) if pd.notna(x) else x)
-    # Show "Game" instead of "Event" in table
+    # Show "Game" instead of "Event"; put Start Time after Game
     display_vp = display_vp.rename(columns={"Event": "Game"})
+    if "Start Time" not in display_vp.columns:
+        display_vp["Start Time"] = "—"
+    order = ["League", "Game", "Start Time"]
+    display_vp = display_vp[[c for c in order if c in display_vp.columns] + [c for c in display_vp.columns if c not in order]]
     styled = display_vp.style.apply(_green_value, subset=["Value (%)"])
     if "Injury Alert" in display_vp.columns:
         styled = styled.apply(_injury_alert_style, subset=["Injury Alert"])
     col_config = {
         "League": st.column_config.TextColumn("League", width="small"),
         "Game": st.column_config.TextColumn("Game", width="medium"),
+        "Start Time": st.column_config.TextColumn("Start Time", width="medium"),
         "Injury Alert": st.column_config.TextColumn("Injury Alert", width="medium"),
         "Selection": st.column_config.TextColumn("Selection", width="small"),
         "Odds": st.column_config.TextColumn("Odds (American)", width="small"),

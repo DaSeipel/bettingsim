@@ -164,6 +164,106 @@ def get_totals_value(
     return None
 
 
+# -----------------------------------------------------------------------------
+# Billy Walters-style: Key Numbers, Fractional Kelly (1–3%), In-House Line
+# -----------------------------------------------------------------------------
+
+# Key numbers: crossing these increases push/win probability (NFL 3/7, NBA common spreads/totals)
+KEY_NUMBERS_NFL_SPREAD = {3, 7}
+KEY_NUMBERS_NBA_SPREAD = {2.5, 3, 5, 5.5, 7, 7.5}
+KEY_NUMBERS_NBA_TOTAL = {210, 215, 220, 225, 230, 235, 240}
+KEY_NUMBER_ADJUSTMENT_PCT = -0.3  # Slight reduction in Value % when line sits on key (push risk)
+
+
+def key_number_value_adjustment(
+    market_line: float,
+    sport: str,
+    market_type: str,
+) -> float:
+    """
+    If the market line is on or just across a key number, adjust Value % (push/win probability).
+    Returns adjustment in percentage points to add to Value % (usually small negative).
+    """
+    if market_type == "totals":
+        keys = KEY_NUMBERS_NBA_TOTAL if "nba" in sport.lower() or "basketball" in sport.lower() else set()
+    else:
+        keys = KEY_NUMBERS_NBA_SPREAD if "nba" in sport.lower() or "basketball" in sport.lower() else KEY_NUMBERS_NFL_SPREAD
+    for k in keys:
+        if abs(market_line - k) < 0.6:
+            return KEY_NUMBER_ADJUSTMENT_PCT
+    return 0.0
+
+
+# Walters: 1%–3% of bankroll; round down to half-units (0.5%) to protect vs variance
+HALF_UNIT_PCT = 0.005
+MAX_KELLY_PCT_WALTERS = 0.03
+
+
+def fractional_kelly_half_units(
+    bankroll: float,
+    kelly_fraction_decimal: float,
+    unit_pct: float = HALF_UNIT_PCT,
+    max_pct: float = MAX_KELLY_PCT_WALTERS,
+) -> float:
+    """
+    Fractional Kelly rounded down to half-units (0.5% of bankroll). Cap at max_pct (e.g. 3%).
+    Returns stake in dollars.
+    """
+    if bankroll <= 0 or kelly_fraction_decimal <= 0:
+        return 0.0
+    raw_pct = min(kelly_fraction_decimal, max_pct)
+    half_units = int(raw_pct / unit_pct)
+    if half_units < 1:
+        return 0.0
+    stake_pct = half_units * unit_pct
+    return round(bankroll * stake_pct, 2)
+
+
+def in_house_spread_from_ratings(home_rating: float, away_rating: float) -> float:
+    """In-house spread: positive = home favored. home_rating - away_rating."""
+    return home_rating - away_rating
+
+
+def model_prob_from_in_house_total(in_house_total: float, market_total: float, prefer_over: bool) -> float:
+    """
+    Approximate probability we beat the market on a total (Over/Under).
+    prefer_over True = we're betting Over. Based on how much in-house differs from market.
+    """
+    diff = in_house_total - market_total
+    if prefer_over and diff <= 0:
+        return 0.45
+    if not prefer_over and diff >= 0:
+        return 0.45
+    edge_pts = abs(diff)
+    if edge_pts >= 10:
+        return 0.62
+    if edge_pts >= 5:
+        return 0.56
+    if edge_pts >= 3:
+        return 0.53
+    return 0.51
+
+
+def model_prob_from_in_house_spread(in_house_spread: float, market_spread: float, we_cover_favorite: bool) -> float:
+    """
+    Approximate probability we cover the spread. market_spread is e.g. -3.5 (home -3.5).
+    we_cover_favorite True = we're on the favorite (home/away side that's favored).
+    """
+    # Our line says home by in_house_spread; market says home by market_spread (negative = away favored).
+    if we_cover_favorite and in_house_spread <= market_spread:
+        return 0.45
+    if not we_cover_favorite and in_house_spread >= market_spread:
+        return 0.45
+    edge = abs(in_house_spread - market_spread)
+    if edge >= 5:
+        return 0.58
+    if edge >= 3:
+        return 0.54
+    if edge >= 1.5:
+        return 0.52
+    return 0.51
+
+
 def kelly_fraction(
     odds_american: float,
     model_prob: float,

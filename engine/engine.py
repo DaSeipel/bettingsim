@@ -225,6 +225,25 @@ def _parse_commence_date(commence_time: str) -> date | None:
         return None
 
 
+def _parse_commence_datetime(commence_time: str) -> datetime | None:
+    """Parse ISO 8601 commence_time to datetime (UTC). Returns None if invalid."""
+    if not commence_time:
+        return None
+    try:
+        dt = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_commence_in_future(commence_time: str) -> bool:
+    """True if commence_time is in the future (UTC). Excludes already-started / in-play games."""
+    dt = _parse_commence_datetime(commence_time)
+    if dt is None:
+        return False
+    return dt > datetime.now(timezone.utc)
+
+
 def get_live_odds(
     api_key: str,
     sport_keys: list[str],
@@ -234,12 +253,12 @@ def get_live_odds(
     commence_on_date: date | None = None,
 ) -> pd.DataFrame:
     """
-    Fetch live odds from The Odds API (v4) for multiple sports.
+    Fetch live odds from The Odds API (v4) for multiple sports (pre-match only).
     Uses requests to GET https://api.the-odds-api.com/v4/sports/{sport_key}/odds for each key.
-    If commence_on_date is set, only events whose commence_time falls on that date (UTC) are included.
+    Only includes events whose commence_time is in the future (not started); excludes live/in-play.
+    If commence_on_date is set, only events on that date (UTC) with commence_time > now are included.
     Returns a single DataFrame with columns: sport_key, league, event_id, commence_time,
     home_team, away_team, event_name, market_type, selection, point, odds (American).
-    League name is derived from SPORT_KEY_TO_LEAGUE or sport_key.
     """
     if not (api_key or "").strip() or not sport_keys:
         return pd.DataFrame(
@@ -281,6 +300,8 @@ def get_live_odds(
             commence = event.get("commence_time", "")
             event_date = _parse_commence_date(commence)
             if event_date is None or event_date != today:
+                continue
+            if not _is_commence_in_future(commence):
                 continue
             event_name = f"{away} @ {home}"
             bookmakers = event.get("bookmakers") or []
@@ -384,6 +405,37 @@ def get_nba_team_pace_stats() -> dict[str, dict[str, float]]:
     """
     # TODO: fetch from NBA stats API when available
     return {}
+
+
+# Schedule fatigue: 1.5-point penalty to power rating (3rd road in a row or long flight)
+SCHEDULE_FATIGUE_PENALTY = 1.5
+
+
+def get_schedule_fatigue_penalty(team: str, as_of_date: date) -> float:
+    """
+    Return point penalty (e.g. 1.5) if team is on 3rd road game in a row or coming off long flight.
+    Otherwise 0. Requires schedule data; stub returns 0 until wired to a schedule source.
+    """
+    # TODO: integrate schedule API (e.g. last N games home/away, travel distance)
+    return 0.0
+
+
+def get_team_power_ratings(
+    pace_stats: dict[str, dict[str, float]],
+    default_pace: float = NBA_LEAGUE_AVG_PACE,
+    default_off_rating: float = NBA_LEAGUE_AVG_OFF_RATING,
+) -> dict[str, float]:
+    """
+    Power rating per team from pace and off_rating. rating = (pace * off_rating) / 100 (points per 48).
+    Used for in-house line (spread = home_rating - away_rating). Teams not in pace_stats get league-avg derived rating.
+    """
+    default_rating = (default_pace * default_off_rating) / 100.0
+    out: dict[str, float] = {}
+    for team, stats in pace_stats.items():
+        p = stats.get("pace", default_pace)
+        o = stats.get("off_rating", default_off_rating)
+        out[team] = (p * o) / 100.0
+    return out
 
 
 class Scraper:
