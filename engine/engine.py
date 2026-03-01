@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 from typing import Callable, Any
 
 from strategies.strategies import american_to_decimal, decimal_to_american
+from .odds_quota import odds_api_get
 
 # Football-Data.co.uk fixtures CSV (no API key required)
 FIXTURES_CSV_URL = "https://www.football-data.co.uk/fixtures.csv"
@@ -136,7 +137,9 @@ def get_basketball_odds(
             "apiKey": api_key.strip(),
         }
         try:
-            resp = session.get(url, params=params, timeout=15)
+            resp = odds_api_get(url, params=params, headers=REQUEST_HEADERS, timeout=15, session=session)
+            if resp is None:
+                continue
             resp.raise_for_status()
             data = resp.json()
         except Exception:
@@ -283,7 +286,9 @@ def get_live_odds(
             "apiKey": api_key.strip(),
         }
         try:
-            resp = session.get(url, params=params, timeout=15)
+            resp = odds_api_get(url, params=params, headers=REQUEST_HEADERS, timeout=15, session=session)
+            if resp is None:
+                continue
             resp.raise_for_status()
             data = resp.json()
         except Exception:

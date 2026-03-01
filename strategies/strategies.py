@@ -264,6 +264,20 @@ def model_prob_from_in_house_spread(in_house_spread: float, market_spread: float
     return 0.51
 
 
+def model_prob_from_ratings_moneyline(
+    home_rating: float, away_rating: float, selection_is_home: bool
+) -> float:
+    """
+    Win probability for moneyline (h2h) from the same power ratings used for spreads.
+    in_house_spread = home_rating - away_rating (positive = home favored).
+    Converts spread to win prob: ~3% per point (e.g. 3-pt favorite ≈ 59%).
+    """
+    in_house_spread = home_rating - away_rating
+    # ~3% win probability per point of spread; cap to [0.02, 0.98]
+    home_win_prob = max(0.02, min(0.98, 0.5 + in_house_spread * 0.03))
+    return home_win_prob if selection_is_home else (1.0 - home_win_prob)
+
+
 def kelly_fraction(
     odds_american: float,
     model_prob: float,

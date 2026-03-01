@@ -38,9 +38,11 @@ from strategies.strategies import (
     in_house_spread_from_ratings,
     model_prob_from_in_house_total,
     model_prob_from_in_house_spread,
+    model_prob_from_ratings_moneyline,
     HALF_UNIT_PCT,
     MAX_KELLY_PCT_WALTERS,
 )
+from engine.injury_scraper import add_injury_features
 
 
 def format_american(odds: float) -> str:
@@ -62,6 +64,27 @@ def format_currency(val: float) -> str:
 
 # Human-readable market labels (replaces h2h, spreads, totals in UI)
 MARKET_LABELS = {"h2h": "Winner", "spreads": "Spread", "totals": "Over/Under"}
+
+
+def _build_pick_explanation(row: pd.Series) -> str:
+    """Build a human-readable explanation for why this is the model's best value play."""
+    market = str(row.get("Market", ""))
+    market_label = MARKET_LABELS.get(market, market)
+    selection = str(row.get("Selection", ""))
+    value_pct = row.get("Value (%)", 0)
+    odds = row.get("Odds", 0)
+    stake = row.get("Recommended Stake", 0)
+
+    parts = []
+    parts.append(f"Our model identifies **{value_pct:.1f}% expected value** on this play—the highest among today's NBA slate.")
+    if market == "spreads":
+        parts.append("Power ratings and schedule fatigue (back-to-backs) suggest the market is mispricing this spread.")
+    elif market == "totals":
+        parts.append("Pace-adjusted projections and key-number analysis (3, 7, 14) indicate the total is off.")
+    else:
+        parts.append("Implied probability vs our model probability shows meaningful edge on the moneyline.")
+    parts.append(f"Recommended stake: **{format_currency(stake)}** ({format_american(odds)} odds).")
+    return " ".join(parts)
 
 # Odds > +500 (6.0 decimal) flagged as high-risk; excluded from Best Value unless toggled
 HIGH_RISK_ODDS_AMERICAN = 500
@@ -262,6 +285,15 @@ def _live_odds_to_value_plays(
             in_house_spread = in_house_spread_from_ratings(home_rating, away_rating)
             we_cover_favorite = "-" in selection
             model_prob = model_prob_from_in_house_spread(in_house_spread, market_spread, we_cover_favorite)
+        elif market_type == "h2h":
+            home_rating = power_ratings.get(home_team, default_rating) - get_schedule_fatigue_penalty(home_team, as_of_date)
+            away_rating = power_ratings.get(away_team, default_rating) - get_schedule_fatigue_penalty(away_team, as_of_date)
+            selection_is_home = (
+                str(selection).strip().lower() == str(home_team).strip().lower()
+                or str(home_team).strip().lower() in str(selection).strip().lower()
+                or str(selection).strip().lower() in str(home_team).strip().lower()
+            )
+            model_prob = model_prob_from_ratings_moneyline(home_rating, away_rating, selection_is_home)
         else:
             implied = implied_probability_no_vig(odds_val)
             edge = np.random.uniform(0, 0.08)
@@ -408,6 +440,29 @@ if (odds_api_key or "").strip():
         as_of_date=date.today(),
     )
     value_plays_df = add_injury_alerts_to_value_plays(value_plays_df, "Basketball")
+    # Add injury_impact_score and top5-out flags for NBA (feature matrix)
+    if not live_odds_df.empty and "league" in live_odds_df.columns:
+        nba_games = (
+            live_odds_df[live_odds_df["league"] == "NBA"][["event_name", "home_team", "away_team"]]
+            .drop_duplicates()
+            .rename(columns={"home_team": "home_team_name", "away_team": "away_team_name"})
+        )
+        if not nba_games.empty:
+            try:
+                injury_enriched = add_injury_features(nba_games, league="nba")
+                inj_cols = ["injury_impact_score", "top5_out_or_doubtful_home", "top5_out_or_doubtful_away"]
+                if all(c in injury_enriched.columns for c in inj_cols):
+                    value_plays_df = value_plays_df.merge(
+                        injury_enriched[["event_name"] + inj_cols],
+                        left_on="Event",
+                        right_on="event_name",
+                        how="left",
+                    ).drop(columns=["event_name"], errors="ignore")
+                    value_plays_df["injury_impact_score"] = value_plays_df["injury_impact_score"].fillna(0.0)
+                    value_plays_df["top5_out_or_doubtful_home"] = value_plays_df["top5_out_or_doubtful_home"].fillna(False)
+                    value_plays_df["top5_out_or_doubtful_away"] = value_plays_df["top5_out_or_doubtful_away"].fillna(False)
+            except Exception:
+                pass
 else:
     value_plays_flagged_count = 0
     live_odds_df = pd.DataFrame(
@@ -469,7 +524,7 @@ def _bet_history_table(records: list) -> None:
         },
     )
 
-tab_overview, tab_basketball, tab_nba = st.tabs(["Overview", "Basketball", "NBA"])
+tab_overview, tab_ncaab, tab_nba = st.tabs(["Overview", "NCAAB", "NBA"])
 
 with tab_overview:
     c1, c2, c3 = st.columns(3)
@@ -501,26 +556,56 @@ with tab_overview:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-with tab_basketball:
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Final bankroll", f"${results_basketball['final_bankroll']:,.2f}", f"{results_basketball['final_bankroll'] - starting_bankroll:+,.2f}")
-    with c2:
-        st.metric("ROI", f"{results_basketball['roi_pct']:.2f}%", "")
-    with c3:
-        st.metric("Bet count", results_basketball["total_bets"], f"Wins: {results_basketball['wins']} / Losses: {results_basketball['losses']}")
-    st.subheader("Bet history")
-    _bet_history_table(results_basketball["bet_history"])
+with tab_ncaab:
+    st.subheader("NCAAB")
+    st.caption("College basketball value plays from the same model: in-house line (power ratings), key numbers, fractional Kelly half-units.")
+    if (odds_api_key or "").strip():
+        if st.button("Refresh", key="ncaab_refresh", help="Pull latest NCAAB odds from The Odds API (also refreshes every 15 min automatically)"):
+            st.session_state["odds_refresh_key"] = st.session_state.get("odds_refresh_key", 0) + 1
+            st.rerun()
+    ncaab_value = value_plays_df[value_plays_df["League"] == "NCAAB"] if not value_plays_df.empty and "League" in value_plays_df.columns else pd.DataFrame()
+    if not ncaab_value.empty:
+        ncaab_best = ncaab_value.sort_values("Value (%)", ascending=False).groupby("Event").head(1).reset_index(drop=True)
+        st.caption("**Best value plays (NCAAB)** — same model as main table")
+        _vp = ncaab_best.copy()
+        _vp["Odds"] = _vp["Odds"].apply(format_american)
+        if "Recommended Stake" in _vp.columns:
+            _vp["Recommended Stake"] = _vp["Recommended Stake"].apply(lambda x: format_currency(x) if pd.notna(x) else "—")
+        if "Market" in _vp.columns:
+            _vp["Market"] = _vp["Market"].map(lambda x: MARKET_LABELS.get(x, x) if pd.notna(x) else x)
+        st.dataframe(_vp.rename(columns={"Event": "Game"}), use_container_width=True, hide_index=True)
+    else:
+        if (odds_api_key or "").strip():
+            st.info("No NCAAB games for today from the Odds API, or no value plays with 3% ≤ Value % < 15%. Try again later or use Refresh.")
+        else:
+            st.info("Set Odds API key in the sidebar to load today's NCAAB games and value plays.")
 
 with tab_nba:
     st.subheader("NBA")
     st.caption("One model across the app: in-house line (power ratings), pace-adjusted totals, B2B, key numbers, fractional Kelly half-units.")
     if (odds_api_key or "").strip():
-        if st.button("Refresh", help="Pull latest NBA odds from The Odds API (also refreshes every 15 min automatically)"):
+        if st.button("Refresh", key="nba_refresh", help="Pull latest NBA odds from The Odds API (also refreshes every 15 min automatically)"):
             st.session_state["odds_refresh_key"] = st.session_state.get("odds_refresh_key", 0) + 1
             st.rerun()
+
     # NBA slice of the same value plays (one model)
     nba_value = value_plays_df[value_plays_df["League"] == "NBA"] if not value_plays_df.empty and "League" in value_plays_df.columns else pd.DataFrame()
+
+    # Pick of the Day — best NBA spread pick with explanation
+    nba_spreads = nba_value[nba_value["Market"] == "spreads"] if not nba_value.empty and "Market" in nba_value.columns else pd.DataFrame()
+    if not nba_spreads.empty:
+        pick_of_day = nba_spreads.loc[nba_spreads["Value (%)"].idxmax()]
+        market_label = MARKET_LABELS.get("spreads", "Spread")
+        st.markdown("### 🏆 Model's Pick of the Day")
+        with st.container(border=True):
+            st.markdown(f"**{pick_of_day['Event']}** · {pick_of_day['Selection']} ({market_label})")
+            st.markdown(f"*{format_american(pick_of_day['Odds'])}* · Value: **{pick_of_day['Value (%)']:.1f}%** · Stake: {format_currency(pick_of_day['Recommended Stake'])}")
+            if "Start Time" in pick_of_day and pick_of_day.get("Start Time") and str(pick_of_day["Start Time"]).strip() not in ("", "—"):
+                st.caption(f"Start: {pick_of_day['Start Time']}")
+            st.markdown("---")
+            st.markdown(_build_pick_explanation(pick_of_day))
+        st.markdown("")
+
     if not nba_value.empty:
         nba_best = nba_value.sort_values("Value (%)", ascending=False).groupby("Event").head(1).reset_index(drop=True)
         st.caption("**Best value plays (NBA)** — same model as main table")

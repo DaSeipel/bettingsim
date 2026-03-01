@@ -14,6 +14,14 @@ build/
 # Streamlit
 .streamlit/secrets.toml
 
+# Odds fetcher cache and DB
+data/odds_cache/
+data/odds.db
+data/odds_quota.json
+
+# ESPN collector DB
+data/espn.db
+
 # IDE / OS
 .cursor/
 .idea/
