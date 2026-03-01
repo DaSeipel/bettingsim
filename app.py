@@ -311,8 +311,115 @@ POTD_CARD_CSS = """
     text-align: center;
     padding: 1.5rem 0;
 }
+
+/* All Value Plays card list */
+.vp-card {
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.75rem;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    font-family: inherit;
+}
+.vp-card-league { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #90a4ae; margin-bottom: 0.25rem; }
+.vp-card-league.nba { color: #42a5f5; }
+.vp-card-league.ncaab { color: #ffb74d; }
+.vp-matchup { font-size: 1.05rem; font-weight: 700; color: #fafafa; margin-bottom: 0.35rem; }
+.vp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; font-size: 0.9rem; }
+.vp-bet-type { background: rgba(76, 175, 80, 0.35); color: #a5d6a7; padding: 0.2rem 0.5rem; border-radius: 6px; font-weight: 600; }
+.vp-edge { color: #66bb6a; font-weight: 700; }
+.vp-odds { color: rgba(255,255,255,0.9); font-weight: 600; }
+.vp-confidence-wrap { margin-top: 0.5rem; }
+.vp-confidence-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
+.vp-confidence-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #43a047, #66bb6a); transition: width 0.2s ease; }
+.vp-reasoning { font-size: 0.8rem; color: rgba(255,255,255,0.65); font-style: italic; margin-top: 0.5rem; line-height: 1.35; }
 </style>
 """
+
+
+def _value_play_reasoning(row: pd.Series) -> str:
+    """
+    One or two sentence plain-English reasoning from model feature context: rest/B2B, home court, market type, injury.
+    Uses home_team, away_team, is_home_b2b, is_away_b2b, Market, Selection, and optional injury flags.
+    """
+    home = str(row.get("home_team", "")).strip()
+    away = str(row.get("away_team", "")).strip()
+    selection = str(row.get("Selection", "")).strip()
+    market = str(row.get("Market", ""))
+    is_home_b2b = bool(row.get("is_home_b2b", False))
+    is_away_b2b = bool(row.get("is_away_b2b", False))
+    selection_is_home = (
+        selection.lower() == home.lower()
+        or home.lower() in selection.lower()
+        or selection.lower() in home.lower()
+    )
+    parts: list[str] = []
+    # Rest / B2B
+    if is_away_b2b and not is_home_b2b:
+        if selection_is_home:
+            parts.append("Model favors the home team with the road side on a back-to-back.")
+        else:
+            parts.append("Road team is on a back-to-back; the model sees fatigue discount in the line.")
+    elif is_home_b2b and not is_away_b2b:
+        if not selection_is_home:
+            parts.append("Model favors the road team with the home side on a back-to-back.")
+        else:
+            parts.append("Home team is on a back-to-back; the model sees fatigue priced in.")
+    elif is_home_b2b and is_away_b2b:
+        parts.append("Both teams on a back-to-back; power ratings and pace drive the edge.")
+    # Home court
+    if selection_is_home and "back-to-back" not in " ".join(parts).lower():
+        parts.append("Home court edge is amplified in this matchup.")
+    elif not selection_is_home and not parts:
+        parts.append("Road side offers value against the market’s home bias.")
+    # Market-specific
+    if market == "totals":
+        if not parts:
+            parts.append("Pace-adjusted total and key-number analysis suggest the line is off.")
+        else:
+            parts.append("Pace and key numbers support this total.")
+    elif market == "spreads" and not parts:
+        parts.append("Power ratings and schedule context suggest the spread is mispriced.")
+    elif market == "h2h" and not parts:
+        parts.append("Model probability vs. implied odds shows edge on the moneyline.")
+    # Injury
+    if row.get("top5_out_or_doubtful_home") or row.get("top5_out_or_doubtful_away"):
+        parts.append("Injury context is reflected in the model’s adjustment.")
+    if not parts:
+        return "Model identifies value from power ratings and market line."
+    return " ".join(parts)
+
+
+def _vp_bet_type_label(row: pd.Series) -> str:
+    """Short bet label for value-play card: e.g. 'Spread · Lakers -3.5', 'Over 220.5'."""
+    return _potd_badge_text(row)
+
+
+def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> str:
+    """One All Value Plays card: matchup, bet type, edge %, odds, confidence bar, reasoning."""
+    league = str(row.get("League", ""))
+    league_class = "nba" if league == "NBA" else "ncaab"
+    matchup = _html_escape(str(row.get("Event", "")))
+    bet_type = _html_escape(_vp_bet_type_label(row))
+    edge_pct = float(row.get("Value (%)", 0))
+    odds_str = format_american(row.get("Odds", 0))
+    bar_pct = min(100.0, max(0.0, (edge_pct / edge_max_pct) * 100.0))
+    reasoning = _html_escape(_value_play_reasoning(row))
+    return f"""
+    <div class="vp-card">
+        <div class="vp-card-league {league_class}">{_html_escape(league)}</div>
+        <div class="vp-matchup">{matchup}</div>
+        <div class="vp-meta">
+            <span class="vp-bet-type">{bet_type}</span>
+            <span class="vp-edge">{edge_pct:.1f}% edge</span>
+            <span class="vp-odds">{odds_str}</span>
+        </div>
+        <div class="vp-confidence-wrap">
+            <div class="vp-confidence-bar"><div class="vp-confidence-fill" style="width:{bar_pct:.1f}%"></div></div>
+        </div>
+        <div class="vp-reasoning">{reasoning}</div>
+    </div>
+    """
 
 
 def _render_potd_card_html(league: str, row: Optional[pd.Series], accent: str) -> str:
@@ -567,6 +674,8 @@ def _live_odds_to_value_plays(
         if stake <= 0:
             continue
         implied_prob = implied_probability_no_vig(odds_val)
+        is_home_b2b = home_team in b2b_teams
+        is_away_b2b = away_team in b2b_teams
         rows.append({
             "League": league,
             "Event": r.get("event_name", ""),
@@ -580,6 +689,10 @@ def _live_odds_to_value_plays(
             "model_prob": model_prob,
             "implied_prob": implied_prob,
             "point": point,
+            "home_team": home_team,
+            "away_team": away_team,
+            "is_home_b2b": is_home_b2b,
+            "is_away_b2b": is_away_b2b,
         })
     return pd.DataFrame(rows), n_flagged
 
@@ -749,8 +862,78 @@ else:
 # Main layout — tabbed (Overview = daily picks sheet, NCAAB, NBA)
 # -----------------------------------------------------------------------------
 
+def _today_str() -> str:
+    """Today's date as 'March 1' (no zero-pad)."""
+    d = date.today()
+    return d.strftime("%B ") + str(d.day)
+
+
+def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
+    """From value_plays_df (today's data), compute: date_str, total_plays, n_nba, n_ncaab, top_edge_label."""
+    date_str = _today_str()
+    # Use same definition as All Value Plays: one best play per game
+    if value_plays_df.empty or "League" not in value_plays_df.columns or "Value (%)" not in value_plays_df.columns:
+        return {
+            "date_str": date_str,
+            "total_plays": 0,
+            "n_nba": 0,
+            "n_ncaab": 0,
+            "top_edge_label": "—",
+        }
+    best_per_game = (
+        value_plays_df.sort_values("Value (%)", ascending=False)
+        .groupby("Event")
+        .head(1)
+        .reset_index(drop=True)
+    )
+    total_plays = len(best_per_game)
+    n_nba = int((best_per_game["League"] == "NBA").sum())
+    n_ncaab = int((best_per_game["League"] == "NCAAB").sum())
+    if best_per_game.empty:
+        top_edge_label = "—"
+    else:
+        top_row = best_per_game.iloc[0]
+        sel = str(top_row.get("Selection", ""))
+        pt = top_row.get("point")
+        if pt is not None:
+            try:
+                pt_f = float(pt)
+                if str(top_row.get("Market", "")) == "totals":
+                    sel = f"{sel} {pt_f:.1f}"
+                else:
+                    sel = f"{sel} {pt_f:+.1f}"
+            except (TypeError, ValueError):
+                pass
+        edge_pct = float(top_row.get("Value (%)", 0))
+        top_edge_label = f"{sel} at {edge_pct:.1f}%"
+    return {
+        "date_str": date_str,
+        "total_plays": total_plays,
+        "n_nba": n_nba,
+        "n_ncaab": n_ncaab,
+        "top_edge_label": top_edge_label,
+    }
+
+
+# Cross-platform "March 1" style date (no zero-padded day)
+def _today_str() -> str:
+    d = date.today()
+    return d.strftime("%B ") + str(d.day)  # "March 1"
+
+
 st.title("Bobby Bottle's Betting Model")
 st.caption("Daily picks • NBA & NCAAB • All odds American (+150, -110)")
+
+# Slim summary bar: date • total plays • NBA / NCAAB counts • top edge (from value_plays_df)
+_summary = _summary_bar_values(value_plays_df)
+_summary_line = (
+    f"{_summary['date_str']} • {_summary['total_plays']} play{'s' if _summary['total_plays'] != 1 else ''} found • "
+    f"{_summary['n_nba']} NBA • {_summary['n_ncaab']} NCAAB • Top edge: {_summary['top_edge_label']}"
+)
+st.markdown(
+    f'<div style="font-size:0.9rem; color:rgba(255,255,255,0.75); margin-top:-0.5rem; margin-bottom:0.75rem;">{_html_escape(_summary_line)}</div>',
+    unsafe_allow_html=True,
+)
 
 
 def _bet_history_table(records: list) -> None:
@@ -809,57 +992,55 @@ with tab_overview:
 
     st.divider()
 
-    # ——— All Value Plays ———
+    # ——— All Value Plays (card list, filters, low-volume warning) ———
     st.subheader("All Value Plays")
-    st.caption("Every game the model found edge on today. One best value per game (3% ≤ Value % < 15%).")
+    st.caption("Every game today where the model found edge. One best play per game. Sorted by edge %.")
     if (odds_api_key or "").strip():
         if st.button("Refresh odds", key="overview_refresh", help="Pull latest odds from The Odds API"):
             st.session_state["odds_refresh_key"] = st.session_state.get("odds_refresh_key", 0) + 1
             st.rerun()
     if value_plays_flagged_count > 0:
         st.warning(f"**Potential Data Error:** {value_plays_flagged_count} play(s) had Value % ≥ 15% and were excluded.")
-    st.caption("**Market Timing (Walters):** Bet early for favorites, bet late for underdogs.")
+
+    # Filter row: league (NBA / NCAAB / Both), min edge slider (2–15%, default 2)
+    filter_col1, filter_col2, _ = st.columns([1, 1, 2])
+    with filter_col1:
+        league_filter = st.radio(
+            "League",
+            options=["Both", "NBA", "NCAAB"],
+            index=0,
+            horizontal=True,
+            key="vp_league_filter",
+        )
+    with filter_col2:
+        min_edge = st.slider(
+            "Min edge %",
+            min_value=2.0,
+            max_value=15.0,
+            value=2.0,
+            step=0.5,
+            key="vp_min_edge",
+            help="Only show plays with edge above this threshold.",
+        )
+
     if not value_plays_df.empty:
-        value_plays_display = (
-            value_plays_df.sort_values("Value (%)", ascending=False)
+        # Filter by min edge and league; one best play per game; sort by edge desc
+        eligible = value_plays_df[value_plays_df["Value (%)"] > min_edge].copy()
+        if league_filter != "Both":
+            eligible = eligible[eligible["League"] == league_filter]
+        value_plays_list = (
+            eligible.sort_values("Value (%)", ascending=False)
             .groupby("Event")
             .head(1)
             .reset_index(drop=True)
         )
-        def _green_value(s: pd.Series) -> list[str]:
-            return ["background-color: rgba(46, 125, 50, 0.45); color: #c8e6c9;" for _ in s]
-        def _injury_alert_style(s: pd.Series) -> list[str]:
-            return ["background-color: rgba(255, 152, 0, 0.4); color: #fff3e0;" if (v and str(v).strip() != "—") else "" for v in s]
-        display_vp = value_plays_display.copy()
-        display_vp["Odds"] = display_vp["Odds"].apply(format_american)
-        if "Recommended Stake" in display_vp.columns:
-            display_vp["Recommended Stake"] = display_vp["Recommended Stake"].apply(lambda x: format_currency(x) if pd.notna(x) else "—")
-        if "Market" in display_vp.columns:
-            display_vp["Market"] = display_vp["Market"].map(lambda x: MARKET_LABELS.get(x, x) if pd.notna(x) else x)
-        display_vp = display_vp.rename(columns={"Event": "Game"})
-        if "Start Time" not in display_vp.columns:
-            display_vp["Start Time"] = "—"
-        order = ["League", "Game", "Start Time"]
-        display_vp = display_vp[[c for c in order if c in display_vp.columns] + [c for c in display_vp.columns if c not in order]]
-        styled = display_vp.style.apply(_green_value, subset=["Value (%)"])
-        if "Injury Alert" in display_vp.columns:
-            styled = styled.apply(_injury_alert_style, subset=["Injury Alert"])
-        col_config = {
-            "League": st.column_config.TextColumn("League", width="small"),
-            "Game": st.column_config.TextColumn("Game", width="medium"),
-            "Start Time": st.column_config.TextColumn("Start Time", width="medium"),
-            "Injury Alert": st.column_config.TextColumn("Injury Alert", width="medium"),
-            "Selection": st.column_config.TextColumn("Selection", width="small"),
-            "Odds": st.column_config.TextColumn("Odds (American)", width="small"),
-            "Value (%)": st.column_config.NumberColumn("Value (%)", format="%.2f", width="small"),
-            "Recommended Stake": st.column_config.TextColumn("Recommended Stake", width="small"),
-        }
-        if "Market" in display_vp.columns:
-            col_config["Market"] = st.column_config.TextColumn("Market", width="small")
-        st.dataframe(styled, use_container_width=True, hide_index=True, column_config=col_config)
+        if len(value_plays_list) < 3:
+            st.warning("**Low volume day** — fewer than 3 qualifying plays. Consider lowering the min edge or check back later.")
+        for _, row in value_plays_list.iterrows():
+            st.markdown(_render_value_play_card_html(row), unsafe_allow_html=True)
     else:
         if (odds_api_key or "").strip():
-            st.info("No value plays with 3% ≤ Value % < 15% from live odds, or no events for today. Try again later or use Refresh.")
+            st.info("No value plays from live odds today, or no events. Try again later or use Refresh.")
         else:
             st.info("Set Odds API key in the sidebar to load today's NBA & NCAAB value plays.")
 
