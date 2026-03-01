@@ -213,6 +213,39 @@ def save_dataframe_to_sqlite(df: pd.DataFrame, sport_key: str, db_path: Path | N
         conn.close()
 
 
+def append_odds_snapshot(sport_key: str, df: pd.DataFrame, db_path: Path | None = None) -> None:
+    """Append a timestamped snapshot of parsed odds to SQLite for line movement tracking."""
+    if df.empty:
+        return
+    path = db_path or _db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_at = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS odds_snapshots (
+                snapshot_at TEXT NOT NULL,
+                sport_key TEXT NOT NULL,
+                game_id TEXT NOT NULL,
+                home_team TEXT NOT NULL,
+                away_team TEXT NOT NULL,
+                commence_time TEXT NOT NULL,
+                bookmaker TEXT NOT NULL,
+                market_type TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                price REAL NOT NULL,
+                point REAL
+            )
+        """)
+        df = df.copy()
+        df["snapshot_at"] = snapshot_at
+        df["sport_key"] = sport_key
+        df.to_sql("odds_snapshots", conn, if_exists="append", index=False)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def fetch_and_store(
     api_key: str,
     sport_keys: list[str] | None = None,
@@ -232,6 +265,7 @@ def fetch_and_store(
         save_raw_to_sqlite(sport_key, raw, db_path=db_path)
         df = parse_raw_to_dataframe(raw)
         save_dataframe_to_sqlite(df, sport_key, db_path=db_path)
+        append_odds_snapshot(sport_key, df, db_path=db_path)
         result[sport_key] = df
     return result
 

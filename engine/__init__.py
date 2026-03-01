@@ -22,6 +22,34 @@ from .odds_fetcher import (
     load_odds_from_sqlite,
     save_raw_to_sqlite,
     save_dataframe_to_sqlite,
+    append_odds_snapshot,
+)
+from .line_movement import (
+    LINE_MOVEMENT_FEATURE_COLUMNS,
+    compute_line_movement_features,
+    merge_line_movement_into_feature_matrix,
+)
+from .clv_tracker import (
+    record_recommendations as clv_record_recommendations,
+    update_closing_odds as clv_update_closing_odds,
+    get_clv_summary_last_30_days,
+    load_clv_tracker,
+)
+from .betting_models import (
+    SPREAD_FEATURE_COLUMNS,
+    TOTALS_FEATURE_COLUMNS,
+    MONEYLINE_FEATURE_COLUMNS,
+    get_training_data,
+    train_spread_model,
+    train_totals_model,
+    train_moneyline_model,
+    train_all_models,
+    load_metrics,
+    load_feature_matrix_for_inference,
+    get_feature_row_for_game,
+    predict_spread_prob,
+    predict_totals_prob,
+    predict_moneyline_prob,
 )
 from .espn_collector import (
     LEAGUES,
@@ -45,6 +73,13 @@ from .sportsref_stats import (
     load_team_advanced_stats_from_sqlite,
     load_merged_games_from_sqlite,
 )
+from .advanced_analytics import (
+    add_advanced_analytics_to_games,
+    merge_advanced_analytics_into_feature_matrix,
+    build_nba_rolling_features,
+    build_ncaab_rolling_features,
+    fetch_nba_team_game_logs,
+)
 from .injury_scraper import (
     fetch_espn_injuries,
     fetch_espn_injuries_all,
@@ -52,6 +87,14 @@ from .injury_scraper import (
     fetch_nba_availability_nba_api,
     add_injury_features,
     get_injury_impact_for_feature_matrix,
+)
+from .situational_features import (
+    build_situational_features,
+    build_and_save_situational_features,
+    save_situational_features_to_sqlite,
+    load_situational_features_from_sqlite,
+    NBA_TEAM_CITY,
+    SITUATIONAL_FEATURE_COLUMNS,
 )
 
 __all__ = [
@@ -75,6 +118,28 @@ __all__ = [
     "load_odds_from_sqlite",
     "save_raw_to_sqlite",
     "save_dataframe_to_sqlite",
+    "append_odds_snapshot",
+    "LINE_MOVEMENT_FEATURE_COLUMNS",
+    "compute_line_movement_features",
+    "merge_line_movement_into_feature_matrix",
+    "clv_record_recommendations",
+    "clv_update_closing_odds",
+    "get_clv_summary_last_30_days",
+    "load_clv_tracker",
+    "SPREAD_FEATURE_COLUMNS",
+    "TOTALS_FEATURE_COLUMNS",
+    "MONEYLINE_FEATURE_COLUMNS",
+    "get_training_data",
+    "train_spread_model",
+    "train_totals_model",
+    "train_moneyline_model",
+    "train_all_models",
+    "load_metrics",
+    "load_feature_matrix_for_inference",
+    "get_feature_row_for_game",
+    "predict_spread_prob",
+    "predict_totals_prob",
+    "predict_moneyline_prob",
     "LEAGUES",
     "fetch_teams",
     "collect_games_and_schedules",
@@ -93,10 +158,21 @@ __all__ = [
     "save_team_stats_to_sqlite",
     "load_team_advanced_stats_from_sqlite",
     "load_merged_games_from_sqlite",
+    "add_advanced_analytics_to_games",
+    "merge_advanced_analytics_into_feature_matrix",
+    "build_nba_rolling_features",
+    "build_ncaab_rolling_features",
+    "fetch_nba_team_game_logs",
     "fetch_espn_injuries",
     "fetch_espn_injuries_all",
     "fetch_nba_top5_usage",
     "fetch_nba_availability_nba_api",
     "add_injury_features",
     "get_injury_impact_for_feature_matrix",
+    "build_situational_features",
+    "build_and_save_situational_features",
+    "save_situational_features_to_sqlite",
+    "load_situational_features_from_sqlite",
+    "NBA_TEAM_CITY",
+    "SITUATIONAL_FEATURE_COLUMNS",
 ]

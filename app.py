@@ -42,6 +42,18 @@ from strategies.strategies import (
     MAX_KELLY_PCT_WALTERS,
 )
 from engine.injury_scraper import add_injury_features
+from engine.clv_tracker import (
+    record_recommendations as clv_record_recommendations,
+    update_closing_odds as clv_update_closing_odds,
+    get_clv_summary_last_30_days,
+)
+from engine.betting_models import (
+    load_feature_matrix_for_inference,
+    get_feature_row_for_game,
+    predict_spread_prob,
+    predict_totals_prob,
+    predict_moneyline_prob,
+)
 
 
 def format_american(odds: float) -> str:
@@ -600,6 +612,7 @@ def _live_odds_to_value_plays(
     b2b_teams: Optional[set] = None,
     as_of_date: Optional[date] = None,
     seed: int = 44,
+    feature_matrix: Optional[pd.DataFrame] = None,
 ) -> tuple[pd.DataFrame, int]:
     """
     In-house line (power ratings) vs market; key-number adjustment; fractional Kelly rounded to half-units (1–3%).
@@ -633,19 +646,37 @@ def _live_odds_to_value_plays(
         point = r.get("point")
         selection = str(r.get("selection", ""))
         league = str(r.get("league", ""))
+        league_lookup = league.strip().lower() if league else ""
+        commence_time = r.get("commence_time")
+        game_date_str = None
+        if commence_time:
+            try:
+                dt = datetime.fromisoformat(str(commence_time).replace("Z", "+00:00"))
+                game_date_str = dt.strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        feature_row = get_feature_row_for_game(
+            feature_matrix, home_team, away_team, league_lookup, game_date=game_date_str
+        ) if feature_matrix is not None and not feature_matrix.empty else None
 
         if market_type == "totals" and point is not None:
             market_total = float(point)
             in_house_total = predict_nba_total(home_team, away_team, pace_stats, b2b_teams=b2b_teams)
             prefer_over = "Over" in selection or "over" in selection.lower()
-            model_prob = model_prob_from_in_house_total(in_house_total, market_total, prefer_over)
+            fallback = model_prob_from_in_house_total(in_house_total, market_total, prefer_over)
+            model_prob = predict_totals_prob(
+                feature_row, market_total, prefer_over, fallback_prob=fallback
+            ) if feature_row is not None else fallback
         elif market_type == "spreads" and point is not None:
             market_spread = -float(point)
             home_rating = power_ratings.get(home_team, default_rating) - get_schedule_fatigue_penalty(home_team, as_of_date)
             away_rating = power_ratings.get(away_team, default_rating) - get_schedule_fatigue_penalty(away_team, as_of_date)
             in_house_spread = in_house_spread_from_ratings(home_rating, away_rating)
             we_cover_favorite = "-" in selection
-            model_prob = model_prob_from_in_house_spread(in_house_spread, market_spread, we_cover_favorite)
+            fallback = model_prob_from_in_house_spread(in_house_spread, market_spread, we_cover_favorite)
+            model_prob = predict_spread_prob(
+                feature_row, market_spread, we_cover_favorite, fallback_prob=fallback
+            ) if feature_row is not None else fallback
         elif market_type == "h2h":
             home_rating = power_ratings.get(home_team, default_rating) - get_schedule_fatigue_penalty(home_team, as_of_date)
             away_rating = power_ratings.get(away_team, default_rating) - get_schedule_fatigue_penalty(away_team, as_of_date)
@@ -654,7 +685,10 @@ def _live_odds_to_value_plays(
                 or str(home_team).strip().lower() in str(selection).strip().lower()
                 or str(selection).strip().lower() in str(home_team).strip().lower()
             )
-            model_prob = model_prob_from_ratings_moneyline(home_rating, away_rating, selection_is_home)
+            fallback = model_prob_from_ratings_moneyline(home_rating, away_rating, selection_is_home)
+            model_prob = predict_moneyline_prob(
+                feature_row, selection_is_home, fallback_prob=fallback
+            ) if feature_row is not None else fallback
         else:
             implied = implied_probability_no_vig(odds_val)
             edge = np.random.uniform(0, 0.08)
@@ -686,6 +720,7 @@ def _live_odds_to_value_plays(
             "Recommended Stake": stake,
             "Injury Alert": "—",
             "Start Time": format_start_time(r.get("commence_time", "")),
+            "commence_time": r.get("commence_time", ""),
             "model_prob": model_prob,
             "implied_prob": implied_prob,
             "point": point,
@@ -800,6 +835,7 @@ if (odds_api_key or "").strip():
             date.today().isoformat(),
             refresh_key=st.session_state.get("odds_refresh_key", 0),
         )
+        feature_matrix_inference = load_feature_matrix_for_inference(league=None)
         value_plays_df, value_plays_flagged_count = _live_odds_to_value_plays(
             live_odds_df,
             bankroll=starting_bankroll,
@@ -810,8 +846,15 @@ if (odds_api_key or "").strip():
             pace_stats=get_nba_team_pace_stats(),
             b2b_teams=b2b_teams,
             as_of_date=date.today(),
+            feature_matrix=feature_matrix_inference,
         )
         value_plays_df = add_injury_alerts_to_value_plays(value_plays_df, "Basketball")
+        # Record each recommended play for CLV (odds at recommendation; closing filled later)
+        try:
+            clv_record_recommendations(value_plays_df)
+            clv_update_closing_odds()
+        except Exception:
+            pass
         # Add injury_impact_score and top5-out flags for NBA (feature matrix)
         if not live_odds_df.empty and "league" in live_odds_df.columns:
             nba_games = (
@@ -935,7 +978,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 def _bet_history_table(records: list) -> None:
     """Render bet history dataframe; records are dicts with step, event_name, odds, etc."""
     if not records:
@@ -975,7 +1017,7 @@ def _bet_history_table(records: list) -> None:
         },
     )
 
-tab_overview, tab_ncaab, tab_nba = st.tabs(["Overview", "NCAAB", "NBA"])
+tab_overview, tab_ncaab, tab_nba, tab_clv = st.tabs(["Overview", "NCAAB", "NBA", "CLV Summary"])
 
 with tab_overview:
     # ——— Play of the Day (backend selection: edge > 4%, tie-break bookmakers / model gap / no injury) ———
@@ -1067,6 +1109,29 @@ with tab_ncaab:
             st.info("No NCAAB games for today from the Odds API, or no value plays with 3% ≤ Value % < 15%. Try again later or use Refresh.")
         else:
             st.info("Set Odds API key in the sidebar to load today's NCAAB games and value plays.")
+
+with tab_clv:
+    st.subheader("CLV Summary")
+    st.caption("Average Closing Line Value by sport and bet type over the last 30 days. Positive CLV = you got a better number than the closing line.")
+    _clv_summary = get_clv_summary_last_30_days()
+    if not _clv_summary.empty and _clv_summary["n_bets"].sum() > 0:
+        _clv_summary = _clv_summary.copy()
+        _clv_summary["bet_type"] = _clv_summary["bet_type"].map(lambda x: MARKET_LABELS.get(str(x).lower(), str(x)))
+        _disp = _clv_summary.rename(columns={"league": "Sport", "avg_clv_pct": "Avg CLV %", "n_bets": "Bets"})
+        _disp["Avg CLV %"] = _disp["Avg CLV %"].apply(lambda x: f"{x:+.2f}%")
+        st.dataframe(
+            _disp,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Sport": st.column_config.TextColumn("Sport", width="small"),
+                "bet_type": st.column_config.TextColumn("Bet type", width="small"),
+                "Avg CLV %": st.column_config.TextColumn("Avg CLV %", width="small"),
+                "Bets": st.column_config.NumberColumn("Bets", width="small"),
+            },
+        )
+    else:
+        st.info("No CLV data yet. Record recommendations (use the app to load value plays) and run odds fetches so closing odds can be backfilled. Data appears here once you have bets with closing odds in the last 30 days.")
 
 with tab_nba:
     st.subheader("NBA")

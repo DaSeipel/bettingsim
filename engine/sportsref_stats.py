@@ -112,6 +112,21 @@ def _rebound_rate(orb: float, opp_drb: float) -> float | None:
     return 100.0 * orb / denom
 
 
+def _true_shooting_pct(pts: float, fga: float, fta: float) -> float | None:
+    """TS% = PTS / (2 * (FGA + 0.44*FTA))."""
+    denom = 2.0 * (fga + 0.44 * fta)
+    if denom is None or denom <= 0:
+        return None
+    return 100.0 * pts / denom
+
+
+def _free_throw_rate(fta: float, fga: float) -> float | None:
+    """FTR = FTA / FGA."""
+    if fga is None or fga <= 0:
+        return None
+    return fta / fga if fta is not None else None
+
+
 def _team_row(team: Any, league: str, season: int) -> dict[str, Any] | None:
     """Build one row of team stats from a sportsreference Team object (NBA or NCAAB)."""
     try:
@@ -145,6 +160,8 @@ def _team_row(team: Any, league: str, season: int) -> dict[str, Any] | None:
         "turnover_rate": _turnover_rate(to or 0, fga or 0, fta or 0),
         "offensive_rebound_rate": _rebound_rate(orb or 0, opp_drb or 0),
         "defensive_rebound_rate": _rebound_rate(drb or 0, opp_orb or 0),
+        "true_shooting_pct": _true_shooting_pct(pts or 0, fga or 0, fta or 0),
+        "free_throw_rate": _free_throw_rate(fta or 0, fga or 0),
         "strength_of_schedule": None,  # sportsreference Team does not expose SOS; can be filled from elsewhere
     }
 
@@ -156,7 +173,7 @@ def fetch_nba_team_stats(seasons: list[int] | None = None) -> pd.DataFrame:
     try:
         from sportsreference.nba.teams import Teams
     except ImportError:
-        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "strength_of_schedule"])
+        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "true_shooting_pct", "free_throw_rate", "strength_of_schedule"])
     for year in seasons:
         try:
             t = Teams(year)
@@ -167,7 +184,7 @@ def fetch_nba_team_stats(seasons: list[int] | None = None) -> pd.DataFrame:
         except Exception:
             continue
     if not rows:
-        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "strength_of_schedule"])
+        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "true_shooting_pct", "free_throw_rate", "strength_of_schedule"])
     return pd.DataFrame(rows)
 
 
@@ -178,7 +195,7 @@ def fetch_ncaab_team_stats(seasons: list[int] | None = None) -> pd.DataFrame:
     try:
         from sportsreference.ncaab.teams import Teams
     except ImportError:
-        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "strength_of_schedule"])
+        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "true_shooting_pct", "free_throw_rate", "strength_of_schedule"])
     for year in seasons:
         try:
             t = Teams(year)
@@ -189,7 +206,7 @@ def fetch_ncaab_team_stats(seasons: list[int] | None = None) -> pd.DataFrame:
         except Exception:
             continue
     if not rows:
-        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "strength_of_schedule"])
+        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "true_shooting_pct", "free_throw_rate", "strength_of_schedule"])
     return pd.DataFrame(rows)
 
 
@@ -199,7 +216,7 @@ def fetch_all_team_stats(seasons: list[int] | None = None) -> pd.DataFrame:
     nba = fetch_nba_team_stats(seasons)
     ncaab = fetch_ncaab_team_stats(seasons)
     if nba.empty and ncaab.empty:
-        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "strength_of_schedule"])
+        return pd.DataFrame(columns=["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "true_shooting_pct", "free_throw_rate", "strength_of_schedule"])
     if nba.empty:
         return ncaab
     if ncaab.empty:
@@ -273,6 +290,8 @@ def save_team_stats_to_sqlite(df: pd.DataFrame, db_path: Path | None = None) -> 
                 turnover_rate REAL,
                 offensive_rebound_rate REAL,
                 defensive_rebound_rate REAL,
+                true_shooting_pct REAL,
+                free_throw_rate REAL,
                 strength_of_schedule REAL,
                 PRIMARY KEY (league, season, team_name)
             )
@@ -304,7 +323,7 @@ def merge_games_with_team_stats(
         return g
     g["_home_name"] = g["home_team_name"].apply(lambda x: _apply_name_mapping(x, name_mapping))
     g["_away_name"] = g["away_team_name"].apply(lambda x: _apply_name_mapping(x, name_mapping))
-    stat_cols = ["offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "strength_of_schedule"]
+    stat_cols = ["offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "true_shooting_pct", "free_throw_rate", "strength_of_schedule"]
     s = stats_df.copy()
     # Home: merge on league, season, _home_name = team_name
     home_stats = s.rename(columns={k: f"home_{k}" for k in stat_cols})
@@ -353,7 +372,14 @@ def fetch_merge_and_save(
     if games_df.empty:
         return games_df
     merged = merge_games_with_team_stats(games_df, stats_df, name_mapping)
-    # Save merged to SQLite for reuse
+    # Add rolling 10-game advanced analytics (NBA nba_api + NCAAB from games)
+    from .advanced_analytics import add_advanced_analytics_to_games
+    nba_seasons = [f"{y}-{str(y + 1)[-2:]}" for y in seasons]
+    merged = add_advanced_analytics_to_games(merged, nba_seasons=nba_seasons)
+    # Add line movement features (additive: line_move_direction, line_move_magnitude, line_move_velocity_6h, sharp_money_indicator)
+    from .line_movement import merge_line_movement_into_feature_matrix
+    merged = merge_line_movement_into_feature_matrix(merged, odds_db_path=None)
+    # Save full feature matrix to SQLite (all existing + line movement columns)
     if not merged.empty and db_path.exists():
         conn = sqlite3.connect(db_path)
         try:
@@ -380,7 +406,9 @@ def load_team_advanced_stats_from_sqlite(league: str | None = None, db_path: Pat
 
 
 def load_merged_games_from_sqlite(league: str | None = None, db_path: Path | None = None) -> pd.DataFrame:
-    """Load games_with_team_stats from SQLite (merged games + home/away advanced stats)."""
+    """Load games_with_team_stats from SQLite (merged games + home/away advanced stats + line movement).
+    Includes line_move_direction, line_move_magnitude, line_move_velocity_6h, sharp_money_indicator when present.
+    No existing columns are replaced; line movement is additive."""
     path = db_path or _espn_db_path()
     if not path.exists():
         return pd.DataFrame()
