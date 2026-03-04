@@ -223,26 +223,66 @@ def _parse_event_teams(event_str: str) -> tuple[str, str]:
     return (s, "")
 
 
-def _one_sentence_reasoning(row: pd.Series, feature_matrix: Optional[pd.DataFrame] = None) -> str:
-    """One-sentence summary from top SHAP drivers for this game, or generic fallback."""
+def _potd_reason(row, feature_matrix: Optional[pd.DataFrame] = None) -> str:
+    """Build a 2–3 sentence explanation for why this play was chosen (POTD card)."""
     market = str(row.get("Market", ""))
-    away, home = _parse_event_teams(str(row.get("Event", "")))
+    market_label = MARKET_LABELS.get(market, market)
+    selection = str(row.get("Selection", ""))
+    event = str(row.get("Event", ""))
+    edge_pct = float(row.get("Value (%)", 0))
+    league = str(row.get("League", ""))
+    point = row.get("point")
+    away, home = _parse_event_teams(event)
+
+    # Sentence 1: what we're betting and the edge
+    point_str = ""
+    if point is not None:
+        try:
+            pt = float(point)
+            if market == "spreads":
+                point_str = f" {pt:+.1f}"
+            elif market == "totals" and f"{pt:.1f}" not in selection:
+                point_str = f" {pt:.1f}"
+        except (TypeError, ValueError):
+            pass
+    opening = (
+        f"Our model sees {edge_pct:.1f}% expected value on {selection}{point_str} in this {market_label}—"
+        f"the best {league} play we're highlighting today."
+    )
+
+    # Sentences 2–3: why (SHAP drivers if available, else methodology)
+    why_sentences: list[str] = []
     if feature_matrix is not None and not feature_matrix.empty and home and away:
         feature_row = get_feature_row_for_game(
             feature_matrix,
             home_team=home,
             away_team=away,
-            league=str(row.get("League", "")),
+            league=league,
         )
         if feature_row is not None:
-            reason = get_top_shap_reasoning(feature_row, market, home_team=home, away_team=away, top_k=3)
-            if reason:
-                return reason
-    if market == "spreads":
-        return "Power ratings and schedule fatigue (back-to-backs) suggest the market is mispricing this spread."
-    if market == "totals":
-        return "Pace-adjusted projections and key-number analysis (3, 7, 14) indicate the total is off."
-    return "Implied probability vs our model probability shows meaningful edge on the moneyline."
+            shap_reason = get_top_shap_reasoning(
+                feature_row, market, home_team=home, away_team=away, top_k=3
+            )
+            if shap_reason:
+                why_sentences.append(shap_reason)
+    if not why_sentences:
+        opponent = away if (selection.strip() == home.strip()) else home
+        if market == "spreads":
+            why_sentences.append(
+                f"{selection}'s power rating versus {opponent}, plus schedule and rest (e.g. back-to-backs), "
+                f"suggest the market is mispricing this spread."
+            )
+        elif market == "totals":
+            why_sentences.append(
+                f"Pace and efficiency for {home} and {away}, plus key-number analysis, suggest the "
+                f"posted total is off from our projection."
+            )
+        else:
+            why_sentences.append(
+                f"Our model gives {selection} a higher win probability than the odds imply against {opponent}."
+            )
+
+    return " ".join([opening] + why_sentences)
 
 
 def _potd_badge_text(row: pd.Series) -> str:
@@ -255,7 +295,7 @@ def _potd_badge_text(row: pd.Series) -> str:
         try:
             pt = float(point)
             if market == "totals":
-                return f"{market_label} · {selection} {pt:.1f}"
+                return f"{market_label} · {selection} {pt:.1f}" if f"{pt:.1f}" not in selection else f"{market_label} · {selection}"
             return f"{market_label} · {selection} {pt:+.1f}"
         except (TypeError, ValueError):
             pass
@@ -468,7 +508,7 @@ def _render_potd_card_html(
     confidence = "High" if edge_pct >= POTD_HIGH_CONFIDENCE_EDGE_PCT else "Medium"
     away, home = _parse_event_teams(str(r.get("Event", "")))
     badge_text = _potd_badge_text(r)
-    reason = _one_sentence_reasoning(r, feature_matrix=feature_matrix)
+    reason = _potd_reason(r, feature_matrix=feature_matrix)
     odds_str = format_american(r.get("Odds", 0))
     return f"""
     <div class="potd-card potd-card--{accent}">
@@ -761,15 +801,9 @@ BASKETBALL_HISTORICAL_COLUMNS = ["event_id", "event_name", "odds", "model_prob",
 # -----------------------------------------------------------------------------
 
 st.sidebar.header("Settings")
-starting_bankroll = st.sidebar.number_input(
-    "Starting bankroll",
-    min_value=100.0,
-    max_value=1_000_000.0,
-    value=1000.0,
-    step=100.0,
-    format="%.0f",
-    help="Used for recommended stakes and simulation.",
-)
+
+# Fixed bankroll used internally for stake sizing (Kelly); not shown in UI
+BANKROLL_FOR_STAKES = 1000.0
 
 # Single model: value + Kelly (quarter Kelly) for stakes
 kelly_frac = 0.25
@@ -815,7 +849,7 @@ include_high_risk_odds = st.sidebar.checkbox(
 # -----------------------------------------------------------------------------
 
 basketball_historical_df = pd.DataFrame(columns=BASKETBALL_HISTORICAL_COLUMNS)
-engine_basketball = BettingEngine(basketball_historical_df, strategy_fn, starting_bankroll)
+engine_basketball = BettingEngine(basketball_historical_df, strategy_fn, BANKROLL_FOR_STAKES)
 results_basketball = engine_basketball.run()
 
 # Value plays: live NBA + NCAAB from The Odds API; cached 15 min to stay under 500 requests/month
@@ -863,7 +897,7 @@ if (odds_api_key or "").strip():
         feature_matrix_inference = load_feature_matrix_for_inference(league=None)
         value_plays_df, value_plays_flagged_count = _live_odds_to_value_plays(
             live_odds_df,
-            bankroll=starting_bankroll,
+            bankroll=BANKROLL_FOR_STAKES,
             kelly_frac=kelly_frac_val,
             min_ev_pct=EV_EPSILON_MIN_PCT,
             max_ev_pct=EV_EPSILON_MAX_PCT,
@@ -1017,15 +1051,14 @@ def _bet_history_table(records: list) -> None:
         "stake": "Stake",
         "result": "Result",
         "profit": "P/L",
-        "bankroll_after": "Bankroll after",
     })
     bet_display = bet_df.copy()
     if "Odds" in bet_display.columns:
         bet_display["Odds"] = bet_display["Odds"].apply(format_american)
-    for col in ("Stake", "P/L", "Bankroll after"):
+    for col in ("Stake", "P/L"):
         if col in bet_display.columns:
             bet_display[col] = bet_display[col].apply(lambda x: format_currency(x) if pd.notna(x) else "—")
-    cols = ["Step", "Event", "Odds", "Model prob", "Stake", "Result", "P/L", "Bankroll after"]
+    cols = ["Step", "Event", "Odds", "Model prob", "Stake", "Result", "P/L"]
     st.dataframe(
         bet_display[[c for c in cols if c in bet_display.columns]],
         use_container_width=True,
@@ -1038,7 +1071,6 @@ def _bet_history_table(records: list) -> None:
             "Stake": st.column_config.TextColumn("Stake", width="small"),
             "Result": st.column_config.TextColumn("Result", width="small"),
             "P/L": st.column_config.TextColumn("P/L", width="small"),
-            "Bankroll after": st.column_config.TextColumn("Bankroll after", width="small"),
         },
     )
 
