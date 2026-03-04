@@ -50,6 +50,7 @@ from engine.clv_tracker import (
 from engine.betting_models import (
     load_feature_matrix_for_inference,
     get_feature_row_for_game,
+    get_top_shap_reasoning,
     predict_spread_prob,
     predict_totals_prob,
     predict_moneyline_prob,
@@ -222,9 +223,21 @@ def _parse_event_teams(event_str: str) -> tuple[str, str]:
     return (s, "")
 
 
-def _one_sentence_reasoning(row: pd.Series) -> str:
-    """One-sentence summary of why this play was flagged (e.g. rest, pace, key number)."""
+def _one_sentence_reasoning(row: pd.Series, feature_matrix: Optional[pd.DataFrame] = None) -> str:
+    """One-sentence summary from top SHAP drivers for this game, or generic fallback."""
     market = str(row.get("Market", ""))
+    away, home = _parse_event_teams(str(row.get("Event", "")))
+    if feature_matrix is not None and not feature_matrix.empty and home and away:
+        feature_row = get_feature_row_for_game(
+            feature_matrix,
+            home_team=home,
+            away_team=away,
+            league=str(row.get("League", "")),
+        )
+        if feature_row is not None:
+            reason = get_top_shap_reasoning(feature_row, market, home_team=home, away_team=away, top_k=3)
+            if reason:
+                return reason
     if market == "spreads":
         return "Power ratings and schedule fatigue (back-to-backs) suggest the market is mispricing this spread."
     if market == "totals":
@@ -284,11 +297,13 @@ POTD_CARD_CSS = """
 .potd-matchup .potd-vs { font-weight: 400; opacity: 0.7; font-size: 1rem; }
 .potd-badge {
     display: inline-block;
-    padding: 0.35rem 0.75rem;
+    padding: 0.5rem 1rem;
     border-radius: 8px;
-    font-size: 0.9rem;
-    font-weight: 600;
+    font-size: 1.35rem;
+    font-weight: 800;
     margin-bottom: 0.75rem;
+    letter-spacing: 0.02em;
+    line-height: 1.3;
 }
 .potd-card--blue .potd-badge  { background: rgba(30,136,229,0.4); color: #90caf9; }
 .potd-card--orange .potd-badge { background: rgba(245,124,0,0.4); color: #ffe0b2; }
@@ -434,7 +449,12 @@ def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> 
     """
 
 
-def _render_potd_card_html(league: str, row: Optional[pd.Series], accent: str) -> str:
+def _render_potd_card_html(
+    league: str,
+    row: Optional[pd.Series],
+    accent: str,
+    feature_matrix: Optional[pd.DataFrame] = None,
+) -> str:
     """Return HTML for one Play of the Day card. accent: 'blue' | 'orange' | 'grey'. Grey when no play."""
     if row is None or (isinstance(row, pd.Series) and (row.empty or len(row) == 0)):
         return f"""
@@ -448,7 +468,7 @@ def _render_potd_card_html(league: str, row: Optional[pd.Series], accent: str) -
     confidence = "High" if edge_pct >= POTD_HIGH_CONFIDENCE_EDGE_PCT else "Medium"
     away, home = _parse_event_teams(str(r.get("Event", "")))
     badge_text = _potd_badge_text(r)
-    reason = _one_sentence_reasoning(r)
+    reason = _one_sentence_reasoning(r, feature_matrix=feature_matrix)
     odds_str = format_american(r.get("Odds", 0))
     return f"""
     <div class="potd-card potd-card--{accent}">
@@ -1031,11 +1051,20 @@ with tab_overview:
     potd_picks = select_play_of_the_day(value_plays_df, live_odds_df, min_edge_pct=POTD_MIN_EDGE_PCT)
     pod_nba = potd_picks["NBA"]
     pod_ncaab = potd_picks["NCAAB"]
+    feature_matrix_potd = (
+        load_feature_matrix_for_inference(league=None) if (pod_nba or pod_ncaab) else None
+    )
     col_nba, col_ncaab = st.columns(2)
     with col_nba:
-        st.markdown(_render_potd_card_html("NBA", pod_nba, "blue"), unsafe_allow_html=True)
+        st.markdown(
+            _render_potd_card_html("NBA", pod_nba, "blue", feature_matrix=feature_matrix_potd),
+            unsafe_allow_html=True,
+        )
     with col_ncaab:
-        st.markdown(_render_potd_card_html("NCAAB", pod_ncaab, "orange"), unsafe_allow_html=True)
+        st.markdown(
+            _render_potd_card_html("NCAAB", pod_ncaab, "orange", feature_matrix=feature_matrix_potd),
+            unsafe_allow_html=True,
+        )
     if value_plays_df.empty:
         if (odds_api_key or "").strip():
             st.caption("No Play of the Day: no games or value plays loaded for today. Try **Refresh odds** below or check back later.")

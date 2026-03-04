@@ -359,6 +359,142 @@ def load_metrics() -> dict[str, float]:
         return {}
 
 
+def _shap_feature_to_sentence(
+    feature_name: str,
+    shap_val: float,
+    raw_val: Any,
+    home_team: str,
+    away_team: str,
+) -> Optional[str]:
+    """Turn one (feature, SHAP value, raw value) into a short human-readable phrase. Returns None if no phrase."""
+    try:
+        val = float(raw_val) if raw_val is not None and pd.notna(raw_val) else 0.0
+    except (TypeError, ValueError):
+        val = 0.0
+    name = (feature_name or "").strip().lower()
+
+    # Rest / back-to-back
+    if name == "home_days_rest" and val >= 0:
+        if val >= 1:
+            return f"{home_team} has a {int(val)}-day rest advantage"
+        return None
+    if name == "away_days_rest" and val >= 0:
+        if val == 0:
+            return None  # Let away_is_b2b handle back-to-back
+        if val < 2:
+            return f"{away_team} has only {int(val)} day rest"
+        return None
+    if name == "home_is_b2b" and val >= 0.5:
+        return f"{home_team} is on a back-to-back"
+    if name == "away_is_b2b" and val >= 0.5:
+        return f"{away_team} is on a back-to-back"
+
+    # Travel
+    if name == "home_travel_miles" and val > 0:
+        return f"{home_team} traveled {int(val)} miles"
+    if name == "away_travel_miles" and val > 0:
+        return f"{away_team} traveled {int(val)} miles"
+
+    # Form / win%
+    if name == "home_win_pct_last30" and 0 <= val <= 1:
+        return f"{home_team} is {int(round(val * 100))}% over last 30"
+    if name == "away_win_pct_last30" and 0 <= val <= 1:
+        return f"{away_team} is {int(round(val * 100))}% over last 30"
+
+    # Defense / offense (direction from SHAP: positive = favors home cover / over / home win)
+    if "defensive_rating" in name or "def_eff" in name:
+        if "home" in name and shap_val > 0:
+            return f"{home_team} has stronger defensive rating"
+        if "away" in name and shap_val < 0:
+            return f"{away_team} has weaker defense"
+        if "home" in name and shap_val < 0:
+            return f"{away_team} has stronger defensive rating"
+        if "away" in name and shap_val > 0:
+            return f"{home_team} has weaker defense"
+    if "offensive_rating" in name or "off_eff" in name:
+        if "home" in name and shap_val > 0:
+            return f"{home_team} has stronger offense"
+        if "away" in name and shap_val < 0:
+            return f"{away_team} has weaker offense"
+
+    # Pace / totals
+    if "pace" in name and "roll" in name:
+        return "Recent pace supports this total"
+    if "ts_pct" in name or "true_shooting" in name:
+        return "Shooting efficiency supports this side"
+
+    # Line movement / sharp
+    if name == "line_move_direction" or name == "sharp_money_indicator":
+        return "Line movement suggests sharp action on this side"
+    if name == "line_move_magnitude" and val != 0:
+        return "Meaningful line move in our favor"
+
+    return None
+
+
+def get_top_shap_reasoning(
+    feature_row: pd.Series,
+    market: str,
+    home_team: str,
+    away_team: str,
+    top_k: int = 3,
+) -> Optional[str]:
+    """
+    Pull top-k SHAP feature values for this prediction and build a unique sentence.
+    market: 'spreads' | 'totals' | 'h2h'. Returns None if SHAP unavailable (fall back to generic).
+    """
+    try:
+        import shap
+    except ImportError:
+        return None
+    model_path: Optional[Path] = None
+    cols: list[str] = []
+    if market == "spreads":
+        model_path, cols = SPREAD_MODEL_PATH, SPREAD_FEATURE_COLUMNS
+    elif market == "totals":
+        model_path, cols = TOTALS_MODEL_PATH, TOTALS_FEATURE_COLUMNS
+    elif market == "h2h":
+        model_path, cols = MONEYLINE_MODEL_PATH, MONEYLINE_FEATURE_COLUMNS
+    else:
+        return None
+    payload = load_model(model_path)
+    if payload is None:
+        return None
+    model = payload["model"]
+    used_cols = payload.get("feature_columns", cols)
+    X, used = _select_features(pd.DataFrame([feature_row]), used_cols)
+    if X.empty or len(used) == 0:
+        return None
+    try:
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(X)
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+        sv = np.asarray(shap_values)
+        if sv.ndim == 2:
+            row_shap = sv[0]
+        else:
+            row_shap = sv
+        if len(row_shap) != len(used):
+            return None
+        indexed = [(used[i], float(row_shap[i]), X.iloc[0].get(used[i])) for i in range(len(used))]
+        indexed.sort(key=lambda x: abs(x[1]), reverse=True)
+        phrases: list[str] = []
+        seen: set[str] = set()
+        for feat_name, sh, raw in indexed[: top_k * 2]:
+            if len(phrases) >= top_k:
+                break
+            phrase = _shap_feature_to_sentence(feat_name, sh, raw, home_team, away_team)
+            if phrase and phrase not in seen:
+                seen.add(phrase)
+                phrases.append(phrase)
+        if not phrases:
+            return None
+        return ". ".join(phrases)
+    except Exception:
+        return None
+
+
 def load_feature_matrix_for_inference(
     db_path: Optional[Path] = None,
     league: Optional[str] = None,
