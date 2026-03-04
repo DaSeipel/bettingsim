@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import re
 from datetime import date, datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -228,6 +229,14 @@ def _parse_commence_date(commence_time: str) -> date | None:
         return None
 
 
+def _parse_commence_date_in_tz(commence_time: str, tz: ZoneInfo) -> date | None:
+    """Parse commence_time (UTC) and return the calendar date in the given timezone. Used so 'today' matches US broadcast day."""
+    dt_utc = _parse_commence_datetime(commence_time)
+    if dt_utc is None:
+        return None
+    return dt_utc.astimezone(tz).date()
+
+
 def _parse_commence_datetime(commence_time: str) -> datetime | None:
     """Parse ISO 8601 commence_time to datetime (UTC). Returns None if invalid."""
     if not commence_time:
@@ -254,12 +263,13 @@ def get_live_odds(
     markets: list[str] | None = None,
     odds_format: str = "american",
     commence_on_date: date | None = None,
+    display_timezone: str = "America/New_York",
 ) -> pd.DataFrame:
     """
     Fetch live odds from The Odds API (v4) for multiple sports (pre-match only).
-    Uses requests to GET https://api.the-odds-api.com/v4/sports/{sport_key}/odds for each key.
-    Only includes events whose commence_time is in the future (not started); excludes live/in-play.
-    If commence_on_date is set, only events on that date (UTC) with commence_time > now are included.
+    Only includes events whose commence_time is in the future (not started).
+    Event date filter: when display_timezone is set, "today" is the calendar day in that zone
+    (so US evening games still count as today). Otherwise uses commence_on_date or local date (UTC date).
     Returns a single DataFrame with columns: sport_key, league, event_id, commence_time,
     home_team, away_team, event_name, market_type, selection, point, odds (American).
     """
@@ -270,7 +280,9 @@ def get_live_odds(
                 "event_name", "market_type", "selection", "point", "odds",
             ]
         )
-    today = commence_on_date if commence_on_date is not None else date.today()
+    tz = ZoneInfo(display_timezone)
+    use_tz_for_today = commence_on_date is None
+    today = datetime.now(tz).date() if use_tz_for_today else commence_on_date
     markets = markets if markets is not None else ["h2h", "spreads", "totals"]
     markets_param = ",".join(markets)
     rows: list[dict[str, Any]] = []
@@ -303,7 +315,7 @@ def get_live_odds(
             home = event.get("home_team", "")
             away = event.get("away_team", "")
             commence = event.get("commence_time", "")
-            event_date = _parse_commence_date(commence)
+            event_date = _parse_commence_date_in_tz(commence, tz) if use_tz_for_today else _parse_commence_date(commence)
             if event_date is None or event_date != today:
                 continue
             if not _is_commence_in_future(commence):

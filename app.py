@@ -755,12 +755,16 @@ starting_bankroll = st.sidebar.number_input(
 kelly_frac = 0.25
 strategy_fn = strategy_kelly(kelly_fraction_param=kelly_frac)
 
-# API key: Streamlit secrets (best practice) → env → sidebar only when missing
+# API key: .streamlit/secrets.toml ([the_odds_api] api_key = "...") → env ODDS_API_KEY → sidebar
 def _get_odds_api_key() -> str:
     key = ""
     try:
         if hasattr(st, "secrets") and st.secrets:
-            key = (st.secrets.get("the_odds_api", {}).get("api_key") or st.secrets.get("ODDS_API_KEY") or "").strip()
+            # Prefer [the_odds_api] api_key from secrets.toml
+            section = st.secrets.get("the_odds_api")
+            if section is not None:
+                key = getattr(section, "api_key", None) or (section.get("api_key") if hasattr(section, "get") else None) or ""
+            key = (key or st.secrets.get("ODDS_API_KEY") or "").strip()
     except Exception:
         pass
     if not key:
@@ -801,15 +805,15 @@ ODDS_CACHE_TTL_SECONDS = 900  # 15 minutes
 
 @st.cache_data(ttl=ODDS_CACHE_TTL_SECONDS)
 def _fetch_live_odds_cached(commence_date_iso: str, refresh_key: int = 0) -> pd.DataFrame:
-    """Fetch live odds from The Odds API. Cached 15 min; refresh_key forces refetch when changed."""
+    """Fetch live odds from The Odds API. Cached 15 min; refresh_key forces refetch when changed.
+    Pass today_et.isoformat() as commence_date_iso so cache key is ET date; engine uses ET for 'today' filter."""
     api_key = _get_odds_api_key()
     if not (api_key or "").strip():
         return pd.DataFrame()
-    d = date.fromisoformat(commence_date_iso)
     return get_live_odds(
         api_key=api_key.strip(),
         sport_keys=LIVE_ODDS_SPORT_KEYS,
-        commence_on_date=d,
+        commence_on_date=None,
     )
 
 
@@ -827,12 +831,13 @@ if "odds_refresh_key" not in st.session_state:
 
 if (odds_api_key or "").strip():
     try:
+        today_et = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
         live_odds_df = _fetch_live_odds_cached(
-            date.today().isoformat(),
+            today_et,
             refresh_key=st.session_state["odds_refresh_key"],
         )
         b2b_teams = _get_b2b_teams_cached(
-            date.today().isoformat(),
+            datetime.now(ZoneInfo("America/New_York")).date().isoformat(),
             refresh_key=st.session_state.get("odds_refresh_key", 0),
         )
         feature_matrix_inference = load_feature_matrix_for_inference(league=None)
@@ -1031,6 +1036,11 @@ with tab_overview:
         st.markdown(_render_potd_card_html("NBA", pod_nba, "blue"), unsafe_allow_html=True)
     with col_ncaab:
         st.markdown(_render_potd_card_html("NCAAB", pod_ncaab, "orange"), unsafe_allow_html=True)
+    if value_plays_df.empty:
+        if (odds_api_key or "").strip():
+            st.caption("No Play of the Day: no games or value plays loaded for today. Try **Refresh odds** below or check back later.")
+        else:
+            st.caption("No Play of the Day: set your **Odds API key** in the sidebar to load today's NBA & NCAAB games and value plays.")
 
     st.divider()
 
