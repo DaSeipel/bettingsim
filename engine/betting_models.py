@@ -26,7 +26,7 @@ TOTALS_FEATURE_COLUMNS = [
     "home_pace_roll10", "away_pace_roll10",
     "home_ts_pct_roll10", "away_ts_pct_roll10",
 ]
-# Spreads: defensive ratings and situational spots matter more.
+# Spreads: defensive ratings, situational spots, and momentum (heavily weighted by sharp bettors).
 SPREAD_FEATURE_COLUMNS = [
     "home_defensive_rating", "away_defensive_rating",
     "home_offensive_rating", "away_offensive_rating",
@@ -36,6 +36,12 @@ SPREAD_FEATURE_COLUMNS = [
     "home_win_pct_last30", "away_win_pct_last30",
     "home_def_eff_roll10", "away_def_eff_roll10",
     "home_off_eff_roll10", "away_off_eff_roll10",
+    "home_streak", "away_streak",
+    "home_ats_pct_last10", "away_ats_pct_last10",
+    "home_over_pct_last10", "away_over_pct_last10",
+    "home_pt_diff_trend_last5", "away_pt_diff_trend_last5",
+    "home_ats_pct_home_season", "home_ats_pct_road_season",
+    "away_ats_pct_home_season", "away_ats_pct_road_season",
     "line_move_direction", "line_move_magnitude", "sharp_money_indicator",
 ]
 # Moneylines: power-style and situational.
@@ -318,6 +324,133 @@ def predict_moneyline_prob(
     return float(np.clip(1.0 - prob_home, 0.02, 0.98))
 
 
+# League default totals for consensus third vote (totals)
+NBA_LEAGUE_AVG_TOTAL = 220.0
+NCAAB_LEAGUE_AVG_TOTAL = 140.0
+
+
+def _spread_direction_home_cover(row: Optional[pd.Series], market_spread: float) -> Optional[bool]:
+    """True if model says home covers. None if model unavailable."""
+    if row is None:
+        return None
+    payload = load_model(SPREAD_MODEL_PATH)
+    if payload is None:
+        return None
+    model = payload["model"]
+    cols = payload.get("feature_columns", [])
+    X, _ = _select_features(pd.DataFrame([row]), cols)
+    if X.empty:
+        return None
+    pred_margin = float(model.predict(X)[0])
+    diff = pred_margin - market_spread
+    prob_home_cover = 1.0 / (1.0 + np.exp(-0.35 * diff))
+    return prob_home_cover > 0.5
+
+
+def _moneyline_direction_home(row: Optional[pd.Series]) -> Optional[bool]:
+    """True if model says home wins. None if model unavailable."""
+    if row is None:
+        return None
+    payload = load_model(MONEYLINE_MODEL_PATH)
+    if payload is None:
+        return None
+    model = payload["model"]
+    cols = payload.get("feature_columns", [])
+    X, _ = _select_features(pd.DataFrame([row]), cols)
+    if X.empty:
+        return None
+    prob_home = float(model.predict_proba(X)[0, 1])
+    return prob_home > 0.5
+
+
+def _totals_direction_over(row: Optional[pd.Series], market_total: float) -> Optional[bool]:
+    """True if model says over. None if model unavailable."""
+    if row is None:
+        return None
+    payload = load_model(TOTALS_MODEL_PATH)
+    if payload is None:
+        return None
+    model = payload["model"]
+    cols = payload.get("feature_columns", [])
+    X, _ = _select_features(pd.DataFrame([row]), cols)
+    if X.empty:
+        return None
+    pred_total = float(model.predict(X)[0])
+    return pred_total > market_total
+
+
+def consensus_spread(
+    feature_row: Optional[pd.Series],
+    market_spread: float,
+    we_cover_favorite: bool,
+    in_house_spread: float,
+    fallback_prob: float,
+) -> tuple[float, bool]:
+    """
+    Return (model_prob, passes_consensus). Only pass when >= 2 of 3 sub-models agree on direction.
+    Sub-models: (1) XGBoost spread, (2) in-house spread, (3) XGBoost moneyline.
+    """
+    prob = predict_spread_prob(feature_row, market_spread, we_cover_favorite, fallback_prob=fallback_prob)
+    recommended_home_cover = (we_cover_favorite and market_spread <= 0) or (not we_cover_favorite and market_spread > 0)
+    v1 = _spread_direction_home_cover(feature_row, market_spread)
+    v2 = in_house_spread > market_spread  # in-house likes home to cover when our line is higher than market
+    v3 = _moneyline_direction_home(feature_row)
+    votes = [v for v in (v1, v2, v3) if v is not None]
+    if len(votes) < 2:
+        return (prob, True)  # not enough models, don't suppress
+    agree = sum(1 for v in votes if v == recommended_home_cover)
+    return (prob, agree >= 2)
+
+
+def consensus_totals(
+    feature_row: Optional[pd.Series],
+    market_total: float,
+    prefer_over: bool,
+    in_house_total: float,
+    league: str,
+    fallback_prob: float,
+) -> tuple[float, bool]:
+    """
+    Return (model_prob, passes_consensus). Only pass when >= 2 of 3 sub-models agree on over/under.
+    Sub-models: (1) XGBoost totals, (2) in-house total, (3) league-avg lean (market low => lean over).
+    """
+    prob = predict_totals_prob(feature_row, market_total, prefer_over, fallback_prob=fallback_prob)
+    v1 = _totals_direction_over(feature_row, market_total)
+    v2 = in_house_total > market_total
+    league_avg = NBA_LEAGUE_AVG_TOTAL if str(league).strip().upper() == "NBA" else NCAAB_LEAGUE_AVG_TOTAL
+    v3 = market_total < league_avg  # low total => lean over
+    votes = [v1, v2, v3]
+    votes = [v for v in votes if v is not None]
+    if len(votes) < 2:
+        return (prob, True)
+    agree = sum(1 for v in votes if v == prefer_over)
+    return (prob, agree >= 2)
+
+
+def consensus_moneyline(
+    feature_row: Optional[pd.Series],
+    selection_is_home: bool,
+    home_rating: float,
+    away_rating: float,
+    fallback_prob: float,
+) -> tuple[float, bool]:
+    """
+    Return (model_prob, passes_consensus). Only pass when >= 2 of 3 sub-models agree on home vs away.
+    Sub-models: (1) XGBoost moneyline, (2) in-house ratings, (3) XGBoost spread (home cover => home win lean).
+    """
+    prob = predict_moneyline_prob(feature_row, selection_is_home, fallback_prob=fallback_prob)
+    in_house_spread = home_rating - away_rating
+    recommended_home = selection_is_home
+    v1 = _moneyline_direction_home(feature_row)
+    v2 = in_house_spread > 0  # ratings favor home
+    v3 = _spread_direction_home_cover(feature_row, in_house_spread)  # use in_house_spread as proxy market
+    votes = [v for v in (v1, v2, v3) if v is not None]
+    if len(votes) < 2:
+        return (prob, True)
+    agree = sum(1 for v in votes if v == recommended_home)
+    return (prob, agree >= 2)
+
+
 def get_feature_row_for_game(
     feature_matrix: pd.DataFrame,
     home_team: str,
@@ -428,6 +561,30 @@ def _shap_feature_to_sentence(
         return "Line movement suggests sharp action on this side"
     if name == "line_move_magnitude" and val != 0:
         return "Meaningful line move in our favor"
+
+    # Momentum (streak, ATS, O/U, trend, home/road ATS)
+    if "streak" in name:
+        if "home" in name and val > 0:
+            return f"{home_team} on a {int(val)}-game win streak"
+        if "home" in name and val < 0:
+            return f"{home_team} on a {int(-val)}-game losing streak"
+        if "away" in name and val > 0:
+            return f"{away_team} on a {int(val)}-game win streak"
+        if "away" in name and val < 0:
+            return f"{away_team} on a {int(-val)}-game losing streak"
+    if "ats_pct_last10" in name and isinstance(val, (int, float)):
+        if "home" in name and val > 0.5:
+            return f"{home_team} covering well lately (ATS last 10)"
+        if "away" in name and val > 0.5:
+            return f"{away_team} covering well lately (ATS last 10)"
+    if "pt_diff_trend_last5" in name:
+        if val == 1:
+            return "Point differential trending up (improving)" if "home" in name else "Opponent point differential improving"
+        if val == -1:
+            return "Point differential trending down (declining)" if "home" in name else "Opponent point differential declining"
+    if "ats_pct_home_season" in name or "ats_pct_road_season" in name:
+        if isinstance(val, (int, float)) and val > 0.5:
+            return "Strong ATS in this venue type (home/road) this season"
 
     return None
 

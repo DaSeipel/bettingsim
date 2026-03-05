@@ -147,6 +147,30 @@ def _parse_event_to_game_row(event: dict[str, Any], league_key: str) -> dict[str
         return None
 
 
+def fetch_scoreboard(league_key: str, game_date: str) -> list[dict[str, Any]]:
+    """
+    Fetch scoreboard for a league on a given date. game_date: YYYY-MM-DD or date object.
+    Returns list of game dicts with home_team_name, away_team_name, home_score, away_score
+    (only completed games with both scores).
+    """
+    if league_key not in LEAGUES:
+        return []
+    if hasattr(game_date, "strftime"):
+        game_date = game_date.strftime("%Y%m%d")
+    else:
+        game_date = str(game_date).replace("-", "")[:8]
+    path = f"{_sport_league_path(league_key)}/scoreboard"
+    data = _get(path, params={"dates": game_date})
+    if not data or "events" not in data:
+        return []
+    out = []
+    for event in data.get("events", []):
+        row = _parse_event_to_game_row(event, league_key)
+        if row and row.get("home_score") is not None and row.get("away_score") is not None:
+            out.append(row)
+    return out
+
+
 def _wins_losses_from_events(events: list[dict], team_id: str, league_key: str) -> tuple[int, int]:
     """Compute wins and losses for a team from a list of event dicts (completed games)."""
     wins = losses = 0

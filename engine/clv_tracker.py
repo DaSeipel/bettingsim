@@ -58,9 +58,22 @@ def _create_table(conn: sqlite3.Connection) -> None:
             odds_at_recommendation INTEGER,
             closing_odds INTEGER,
             clv_implied_pct REAL,
+            stake REAL,
+            result TEXT,
             UNIQUE(home_team, away_team, commence_time, market_type, selection, point)
         )
     """)
+    _ensure_bet_outcome_columns(conn)
+
+
+def _ensure_bet_outcome_columns(conn: sqlite3.Connection) -> None:
+    """Add stake and result columns if missing (migration for existing DBs)."""
+    cur = conn.execute("PRAGMA table_info(clv_tracker)")
+    cols = [row[1] for row in cur.fetchall()]
+    if "stake" not in cols:
+        conn.execute("ALTER TABLE clv_tracker ADD COLUMN stake REAL")
+    if "result" not in cols:
+        conn.execute("ALTER TABLE clv_tracker ADD COLUMN result TEXT")
 
 
 def record_recommendations(
@@ -106,15 +119,23 @@ def record_recommendations(
                 continue
             if abs(odds) < 100:
                 continue
+            stake = row.get("Recommended Stake")
+            if stake is not None and not pd.isna(stake):
+                try:
+                    stake = float(stake)
+                except (TypeError, ValueError):
+                    stake = None
+            else:
+                stake = None
             try:
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO clv_tracker
                     (recorded_at, league, event_name, home_team, away_team, commence_time,
-                     market_type, selection, point, odds_at_recommendation)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     market_type, selection, point, odds_at_recommendation, stake)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (now, league, event_name, home_team, away_team, commence_time, market_type, selection, point, odds),
+                    (now, league, event_name, home_team, away_team, commence_time, market_type, selection, point, odds, stake),
                 )
                 if conn.total_changes > 0:
                     inserted += 1
@@ -124,6 +145,132 @@ def record_recommendations(
     finally:
         conn.close()
     return inserted
+
+
+def get_clv_row_for_play(
+    home_team: str,
+    away_team: str,
+    commence_time: str,
+    market_type: str,
+    selection: str,
+    point: Optional[float],
+    db_path: Path | None = None,
+) -> Optional[dict]:
+    """
+    Look up a clv_tracker row by play key. Returns dict with id, result, stake, odds_at_recommendation
+    or None if not found.
+    """
+    path = db_path or _default_db_path()
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(path)
+    try:
+        _create_table(conn)
+        _ensure_bet_outcome_columns(conn)
+        home_team = str(home_team or "").strip()
+        away_team = str(away_team or "").strip()
+        commence_time = str(commence_time or "").strip()
+        market_type = str(market_type or "h2h").strip().lower()
+        selection = str(selection or "").strip()
+        if point is None or (isinstance(point, float) and pd.isna(point)):
+            cur = conn.execute(
+                """
+                SELECT id, result, stake, odds_at_recommendation
+                FROM clv_tracker
+                WHERE home_team = ? AND away_team = ? AND commence_time = ?
+                  AND market_type = ? AND selection = ? AND point IS NULL
+                LIMIT 1
+                """,
+                (home_team, away_team, commence_time, market_type, selection),
+            )
+        else:
+            pt = float(point)
+            cur = conn.execute(
+                """
+                SELECT id, result, stake, odds_at_recommendation
+                FROM clv_tracker
+                WHERE home_team = ? AND away_team = ? AND commence_time = ?
+                  AND market_type = ? AND selection = ? AND point = ?
+                LIMIT 1
+                """,
+                (home_team, away_team, commence_time, market_type, selection, pt),
+            )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "result": row[1], "stake": row[2], "odds_at_recommendation": row[3]}
+    finally:
+        conn.close()
+
+
+def mark_bet_result(clv_id: int, result: str, db_path: Path | None = None) -> bool:
+    """Set result for a clv_tracker row to 'W' or 'L'. Returns True if updated."""
+    if result not in ("W", "L"):
+        return False
+    path = db_path or _default_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        cur = conn.execute("UPDATE clv_tracker SET result = ? WHERE id = ?", (result, clv_id))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def _american_to_decimal(american: float) -> float:
+    """Convert American odds to decimal for P/L."""
+    a = float(american)
+    if a >= 100:
+        return 1.0 + a / 100.0
+    if a <= -100:
+        return 1.0 + 100.0 / abs(a)
+    return 1.0
+
+
+def get_bet_outcomes_summary(db_path: Path | None = None) -> dict:
+    """
+    Return running record and ROI from all clv_tracker rows with result in ('W', 'L').
+    Keys: wins, losses, total_bets, total_staked, total_profit, roi_pct.
+    Only counts rows where stake IS NOT NULL for ROI.
+    """
+    path = db_path or _default_db_path()
+    out = {"wins": 0, "losses": 0, "total_bets": 0, "total_staked": 0.0, "total_profit": 0.0, "roi_pct": 0.0}
+    if not path.exists():
+        return out
+    conn = sqlite3.connect(path)
+    try:
+        cur = conn.execute(
+            "SELECT result, stake, odds_at_recommendation FROM clv_tracker WHERE result IN ('W', 'L')"
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    for result, stake, odds in rows:
+        if result == "W":
+            out["wins"] += 1
+        else:
+            out["losses"] += 1
+        out["total_bets"] += 1
+        stake_val = float(stake) if stake is not None and not (isinstance(stake, float) and pd.isna(stake)) else 0.0
+        if stake_val <= 0:
+            continue
+        out["total_staked"] += stake_val
+        if odds is None:
+            continue
+        try:
+            dec = _american_to_decimal(float(odds))
+        except (TypeError, ValueError):
+            continue
+        if result == "W":
+            out["total_profit"] += stake_val * (dec - 1.0)
+        else:
+            out["total_profit"] -= stake_val
+    if out["total_staked"] > 0:
+        out["roi_pct"] = round(out["total_profit"] / out["total_staked"] * 100.0, 2)
+    out["total_profit"] = round(out["total_profit"], 2)
+    out["total_staked"] = round(out["total_staked"], 2)
+    return out
 
 
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:

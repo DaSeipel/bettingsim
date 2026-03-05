@@ -34,6 +34,9 @@ from .clv_tracker import (
     update_closing_odds as clv_update_closing_odds,
     get_clv_summary_last_30_days,
     load_clv_tracker,
+    get_clv_row_for_play,
+    mark_bet_result,
+    get_bet_outcomes_summary,
 )
 from .betting_models import (
     SPREAD_FEATURE_COLUMNS,
@@ -50,6 +53,9 @@ from .betting_models import (
     predict_spread_prob,
     predict_totals_prob,
     predict_moneyline_prob,
+    consensus_spread,
+    consensus_totals,
+    consensus_moneyline,
 )
 from .espn_collector import (
     LEAGUES,
@@ -72,6 +78,7 @@ from .sportsref_stats import (
     save_team_stats_to_sqlite,
     load_team_advanced_stats_from_sqlite,
     load_merged_games_from_sqlite,
+    apply_opponent_adjustments,
 )
 from .advanced_analytics import (
     add_advanced_analytics_to_games,
@@ -79,6 +86,10 @@ from .advanced_analytics import (
     build_nba_rolling_features,
     build_ncaab_rolling_features,
     fetch_nba_team_game_logs,
+)
+from .momentum_features import (
+    build_momentum_features,
+    merge_momentum_into_feature_matrix,
 )
 from .injury_scraper import (
     fetch_espn_injuries,
@@ -126,6 +137,9 @@ __all__ = [
     "clv_update_closing_odds",
     "get_clv_summary_last_30_days",
     "load_clv_tracker",
+    "get_clv_row_for_play",
+    "mark_bet_result",
+    "get_bet_outcomes_summary",
     "SPREAD_FEATURE_COLUMNS",
     "TOTALS_FEATURE_COLUMNS",
     "MONEYLINE_FEATURE_COLUMNS",
@@ -140,6 +154,9 @@ __all__ = [
     "predict_spread_prob",
     "predict_totals_prob",
     "predict_moneyline_prob",
+    "consensus_spread",
+    "consensus_totals",
+    "consensus_moneyline",
     "LEAGUES",
     "fetch_teams",
     "collect_games_and_schedules",
@@ -158,11 +175,14 @@ __all__ = [
     "save_team_stats_to_sqlite",
     "load_team_advanced_stats_from_sqlite",
     "load_merged_games_from_sqlite",
+    "apply_opponent_adjustments",
     "add_advanced_analytics_to_games",
     "merge_advanced_analytics_into_feature_matrix",
     "build_nba_rolling_features",
     "build_ncaab_rolling_features",
     "fetch_nba_team_game_logs",
+    "build_momentum_features",
+    "merge_momentum_into_feature_matrix",
     "fetch_espn_injuries",
     "fetch_espn_injuries_all",
     "fetch_nba_top5_usage",

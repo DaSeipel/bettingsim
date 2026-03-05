@@ -8,7 +8,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 from engine.engine import (
@@ -46,7 +46,12 @@ from engine.clv_tracker import (
     record_recommendations as clv_record_recommendations,
     update_closing_odds as clv_update_closing_odds,
     get_clv_summary_last_30_days,
+    get_clv_row_for_play,
+    mark_bet_result,
+    get_bet_outcomes_summary,
 )
+from engine.play_history import archive_value_plays, load_play_history, update_play_result
+from engine.ncaab_march_context import add_ncaab_march_context_to_df
 from engine.betting_models import (
     load_feature_matrix_for_inference,
     get_feature_row_for_game,
@@ -54,6 +59,9 @@ from engine.betting_models import (
     predict_spread_prob,
     predict_totals_prob,
     predict_moneyline_prob,
+    consensus_spread,
+    consensus_totals,
+    consensus_moneyline,
 )
 
 
@@ -101,10 +109,16 @@ def _build_pick_explanation(row: pd.Series) -> str:
 # Odds > +500 (6.0 decimal) flagged as high-risk; excluded from Best Value unless toggled
 HIGH_RISK_ODDS_AMERICAN = 500
 
-# Confidence tier: edge >= this is High, else Medium
+# Confidence tier: edge >= this is High, else Medium (unless large spread → High Variance)
 POTD_HIGH_CONFIDENCE_EDGE_PCT = 8.0
-# Minimum edge % to qualify as Play of the Day
-POTD_MIN_EDGE_PCT = 4.0
+# Minimum edge % to qualify as Play of the Day (and for archive)
+POTD_MIN_EDGE_PCT = 6.0
+# Archive: only save plays with edge >= this and cap total per day
+ARCHIVE_MIN_EDGE_PCT = 6.0
+ARCHIVE_MAX_PLAYS_PER_DAY = 10
+# Large spread filter: |spread| > this gets 30% edge penalty for POTD selection and "High Variance" badge
+POTD_LARGE_SPREAD_POINTS = 14.0
+POTD_LARGE_SPREAD_EDGE_PENALTY = 0.30
 
 
 def _bookmaker_counts(odds_df: pd.DataFrame) -> pd.DataFrame:
@@ -171,13 +185,37 @@ def select_play_of_the_day(
 
     eligible["has_injury_flag"] = eligible.apply(_has_injury_flag, axis=1)
 
+    # Large-spread penalty: for spreads with |point| > 14, use adjusted edge (30% penalty) for sorting
+    def _adjusted_edge(row: pd.Series) -> float:
+        if str(row.get("Market", "")).strip().lower() != "spreads":
+            return float(row.get("Value (%)", 0))
+        pt = row.get("point_x") if "point_x" in row.index else row.get("point")
+        try:
+            abs_spread = abs(float(pt))
+        except (TypeError, ValueError):
+            return float(row.get("Value (%)", 0))
+        if abs_spread > POTD_LARGE_SPREAD_POINTS:
+            return float(row.get("Value (%)", 0)) * (1.0 - POTD_LARGE_SPREAD_EDGE_PENALTY)
+        return float(row.get("Value (%)", 0))
+
+    eligible["_adjusted_edge"] = eligible.apply(_adjusted_edge, axis=1)
+
+    def _is_large_spread(row: pd.Series) -> bool:
+        if str(row.get("Market", "")).strip().lower() != "spreads":
+            return False
+        pt = row.get("point_x") if "point_x" in row.index else row.get("point")
+        try:
+            return abs(float(pt)) > POTD_LARGE_SPREAD_POINTS
+        except (TypeError, ValueError):
+            return False
+
     for league in ("NBA", "NCAAB"):
         league_plays = eligible[eligible["League"] == league]
         if league_plays.empty:
             continue
-        # Sort: edge desc, bookmaker_count desc, model_prob_gap desc, has_injury_flag asc (False first)
+        # Sort: adjusted edge desc (large spreads penalized), then bookmaker_count, model_prob_gap, has_injury_flag
         sorted_df = league_plays.sort_values(
-            by=["Value (%)", "bookmaker_count", "model_prob_gap", "has_injury_flag"],
+            by=["_adjusted_edge", "bookmaker_count", "model_prob_gap", "has_injury_flag"],
             ascending=[False, False, False, True],
         )
         top = sorted_df.iloc[0]
@@ -194,6 +232,7 @@ def select_play_of_the_day(
             "Recommended Stake": top.get("Recommended Stake", 0),
             "Start Time": top.get("Start Time", "—"),
             "Injury Alert": top.get("Injury Alert", "—"),
+            "high_variance": _is_large_spread(top),
         }
         result[league] = pick
 
@@ -221,6 +260,48 @@ def _parse_event_teams(event_str: str) -> tuple[str, str]:
             parts = s.split(sep, 1)
             return (parts[0].strip(), parts[1].strip()) if len(parts) == 2 else (s, "")
     return (s, "")
+
+
+# Correlated play filter: same team on same day = correlated; only surface higher-edge play per team.
+MAX_TOP_PLAYS_NO_CORRELATION = 10
+
+
+def _filter_correlated_plays(
+    plays_df: pd.DataFrame,
+    max_plays: int = MAX_TOP_PLAYS_NO_CORRELATION,
+    edge_col: str = "Value (%)",
+    home_col: str = "home_team",
+    away_col: str = "away_team",
+) -> pd.DataFrame:
+    """
+    Among plays (one per game), keep at most max_plays and ensure no team appears in more than one play.
+    When a team appears in multiple plays (e.g. Purdue in a spread and in a total), keep only the play with higher edge.
+    Returns subset of plays_df with same columns.
+    """
+    if plays_df.empty or edge_col not in plays_df.columns:
+        return plays_df
+    has_teams = home_col in plays_df.columns and away_col in plays_df.columns
+    if not has_teams:
+        return plays_df.sort_values(edge_col, ascending=False).head(max_plays).reset_index(drop=True)
+    sorted_df = plays_df.sort_values(edge_col, ascending=False).reset_index(drop=True)
+    used_teams: set[str] = set()
+    indices: list[int] = []
+    for i, row in sorted_df.iterrows():
+        if len(indices) >= max_plays:
+            break
+        h = str(row.get(home_col, "")).strip()
+        a = str(row.get(away_col, "")).strip()
+        if not h and not a:
+            indices.append(i)
+            continue
+        if h in used_teams or a in used_teams:
+            continue
+        used_teams.add(h)
+        used_teams.add(a)
+        indices.append(i)
+    if not indices:
+        return pd.DataFrame()
+    return sorted_df.loc[indices].reset_index(drop=True)
 
 
 def _potd_reason(row, feature_matrix: Optional[pd.DataFrame] = None) -> str:
@@ -302,6 +383,10 @@ def _potd_badge_text(row: pd.Series) -> str:
     return f"{market_label} · {selection}"
 
 
+# Normalize HTML so no line has leading spaces (avoids Markdown code-block → <pre> wrapping)
+def _html_one_line_per_block(html: str) -> str:
+    return "\n".join(line.strip() for line in html.strip().splitlines() if line.strip())
+
 # Play of the Day card: custom CSS + HTML via st.markdown(unsafe_allow_html=True)
 POTD_CARD_CSS = """
 <style>
@@ -361,6 +446,8 @@ POTD_CARD_CSS = """
 }
 .potd-card--blue .potd-confidence  { color: #90caf9; }
 .potd-card--orange .potd-confidence { color: #ffb74d; }
+.potd-confidence.potd-confidence--warning { color: #ffb74d; }
+.potd-march-context { font-size: 0.8rem; color: #ffb74d; margin-top: 0.35rem; margin-bottom: 0.35rem; }
 .potd-reason {
     font-size: 0.9rem;
     line-height: 1.4;
@@ -396,6 +483,7 @@ POTD_CARD_CSS = """
 .vp-bet-type { background: rgba(76, 175, 80, 0.35); color: #a5d6a7; padding: 0.2rem 0.5rem; border-radius: 6px; font-weight: 600; }
 .vp-edge { color: #66bb6a; font-weight: 700; }
 .vp-odds { color: rgba(255,255,255,0.9); font-weight: 600; }
+.vp-march-context { font-size: 0.75rem; color: #ffb74d; margin-top: 0.35rem; }
 .vp-confidence-wrap { margin-top: 0.5rem; }
 .vp-confidence-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
 .vp-confidence-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #43a047, #66bb6a); transition: width 0.2s ease; }
@@ -462,6 +550,54 @@ def _vp_bet_type_label(row: pd.Series) -> str:
     return _potd_badge_text(row)
 
 
+def _march_context_badges(row: pd.Series) -> str:
+    """Compact March context line for NCAAB: conf. tourney, seeds, bubble vs clinched. Returns '—' for non-NCAAB or no flags."""
+    if str(row.get("League", "")).strip().upper() != "NCAAB":
+        return "—"
+    parts = []
+    if row.get("is_conference_tournament"):
+        parts.append("Conf. tourney")
+    h_seed, a_seed = row.get("home_seed"), row.get("away_seed")
+    if pd.notna(h_seed) and pd.notna(a_seed) and h_seed is not None and a_seed is not None:
+        try:
+            parts.append(f"#{int(h_seed)} vs #{int(a_seed)}")
+        except (TypeError, ValueError):
+            pass
+    elif pd.notna(h_seed) and h_seed is not None:
+        try:
+            parts.append(f"#{int(h_seed)} vs ?")
+        except (TypeError, ValueError):
+            pass
+    elif pd.notna(a_seed) and a_seed is not None:
+        try:
+            parts.append(f"? vs #{int(a_seed)}")
+        except (TypeError, ValueError):
+            pass
+    home_clinched = row.get("home_clinched_ncaa_bid") in (True, 1)
+    away_clinched = row.get("away_clinched_ncaa_bid") in (True, 1)
+    home_bubble = row.get("home_is_bubble_team") in (True, 1)
+    away_bubble = row.get("away_is_bubble_team") in (True, 1)
+    if home_bubble or away_bubble or home_clinched or away_clinched:
+        labels = []
+        if away_bubble:
+            labels.append("Bubble")
+        elif away_clinched:
+            labels.append("Clinched")
+        else:
+            labels.append("—")
+        labels.append(" vs ")
+        if home_bubble:
+            labels.append("Bubble")
+        elif home_clinched:
+            labels.append("Clinched")
+        else:
+            labels.append("—")
+        badge = "".join(labels).replace(" — vs —", "").strip()
+        if badge and badge != "— vs —":
+            parts.append(badge)
+    return " · ".join(parts) if parts else "—"
+
+
 def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> str:
     """One All Value Plays card: matchup, bet type, edge %, odds, confidence bar, reasoning."""
     league = str(row.get("League", ""))
@@ -472,7 +608,12 @@ def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> 
     odds_str = format_american(row.get("Odds", 0))
     bar_pct = min(100.0, max(0.0, (edge_pct / edge_max_pct) * 100.0))
     reasoning = _html_escape(_value_play_reasoning(row))
-    return f"""
+    march_line = ""
+    if league == "NCAAB":
+        march_badges = _march_context_badges(row)
+        if march_badges and march_badges != "—":
+            march_line = f'<div class="vp-march-context">{_html_escape(march_badges)}</div>'
+    html = f"""
     <div class="vp-card">
         <div class="vp-card-league {league_class}">{_html_escape(league)}</div>
         <div class="vp-matchup">{matchup}</div>
@@ -481,12 +622,14 @@ def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> 
             <span class="vp-edge">{edge_pct:.1f}% edge</span>
             <span class="vp-odds">{odds_str}</span>
         </div>
+        {march_line}
         <div class="vp-confidence-wrap">
             <div class="vp-confidence-bar"><div class="vp-confidence-fill" style="width:{bar_pct:.1f}%"></div></div>
         </div>
         <div class="vp-reasoning">{reasoning}</div>
     </div>
     """
+    return _html_one_line_per_block(html)
 
 
 def _render_potd_card_html(
@@ -497,30 +640,44 @@ def _render_potd_card_html(
 ) -> str:
     """Return HTML for one Play of the Day card. accent: 'blue' | 'orange' | 'grey'. Grey when no play."""
     if row is None or (isinstance(row, pd.Series) and (row.empty or len(row) == 0)):
-        return f"""
+        html = f"""
         <div class="potd-card potd-card--grey">
             <div class="potd-league">{_html_escape(league)}</div>
             <div class="potd-empty-msg">No Play Today</div>
         </div>
         """
+        return _html_one_line_per_block(html)
     r = row
     edge_pct = float(r.get("Value (%)", 0))
-    confidence = "High" if edge_pct >= POTD_HIGH_CONFIDENCE_EDGE_PCT else "Medium"
+    high_variance = bool(r.get("high_variance", False))
+    if high_variance:
+        confidence = "High Variance"
+    elif edge_pct >= POTD_HIGH_CONFIDENCE_EDGE_PCT:
+        confidence = "High"
+    else:
+        confidence = "Medium"
     away, home = _parse_event_teams(str(r.get("Event", "")))
     badge_text = _potd_badge_text(r)
     reason = _potd_reason(r, feature_matrix=feature_matrix)
     odds_str = format_american(r.get("Odds", 0))
-    return f"""
+    potd_march = ""
+    if league == "NCAAB":
+        march_badges = _march_context_badges(r)
+        if march_badges and march_badges != "—":
+            potd_march = f'<div class="potd-march-context">{_html_escape(march_badges)}</div>'
+    html = f"""
     <div class="potd-card potd-card--{accent}">
         <div class="potd-league">{_html_escape(league)}</div>
         <div class="potd-matchup">{_html_escape(away)} <span class="potd-vs">@</span> {_html_escape(home)}</div>
         <div class="potd-badge">{_html_escape(badge_text)}</div>
         <div class="potd-edge">{edge_pct:.1f}% Edge</div>
-        <div class="potd-confidence">Confidence: {_html_escape(confidence)}</div>
+        {potd_march}
+        <div class="potd-confidence{f' potd-confidence--warning' if high_variance else ''}">Confidence: {_html_escape(confidence)}</div>
         <div class="potd-reason">{_html_escape(reason)}</div>
         <div class="potd-odds">{odds_str}</div>
     </div>
     """
+    return _html_one_line_per_block(html)
 
 
 def format_start_time(commence_time: str) -> str:
@@ -660,6 +817,33 @@ LIVE_ODDS_SPORT_KEYS = [BASKETBALL_NBA, BASKETBALL_NCAAB]
 EV_EPSILON_MIN_PCT = 3.0
 EV_EPSILON_MAX_PCT = 15.0
 
+# Minimum number of bookmakers offering a line for an outcome to be eligible as a value play
+MIN_BOOKMAKERS_VALUE_PLAY = 3
+
+
+def _aggregate_odds_best_line_avg_implied(odds_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate odds across bookmakers: one row per (event, market, selection, point).
+    - best_odds: best available line (max American odds = best price for bettor).
+    - avg_implied_prob: mean of implied probability (no-vig) across all bookmakers.
+    - bookmaker_count: number of books offering this line (for min-threshold filter).
+    """
+    if odds_df.empty or "odds" not in odds_df.columns:
+        return odds_df
+    key_cols = ["event_id", "sport_key", "league", "commence_time", "home_team", "away_team", "event_name", "market_type", "selection", "point"]
+    missing = [c for c in key_cols if c not in odds_df.columns]
+    if missing:
+        return odds_df
+    def _mean_implied(ser: pd.Series) -> float:
+        return float(np.mean([implied_probability_no_vig(float(o)) for o in ser]))
+
+    agg = odds_df.groupby(key_cols, dropna=False).agg(
+        odds=("odds", "max"),
+        avg_implied_prob=("odds", _mean_implied),
+        bookmaker_count=("odds", "count"),
+    ).reset_index()
+    return agg
+
 
 def _live_odds_to_value_plays(
     odds_df: pd.DataFrame,
@@ -694,6 +878,10 @@ def _live_odds_to_value_plays(
     rows = []
     n_flagged = 0
     for _, r in odds_df.iterrows():
+        # When using aggregated odds, require at least MIN_BOOKMAKERS_VALUE_PLAY books on this line
+        if "bookmaker_count" in r.index and r.get("bookmaker_count") is not None and not pd.isna(r.get("bookmaker_count")):
+            if int(r.get("bookmaker_count", 0)) < MIN_BOOKMAKERS_VALUE_PLAY:
+                continue
         odds_val = r.get("odds")
         if pd.isna(odds_val) or abs(float(odds_val)) < 100:
             continue
@@ -724,9 +912,11 @@ def _live_odds_to_value_plays(
             in_house_total = predict_nba_total(home_team, away_team, pace_stats, b2b_teams=b2b_teams)
             prefer_over = "Over" in selection or "over" in selection.lower()
             fallback = model_prob_from_in_house_total(in_house_total, market_total, prefer_over)
-            model_prob = predict_totals_prob(
-                feature_row, market_total, prefer_over, fallback_prob=fallback
-            ) if feature_row is not None else fallback
+            model_prob, consensus_ok = consensus_totals(
+                feature_row, market_total, prefer_over, in_house_total, league, fallback
+            )
+            if not consensus_ok:
+                continue
         elif market_type == "spreads" and point is not None:
             market_spread = -float(point)
             home_rating = power_ratings.get(home_team, default_rating) - get_schedule_fatigue_penalty(home_team, as_of_date)
@@ -734,9 +924,11 @@ def _live_odds_to_value_plays(
             in_house_spread = in_house_spread_from_ratings(home_rating, away_rating)
             we_cover_favorite = "-" in selection
             fallback = model_prob_from_in_house_spread(in_house_spread, market_spread, we_cover_favorite)
-            model_prob = predict_spread_prob(
-                feature_row, market_spread, we_cover_favorite, fallback_prob=fallback
-            ) if feature_row is not None else fallback
+            model_prob, consensus_ok = consensus_spread(
+                feature_row, market_spread, we_cover_favorite, in_house_spread, fallback
+            )
+            if not consensus_ok:
+                continue
         elif market_type == "h2h":
             home_rating = power_ratings.get(home_team, default_rating) - get_schedule_fatigue_penalty(home_team, as_of_date)
             away_rating = power_ratings.get(away_team, default_rating) - get_schedule_fatigue_penalty(away_team, as_of_date)
@@ -746,14 +938,18 @@ def _live_odds_to_value_plays(
                 or str(selection).strip().lower() in str(home_team).strip().lower()
             )
             fallback = model_prob_from_ratings_moneyline(home_rating, away_rating, selection_is_home)
-            model_prob = predict_moneyline_prob(
-                feature_row, selection_is_home, fallback_prob=fallback
-            ) if feature_row is not None else fallback
+            model_prob, consensus_ok = consensus_moneyline(
+                feature_row, selection_is_home, home_rating, away_rating, fallback
+            )
+            if not consensus_ok:
+                continue
         else:
             implied = implied_probability_no_vig(odds_val)
             edge = np.random.uniform(0, 0.08)
             model_prob = damp_probability(min(0.92, implied + edge))
 
+        # Edge at best line; compare model to average implied across bookmakers when available
+        implied_prob = float(r.get("avg_implied_prob")) if r.get("avg_implied_prob") is not None and not pd.isna(r.get("avg_implied_prob")) else implied_probability_no_vig(odds_val)
         ev_decimal = (model_prob * american_to_decimal(odds_val)) - 1.0
         ev_pct = ev_decimal * 100.0
         line_for_key = float(point) if point is not None else 0.0
@@ -767,7 +963,6 @@ def _live_odds_to_value_plays(
         stake = fractional_kelly_half_units(bankroll, full_kelly, HALF_UNIT_PCT, MAX_KELLY_PCT_WALTERS)
         if stake <= 0:
             continue
-        implied_prob = implied_probability_no_vig(odds_val)
         is_home_b2b = home_team in b2b_teams
         is_away_b2b = away_team in b2b_teams
         rows.append({
@@ -895,8 +1090,10 @@ if (odds_api_key or "").strip():
             refresh_key=st.session_state.get("odds_refresh_key", 0),
         )
         feature_matrix_inference = load_feature_matrix_for_inference(league=None)
+        # Aggregate: best line per outcome + average implied prob across bookmakers
+        aggregated_odds_df = _aggregate_odds_best_line_avg_implied(live_odds_df)
         value_plays_df, value_plays_flagged_count = _live_odds_to_value_plays(
-            live_odds_df,
+            aggregated_odds_df if not aggregated_odds_df.empty else live_odds_df,
             bankroll=BANKROLL_FOR_STAKES,
             kelly_frac=kelly_frac_val,
             min_ev_pct=EV_EPSILON_MIN_PCT,
@@ -908,6 +1105,23 @@ if (odds_api_key or "").strip():
             feature_matrix=feature_matrix_inference,
         )
         value_plays_df = add_injury_alerts_to_value_plays(value_plays_df, "Basketball")
+        # Add confidence_tier and reasoning_summary for play_history archive
+        if not value_plays_df.empty:
+            def _confidence_tier(row: pd.Series) -> str:
+                edge = float(row.get("Value (%)", 0))
+                return "High" if edge >= POTD_HIGH_CONFIDENCE_EDGE_PCT else "Medium"
+            value_plays_df = value_plays_df.copy()
+            value_plays_df["confidence_tier"] = value_plays_df.apply(_confidence_tier, axis=1)
+            value_plays_df["reasoning_summary"] = value_plays_df.apply(
+                lambda r: _potd_reason(r, feature_matrix=feature_matrix_inference), axis=1
+            )
+        # Archive today's plays to play_history (stricter: min 6% edge, max 10 per day by edge)
+        try:
+            to_archive = value_plays_df[value_plays_df["Value (%)"] >= ARCHIVE_MIN_EDGE_PCT].copy()
+            to_archive = to_archive.sort_values("Value (%)", ascending=False).head(ARCHIVE_MAX_PLAYS_PER_DAY)
+            archive_value_plays(to_archive, as_of_date=date.today())
+        except Exception:
+            pass
         # Record each recommended play for CLV (odds at recommendation; closing filled later)
         try:
             clv_record_recommendations(value_plays_df)
@@ -937,6 +1151,7 @@ if (odds_api_key or "").strip():
                         value_plays_df["top5_out_or_doubtful_away"] = value_plays_df["top5_out_or_doubtful_away"].fillna(False)
                 except Exception:
                     pass
+        value_plays_df = add_ncaab_march_context_to_df(value_plays_df)
     except Exception:
         value_plays_flagged_count = 0
         live_odds_df = pd.DataFrame(
@@ -971,9 +1186,9 @@ def _today_str() -> str:
 
 
 def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
-    """From value_plays_df (today's data), compute: date_str, total_plays, n_nba, n_ncaab, top_edge_label."""
+    """From value_plays_df (today's data), compute: date_str, total_plays, n_nba, n_ncaab, top_edge_label.
+    Uses correlated-play filter: at most 10 plays and no team appears twice."""
     date_str = _today_str()
-    # Use same definition as All Value Plays: one best play per game
     if value_plays_df.empty or "League" not in value_plays_df.columns or "Value (%)" not in value_plays_df.columns:
         return {
             "date_str": date_str,
@@ -988,13 +1203,14 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
         .head(1)
         .reset_index(drop=True)
     )
-    total_plays = len(best_per_game)
-    n_nba = int((best_per_game["League"] == "NBA").sum())
-    n_ncaab = int((best_per_game["League"] == "NCAAB").sum())
-    if best_per_game.empty:
+    diversified = _filter_correlated_plays(best_per_game, max_plays=MAX_TOP_PLAYS_NO_CORRELATION)
+    total_plays = len(diversified)
+    n_nba = int((diversified["League"] == "NBA").sum()) if not diversified.empty else 0
+    n_ncaab = int((diversified["League"] == "NCAAB").sum()) if not diversified.empty else 0
+    if diversified.empty:
         top_edge_label = "—"
     else:
-        top_row = best_per_game.iloc[0]
+        top_row = diversified.iloc[0]
         sel = str(top_row.get("Selection", ""))
         pt = top_row.get("point")
         if pt is not None:
@@ -1074,7 +1290,26 @@ def _bet_history_table(records: list) -> None:
         },
     )
 
-tab_overview, tab_ncaab, tab_nba, tab_clv = st.tabs(["Overview", "NCAAB", "NBA", "CLV Summary"])
+# Persistent banner: unresolved plays older than 24 hours
+_ph_all = load_play_history()
+_cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24)
+_unresolved_stale = 0
+if not _ph_all.empty:
+    _ph_all["result_clean"] = _ph_all["result"].apply(
+        lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
+    )
+    _ph_all["date_parsed"] = pd.to_datetime(_ph_all["date_generated"], errors="coerce", utc=True)
+    _unresolved = _ph_all[_ph_all["result_clean"].isna()]
+    _unresolved_stale = (_unresolved["date_parsed"] < _cutoff).sum()
+if _unresolved_stale > 0:
+    st.warning(
+        f"**{int(_unresolved_stale)} play{'s' if _unresolved_stale != 1 else ''} need results marked.** "
+        "Go to the Play of the Day History tab below to keep your record accurate.",
+        icon="⚠️",
+    )
+    st.markdown("[→ Go to Play of the Day History](#play-history)")
+st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
+tab_overview, tab_ncaab, tab_nba, tab_clv, tab_mark_results, tab_play_history = st.tabs(["Overview", "NCAAB", "NBA", "CLV Summary", "Mark Results", "Play of the Day History"])
 
 with tab_overview:
     # ——— Play of the Day (backend selection: edge > 4%, tie-break bookmakers / model gap / no injury) ———
@@ -1137,20 +1372,54 @@ with tab_overview:
         )
 
     if not value_plays_df.empty:
-        # Filter by min edge and league; one best play per game; sort by edge desc
+        # Filter by min edge and league; one best play per game; then correlated filter (max 10, no team twice)
         eligible = value_plays_df[value_plays_df["Value (%)"] > min_edge].copy()
         if league_filter != "Both":
             eligible = eligible[eligible["League"] == league_filter]
-        value_plays_list = (
+        best_per_game = (
             eligible.sort_values("Value (%)", ascending=False)
             .groupby("Event")
             .head(1)
             .reset_index(drop=True)
         )
+        value_plays_list = _filter_correlated_plays(best_per_game, max_plays=MAX_TOP_PLAYS_NO_CORRELATION)
         if len(value_plays_list) < 3:
             st.warning("**Low volume day** — fewer than 3 qualifying plays. Consider lowering the min edge or check back later.")
+        st.caption("**Consensus filter:** Only plays where ≥2 of 3 sub-models agree on direction are shown. **Correlated plays:** Same team in multiple games today is de-duplicated (highest edge per team). Max 10 plays, no team repeated.")
         for _, row in value_plays_list.iterrows():
             st.markdown(_render_value_play_card_html(row), unsafe_allow_html=True)
+            # Bet outcome: look up clv_tracker row and show Mark W / Mark L or current result
+            _commence = row.get("commence_time") or ""
+            _pt = row.get("point")
+            if _pt is not None and pd.notna(_pt):
+                try:
+                    _pt = float(_pt)
+                except (TypeError, ValueError):
+                    _pt = None
+            _clv = get_clv_row_for_play(
+                home_team=str(row.get("home_team", "")),
+                away_team=str(row.get("away_team", "")),
+                commence_time=str(_commence),
+                market_type=str(row.get("Market", "")).strip().lower() or "h2h",
+                selection=str(row.get("Selection", "")),
+                point=_pt,
+            )
+            if _clv and _clv.get("id"):
+                _cid = _clv["id"]
+                _result = _clv.get("result")
+                if _result in ("W", "L"):
+                    st.caption(f"**Result:** {_result}")
+                else:
+                    _col_w, _col_l, _ = st.columns([1, 1, 3])
+                    with _col_w:
+                        if st.button("Mark W", key=f"mark_w_{_cid}", help="Record this play as a win"):
+                            mark_bet_result(_cid, "W")
+                            st.rerun()
+                    with _col_l:
+                        if st.button("Mark L", key=f"mark_l_{_cid}", help="Record this play as a loss"):
+                            mark_bet_result(_cid, "L")
+                            st.rerun()
+            st.divider()
     else:
         if (odds_api_key or "").strip():
             st.info("No value plays from live odds today, or no events. Try again later or use Refresh.")
@@ -1167,13 +1436,14 @@ with tab_ncaab:
     ncaab_value = value_plays_df[value_plays_df["League"] == "NCAAB"] if not value_plays_df.empty and "League" in value_plays_df.columns else pd.DataFrame()
     if not ncaab_value.empty:
         ncaab_best = ncaab_value.sort_values("Value (%)", ascending=False).groupby("Event").head(1).reset_index(drop=True)
-        st.caption("**Best value plays (NCAAB)** — same model as main table")
+        st.caption("**Best value plays (NCAAB)** — same model as main table. March: conf. tourney, seeds, bubble vs clinched.")
         _vp = ncaab_best.copy()
         _vp["Odds"] = _vp["Odds"].apply(format_american)
-        if "Recommended Stake" in _vp.columns:
-            _vp["Recommended Stake"] = _vp["Recommended Stake"].apply(lambda x: format_currency(x) if pd.notna(x) else "—")
         if "Market" in _vp.columns:
             _vp["Market"] = _vp["Market"].map(lambda x: MARKET_LABELS.get(x, x) if pd.notna(x) else x)
+        if "Recommended Stake" in _vp.columns:
+            _vp = _vp.drop(columns=["Recommended Stake"])
+        _vp["March context"] = _vp.apply(_march_context_badges, axis=1)
         st.dataframe(_vp.rename(columns={"Event": "Game"}), use_container_width=True, hide_index=True)
     else:
         if (odds_api_key or "").strip():
@@ -1183,6 +1453,19 @@ with tab_ncaab:
 
 with tab_clv:
     st.subheader("CLV Summary")
+    # Bet outcome record (W-L and ROI from marked results)
+    _outcomes = get_bet_outcomes_summary()
+    if _outcomes["total_bets"] > 0:
+        st.markdown("**Bet outcome record** (from Mark Result on play cards)")
+        _w, _l = _outcomes["wins"], _outcomes["losses"]
+        _staked = _outcomes["total_staked"]
+        _profit = _outcomes["total_profit"]
+        _roi = _outcomes["roi_pct"]
+        st.metric("Record", f"{_w}-{_l}")
+        st.metric("Total staked", format_currency(_staked))
+        st.metric("P/L", format_currency(_profit))
+        st.metric("ROI", f"{_roi:+.1f}%")
+        st.divider()
     st.caption("Average Closing Line Value by sport and bet type over the last 30 days. Positive CLV = you got a better number than the closing line.")
     _clv_summary = get_clv_summary_last_30_days()
     if not _clv_summary.empty and _clv_summary["n_bets"].sum() > 0:
@@ -1204,6 +1487,297 @@ with tab_clv:
     else:
         st.info("No CLV data yet. Record recommendations (use the app to load value plays) and run odds fetches so closing odds can be backfilled. Data appears here once you have bets with closing odds in the last 30 days.")
 
+with tab_mark_results:
+    st.subheader("Mark Results")
+    st.caption("Mark Win / Loss / Push for every play the model generated today. Results are saved to your record and used for ROI.")
+    _today = date.today()
+    _mr_history = load_play_history(from_date=_today, to_date=_today)
+    if not _mr_history.empty:
+        _mr_history = _mr_history.copy()
+        _mr_history["result_clean"] = _mr_history["result"].apply(
+            lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
+        )
+
+        def _mr_matchup_key(row: pd.Series) -> str:
+            d = row["date_generated"]
+            s = row["sport"]
+            h = str(row["home_team"] or "").strip()
+            a = str(row["away_team"] or "").strip()
+            bt = str(row["bet_type"] or "").strip().lower()
+            side = str(row["recommended_side"] or "").strip()
+            line = row.get("spread_or_total")
+            if bt == "spread" and line is not None and not pd.isna(line) and line != -999:
+                try:
+                    line_f = float(line)
+                    is_away_side = side.lower() == a.lower()
+                    home_spread = -line_f if is_away_side else line_f
+                    return f"{d}|{s}|{h}|{a}|Spread|{home_spread:.2f}"
+                except (TypeError, ValueError):
+                    pass
+            return f"{d}|{s}|{h}|{a}|{bt}|{side}"
+        _mr_history["_matchup_key"] = _mr_history.apply(_mr_matchup_key, axis=1)
+        _mr_list = _mr_history.drop_duplicates(subset=["_matchup_key"], keep="last").sort_values("my_edge_pct", ascending=False)
+
+        st.markdown("""
+        <style>
+        .mr-card { border-radius: 12px; padding: 1.1rem 1.25rem; margin-bottom: 1rem; border-left: 5px solid; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+        .mr-card--pending { border-left-color: #78909c; background: rgba(96,125,139,0.12); }
+        .mr-card--win { border-left-color: #2e7d32; background: rgba(46,125,50,0.22); }
+        .mr-card--loss { border-left-color: #c62828; background: rgba(198,40,40,0.22); }
+        .mr-card--push { border-left-color: #616161; background: rgba(97,97,97,0.22); }
+        .mr-matchup { font-size: 1.1rem; font-weight: 700; color: #fafafa; margin-bottom: 0.3rem; }
+        .mr-meta { font-size: 0.9rem; color: rgba(255,255,255,0.85); margin-bottom: 0.4rem; }
+        .mr-badge { display: inline-block; font-size: 1.1rem; font-weight: 700; padding: 0.25rem 0.6rem; border-radius: 6px; }
+        .mr-badge--win { background: #2e7d32; color: #fff; }
+        .mr-badge--loss { background: #c62828; color: #fff; }
+        .mr-badge--push { background: #616161; color: #fff; }
+        div:has(.mr-card) + div .stButton button { min-width: 5.5rem; box-sizing: border-box; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        def _mr_bet_str(r: pd.Series) -> str:
+            bt = str(r.get("bet_type", ""))
+            side = str(r.get("recommended_side", ""))
+            line = r.get("spread_or_total")
+            if line is None or pd.isna(line) or line == -999:
+                return f"{bt} · {side}".strip()
+            line = float(line)
+            if "Over" in bt or "Under" in bt or "total" in bt.lower():
+                return f"{bt} · {side} {line:.1f}".strip()
+            return f"{bt} · {side} {line:+.1f}".strip()
+
+        for _, row in _mr_list.iterrows():
+            result = row.get("result_clean")
+            card_class = "mr-card--pending"
+            if result == "W":
+                card_class = "mr-card--win"
+            elif result == "L":
+                card_class = "mr-card--loss"
+            elif result == "P":
+                card_class = "mr-card--push"
+            matchup = f"{row.get('away_team', '')} @ {row.get('home_team', '')}"
+            bet_str = _mr_bet_str(row)
+            edge_str = f"{float(row.get('my_edge_pct', 0)):.1f}%"
+            odds_str = format_american(row.get("market_odds_at_time", 0))
+            sport_label = str(row.get("sport", ""))
+            if result == "W":
+                badge = '<span class="mr-badge mr-badge--win">Win</span>'
+            elif result == "L":
+                badge = '<span class="mr-badge mr-badge--loss">Loss</span>'
+            elif result == "P":
+                badge = '<span class="mr-badge mr-badge--push">Push</span>'
+            else:
+                badge = ""
+            st.markdown(
+                f'<div class="mr-card {card_class}">'
+                f'<div class="mr-matchup">{_html_escape(sport_label)} · {_html_escape(matchup)}</div>'
+                f'<div class="mr-meta">{_html_escape(bet_str)} · Edge {edge_str} · Odds {odds_str}</div>'
+                + (f'<div class="mr-meta">{badge}</div>' if badge else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+            if result is None or pd.isna(result):
+                mk = row.get("_matchup_key", "")
+                pids_in_group = _mr_history.loc[_mr_history["_matchup_key"] == mk, "play_id"].astype(int).tolist()
+                c1, c2, c3, _ = st.columns([1, 1, 1, 3])
+                with c1:
+                    if st.button("✅ Win", key=f"mr_w_{row.get('play_id')}", help="Mark win"):
+                        for _pid in pids_in_group:
+                            update_play_result(_pid, "W")
+                        st.rerun()
+                with c2:
+                    if st.button("❌ Loss", key=f"mr_l_{row.get('play_id')}", help="Mark loss"):
+                        for _pid in pids_in_group:
+                            update_play_result(_pid, "L")
+                        st.rerun()
+                with c3:
+                    if st.button("➖ Push", key=f"mr_p_{row.get('play_id')}", help="Mark push"):
+                        for _pid in pids_in_group:
+                            update_play_result(_pid, "P")
+                        st.rerun()
+    else:
+        st.info("No plays for today yet. Load the dashboard and open this app before games so today's plays are archived (or wait for the 9am ET archive).")
+
+with tab_play_history:
+    st.subheader("Play of the Day History")
+    st.caption("One top NBA and one top NCAAB pick per day (last 30 days). Results auto-filled at 8am ET from ESPN.")
+    _from = date.today() - timedelta(days=30)
+    _history = load_play_history(from_date=_from, to_date=date.today())
+    if not _history.empty:
+        _history = _history.copy()
+        _history["result_clean"] = _history["result"].apply(
+            lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
+        )
+
+        def _canonical_matchup_key(row: pd.Series) -> str:
+            d = row["date_generated"]
+            s = row["sport"]
+            h = str(row["home_team"] or "").strip()
+            a = str(row["away_team"] or "").strip()
+            bt = str(row["bet_type"] or "").strip().lower()
+            side = str(row["recommended_side"] or "").strip()
+            line = row.get("spread_or_total")
+            if bt == "spread" and line is not None and not pd.isna(line) and line != -999:
+                try:
+                    line_f = float(line)
+                    is_away_side = side.lower() == a.lower()
+                    home_spread = -line_f if is_away_side else line_f
+                    return f"{d}|{s}|{h}|{a}|Spread|{home_spread:.2f}"
+                except (TypeError, ValueError):
+                    pass
+            return f"{d}|{s}|{h}|{a}|{bt}|{side}"
+        _history["_matchup_key"] = _history.apply(_canonical_matchup_key, axis=1)
+        _history = _history.drop_duplicates(subset=["_matchup_key"], keep="last")
+        top_per_day = _history.loc[_history.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
+        resolved = _history[_history["result_clean"].notna()]
+        resolved_potd = top_per_day[top_per_day["result_clean"].notna()]
+
+        def _roi_and_units(df: pd.DataFrame) -> tuple[float, float, float, float, float]:
+            if df.empty:
+                return 0.0, 0.0, 0, 0, 0, 0.0
+            staked = df["recommended_stake"].replace([None, 0], float("nan")).sum()
+            staked = 0.0 if pd.isna(staked) or staked == 0 else float(staked)
+            payout = df["actual_payout"].fillna(0).sum()
+            roi = (payout / staked * 100) if staked else 0.0
+            units = 0.0
+            for _, r in df.iterrows():
+                s, pa = r.get("recommended_stake"), r.get("actual_payout")
+                if s and pd.notna(s) and float(s) != 0 and pa is not None and pd.notna(pa):
+                    units += float(pa) / float(s)
+            w = (df["result_clean"] == "W").sum()
+            l = (df["result_clean"] == "L").sum()
+            p = (df["result_clean"] == "P").sum()
+            win_rate = (w / (w + l) * 100) if (w + l) > 0 else 0.0
+            return roi, units, w, l, p, win_rate
+
+        roi_pct, profit_units, w, l, p, win_rate = _roi_and_units(resolved)
+        roi_potd, profit_units_potd, w_potd, l_potd, p_potd, win_rate_potd = _roi_and_units(resolved_potd)
+
+        st.markdown("""
+        <style>
+        .ph-kpi-hero { text-align: center; padding: 1.25rem 1.5rem; margin-bottom: 1rem; }
+        .ph-kpi-record { font-size: 3.25rem; font-weight: 900; letter-spacing: 0.04em; line-height: 1.2; }
+        .ph-kpi-record .ph-w { color: #4caf50; }
+        .ph-kpi-record .ph-l { color: #f44336; }
+        .ph-kpi-record .ph-p { color: #9e9e9e; }
+        .ph-kpi-second { text-align: center; display: flex; flex-wrap: wrap; justify-content: center; gap: 2rem; margin-bottom: 1.25rem; font-size: 1.35rem; font-weight: 700; }
+        .ph-kpi-second .ph-roi { font-size: 1.5rem; }
+        .ph-kpi-second .ph-roi--pos { color: #4caf50; }
+        .ph-kpi-second .ph-roi--neg { color: #f44336; }
+        .ph-kpi-second .ph-roi--zero { color: rgba(255,255,255,0.8); }
+        .ph-kpi-breakdown { display: flex; justify-content: center; gap: 3rem; margin-top: 0.75rem; padding: 0.75rem; background: rgba(255,255,255,0.05); border-radius: 10px; font-size: 0.95rem; }
+        .ph-kpi-breakdown span { color: rgba(255,255,255,0.85); }
+        .ph-kpi-breakdown strong { color: #fafafa; }
+        .ph-feed-card { border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; border-left: 5px solid; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+        .ph-feed-card--pending { border-left-color: #78909c; background: rgba(96,125,139,0.12); }
+        .ph-feed-card--win { border-left-color: #2e7d32; background: rgba(46,125,50,0.22); }
+        .ph-feed-card--loss { border-left-color: #c62828; background: rgba(198,40,40,0.22); }
+        .ph-feed-card--push { border-left-color: #616161; background: rgba(97,97,97,0.22); }
+        .ph-feed-date { font-size: 0.8rem; color: rgba(255,255,255,0.65); margin-bottom: 0.35rem; }
+        .ph-feed-matchup { font-size: 1.1rem; font-weight: 700; color: #fafafa; margin-bottom: 0.4rem; }
+        .ph-feed-meta { font-size: 0.9rem; color: rgba(255,255,255,0.85); margin-bottom: 0.6rem; }
+        .ph-feed-badge { display: inline-block; font-size: 1.4rem; font-weight: 800; padding: 0.35rem 0.75rem; border-radius: 8px; letter-spacing: 0.05em; }
+        .ph-feed-badge--win { background: #2e7d32; color: #fff; }
+        .ph-feed-badge--loss { background: #c62828; color: #fff; }
+        .ph-feed-badge--push { background: #616161; color: #fff; }
+        .ph-feed-badge--pending { background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.7); }
+        .ph-feed-empty { border: 1px dashed rgba(255,255,255,0.25); border-radius: 12px; padding: 1.25rem; color: rgba(255,255,255,0.5); font-size: 0.9rem; text-align: center; }
+        /* Equal width for Win / Loss / Push buttons under each feed card */
+        div:has(.ph-feed-card) + div .stButton button { min-width: 5.5rem; box-sizing: border-box; }
+        </style>
+        """, unsafe_allow_html=True)
+        roi_class = "ph-roi--pos" if roi_pct > 0 else ("ph-roi--neg" if roi_pct < 0 else "ph-roi--zero")
+        roi_sign = "+" if roi_pct > 0 else ""
+        units_sign = "+" if profit_units > 0 else ""
+        st.markdown(
+            f'<div class="ph-kpi-hero">'
+            f'<div class="ph-kpi-record"><span class="ph-w">{int(w)}</span>–<span class="ph-l">{int(l)}</span>–<span class="ph-p">{int(p)}</span></div>'
+            f'<div class="ph-kpi-second">'
+            f'<span class="ph-roi {roi_class}">{roi_sign}{roi_pct:.1f}% ROI</span>'
+            f'<span>{units_sign}{profit_units:.2f} units</span>'
+            f'<span>{win_rate:.0f}% win rate</span>'
+            f'</div>'
+            f'<div class="ph-kpi-breakdown">'
+            f'<span><strong>Play of the Day:</strong> <span class="ph-w">{int(w_potd)}</span>–<span class="ph-l">{int(l_potd)}</span>–<span class="ph-p">{int(p_potd)}</span></span>'
+            f'<span><strong>All value plays:</strong> <span class="ph-w">{int(w)}</span>–<span class="ph-l">{int(l)}</span>–<span class="ph-p">{int(p)}</span></span>'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+
+        def _bet_str(r: pd.Series) -> str:
+            bt = str(r.get("bet_type", ""))
+            side = str(r.get("recommended_side", ""))
+            line = r.get("spread_or_total")
+            if line is None or pd.isna(line) or line == -999:
+                return f"{bt} · {side}".strip()
+            line = float(line)
+            if "Over" in bt or "Under" in bt or "total" in bt.lower():
+                return f"{bt} · {side} {line:.1f}".strip()
+            return f"{bt} · {side} {line:+.1f}".strip()
+
+        dates_desc = sorted(top_per_day["date_generated"].unique(), reverse=True)
+        for d in dates_desc:
+            day_rows = top_per_day[top_per_day["date_generated"] == d]
+            date_display = pd.to_datetime(d).strftime("%a, %b %d") if hasattr(pd.to_datetime(d), "strftime") else str(d)
+            nba_row = day_rows[day_rows["sport"].astype(str).str.upper() == "NBA"]
+            ncaab_row = day_rows[day_rows["sport"].astype(str).str.upper() == "NCAAB"]
+            col_nba, col_ncaab = st.columns(2)
+            for col, sport_label, row_df in [(col_nba, "NBA", nba_row), (col_ncaab, "NCAAB", ncaab_row)]:
+                with col:
+                    if row_df.empty:
+                        st.markdown(f'<div class="ph-feed-empty">{sport_label}: No pick</div>', unsafe_allow_html=True)
+                        continue
+                    row = row_df.iloc[0]
+                    result = row.get("result_clean")
+                    card_class = "ph-feed-card--pending"
+                    if result == "W":
+                        card_class = "ph-feed-card--win"
+                    elif result == "L":
+                        card_class = "ph-feed-card--loss"
+                    elif result == "P":
+                        card_class = "ph-feed-card--push"
+                    matchup = f"{row.get('away_team', '')} @ {row.get('home_team', '')}"
+                    bet_str = _bet_str(row)
+                    edge_str = f"{float(row.get('my_edge_pct', 0)):.1f}%"
+                    odds_str = format_american(row.get("market_odds_at_time", 0))
+                    if result == "W":
+                        badge = '<span class="ph-feed-badge ph-feed-badge--win">WIN</span>'
+                    elif result == "L":
+                        badge = '<span class="ph-feed-badge ph-feed-badge--loss">LOSS</span>'
+                    elif result == "P":
+                        badge = '<span class="ph-feed-badge ph-feed-badge--push">PUSH</span>'
+                    else:
+                        badge = '<span class="ph-feed-badge ph-feed-badge--pending">—</span>'
+                    st.markdown(
+                        f'<div class="ph-feed-card {card_class}">'
+                        f'<div class="ph-feed-date">{_html_escape(date_display)} · {sport_label}</div>'
+                        f'<div class="ph-feed-matchup">{_html_escape(matchup)}</div>'
+                        f'<div class="ph-feed-meta">{_html_escape(bet_str)} · Edge {edge_str} · Odds {odds_str}</div>'
+                        f'<div>{badge}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    if result is None or pd.isna(result):
+                        mk = row.get("_matchup_key", "")
+                        pids_in_group = _history.loc[_history["_matchup_key"] == mk, "play_id"].astype(int).tolist()
+                        c1, c2, c3, _ = st.columns([1, 1, 1, 3])
+                        with c1:
+                            if st.button("✅ Win", key=f"ph_w_{row.get('play_id')}_{sport_label}", help="Mark win"):
+                                for _pid in pids_in_group:
+                                    update_play_result(_pid, "W")
+                                st.rerun()
+                        with c2:
+                            if st.button("❌ Loss", key=f"ph_l_{row.get('play_id')}_{sport_label}", help="Mark loss"):
+                                for _pid in pids_in_group:
+                                    update_play_result(_pid, "L")
+                                st.rerun()
+                        with c3:
+                            if st.button("➖ Push", key=f"ph_p_{row.get('play_id')}_{sport_label}", help="Mark push"):
+                                for _pid in pids_in_group:
+                                    update_play_result(_pid, "P")
+                                st.rerun()
+    else:
+        st.info("No archived plays yet. Plays are saved when you load the dashboard (and at 9am ET). Open the app before games to capture today's top picks.")
+
 with tab_nba:
     st.subheader("NBA")
     st.caption("All NBA value plays and totals. Today's top NBA pick is on the **Overview** tab.")
@@ -1218,10 +1792,10 @@ with tab_nba:
         st.caption("**Best value plays (NBA)** — same model as main table")
         _vp = nba_best.copy()
         _vp["Odds"] = _vp["Odds"].apply(format_american)
-        if "Recommended Stake" in _vp.columns:
-            _vp["Recommended Stake"] = _vp["Recommended Stake"].apply(lambda x: format_currency(x) if pd.notna(x) else "—")
         if "Market" in _vp.columns:
             _vp["Market"] = _vp["Market"].map(lambda x: MARKET_LABELS.get(x, x) if pd.notna(x) else x)
+        if "Recommended Stake" in _vp.columns:
+            _vp = _vp.drop(columns=["Recommended Stake"])
         st.dataframe(_vp.rename(columns={"Event": "Game"}), use_container_width=True, hide_index=True)
     st.caption("**Totals tracker** — in-house projected total vs market O/U")
     nba_totals_df = pd.DataFrame()

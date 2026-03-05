@@ -322,7 +322,6 @@ def get_live_odds(
                 continue
             event_name = f"{away} @ {home}"
             bookmakers = event.get("bookmakers") or []
-            seen_outcomes: set[tuple[str, str, str | float | None]] = set()
             for bm in bookmakers:
                 for mkt in bm.get("markets") or []:
                     mkt_key = mkt.get("key", "")
@@ -353,10 +352,6 @@ def get_live_odds(
                         selection = name
                         if market_type == "totals" and point is not None:
                             selection = f"{name} {point}"
-                        key = (event_id, market_type, selection, point)
-                        if key in seen_outcomes:
-                            continue
-                        seen_outcomes.add(key)
                         rows.append({
                             "sport_key": sport_key,
                             "league": league,

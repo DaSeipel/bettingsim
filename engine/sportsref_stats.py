@@ -232,6 +232,162 @@ def _espn_db_path() -> Path:
     return _data_dir() / "espn.db"
 
 
+def _opponent_averages_from_games(
+    games_df: pd.DataFrame,
+    stats_df: pd.DataFrame,
+    name_mapping: dict[str, str] | None,
+) -> pd.DataFrame:
+    """
+    For each (league, season, team_name), compute average opponent defensive_rating,
+    average opponent offensive_rating, and average opponent pace from the games they played.
+    team_name must match stats_df (use name_mapping on game team names).
+    Returns DataFrame with league, season, team_name, avg_opp_defensive_rating, avg_opp_offensive_rating, avg_opp_pace, n_games.
+    """
+    if games_df.empty or stats_df.empty:
+        return pd.DataFrame()
+    name_mapping = name_mapping or TEAM_NAME_MAPPING
+    g = games_df.copy()
+    if "season" not in g.columns and "game_date" in g.columns:
+        g["season"] = g["game_date"].apply(_game_season_from_date)
+    if "season" not in g.columns or "league" not in g.columns:
+        return pd.DataFrame()
+    g["league"] = g["league"].astype(str).str.strip().str.lower()
+    g["_home_name"] = g["home_team_name"].apply(lambda x: _apply_name_mapping(str(x or ""), name_mapping))
+    g["_away_name"] = g["away_team_name"].apply(lambda x: _apply_name_mapping(str(x or ""), name_mapping))
+    # Stats lookup: (league, season, team_name) -> offensive_rating, defensive_rating, pace
+    stat_cols = ["offensive_rating", "defensive_rating", "pace"]
+    if not all(c in stats_df.columns for c in stat_cols):
+        return pd.DataFrame()
+    s = stats_df[["league", "season", "team_name"] + stat_cols].drop_duplicates(subset=["league", "season", "team_name"])
+    s = s.rename(columns={"offensive_rating": "_opp_ortg", "defensive_rating": "_opp_drtg", "pace": "_opp_pace"})
+    rows = []
+    for (league, season), grp in g.groupby(["league", "season"]):
+        league = str(league).strip().lower()
+        season = int(season) if pd.notna(season) else None
+        if season is None:
+            continue
+        for _, row in grp.iterrows():
+            h, a = str(row["_home_name"]).strip(), str(row["_away_name"]).strip()
+            if not h or not a:
+                continue
+            rows.append({"league": league, "season": season, "team_name": h, "opponent": a})
+            rows.append({"league": league, "season": season, "team_name": a, "opponent": h})
+    if not rows:
+        return pd.DataFrame()
+    opp_list = pd.DataFrame(rows)
+    opp_list = opp_list.merge(
+        s,
+        left_on=["league", "season", "opponent"],
+        right_on=["league", "season", "team_name"],
+        how="left",
+        suffixes=("", "_opp"),
+    )
+    if "_opp_ortg" not in opp_list.columns:
+        return pd.DataFrame()
+    agg = opp_list.groupby(["league", "season", "team_name"]).agg(
+        avg_opp_defensive_rating=("_opp_drtg", "mean"),
+        avg_opp_offensive_rating=("_opp_ortg", "mean"),
+        avg_opp_pace=("_opp_pace", "mean"),
+        n_games=("opponent", "count"),
+    ).reset_index()
+    return agg
+
+
+def _league_averages_by_season(stats_df: pd.DataFrame) -> pd.DataFrame:
+    """League average offensive_rating, defensive_rating, pace per (league, season)."""
+    if stats_df.empty:
+        return pd.DataFrame()
+    cols = ["league", "season", "offensive_rating", "defensive_rating", "pace"]
+    if not all(c in stats_df.columns for c in cols):
+        return pd.DataFrame()
+    lg = stats_df.groupby(["league", "season"])[["offensive_rating", "defensive_rating", "pace"]].mean().reset_index()
+    lg = lg.rename(columns={"offensive_rating": "league_avg_ortg", "defensive_rating": "league_avg_drtg", "pace": "league_avg_pace"})
+    return lg
+
+
+def apply_opponent_adjustments(
+    stats_df: pd.DataFrame,
+    games_df: pd.DataFrame,
+    name_mapping: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """
+    Return a copy of stats_df with efficiency metrics replaced by opponent-adjusted values.
+    Adjustment: raw is adjusted for strength of schedule using actual opponents from games_df.
+    - Adjusted ORtg = raw_ORtg + (league_avg_DRtg - avg_opp_DRtg). Facing easier defense inflates raw; we subtract.
+    - Adjusted DRtg = raw_DRtg + (avg_opp_ORtg - league_avg_ORtg). Facing weaker offense deflates raw; we add back.
+    - Adjusted pace = raw_pace + (avg_opp_pace - league_avg_pace).
+    Applies to offensive_rating, defensive_rating, pace; also scales true_shooting_pct, turnover_rate by same logic.
+    """
+    if stats_df.empty:
+        return stats_df
+    name_mapping = name_mapping or TEAM_NAME_MAPPING
+    opp_avg = _opponent_averages_from_games(games_df, stats_df, name_mapping)
+    if opp_avg.empty:
+        return stats_df
+    league_avg = _league_averages_by_season(stats_df)
+    if league_avg.empty:
+        return stats_df
+    out = stats_df.merge(
+        opp_avg,
+        on=["league", "season", "team_name"],
+        how="left",
+    )
+    out = out.merge(
+        league_avg,
+        on=["league", "season"],
+        how="left",
+    )
+    out = out.copy()
+    # Adjust offensive rating: higher opp DRtg = faced easier defense → raw inflated → subtract
+    out["_adj_ortg"] = out["offensive_rating"] + (
+        out["league_avg_drtg"].fillna(out["defensive_rating"]) - out["avg_opp_defensive_rating"].fillna(out["league_avg_drtg"])
+    )
+    out["_adj_drtg"] = out["defensive_rating"] + (
+        out["avg_opp_offensive_rating"].fillna(out["league_avg_ortg"]) - out["league_avg_ortg"].fillna(out["offensive_rating"])
+    )
+    out["_adj_pace"] = out["pace"] + (
+        out["avg_opp_pace"].fillna(out["league_avg_pace"]) - out["league_avg_pace"].fillna(out["pace"])
+    )
+    # Replace raw with adjusted where we have opponent data
+    mask = out["avg_opp_defensive_rating"].notna()
+    out.loc[mask, "offensive_rating"] = out.loc[mask, "_adj_ortg"]
+    out.loc[mask, "defensive_rating"] = out.loc[mask, "_adj_drtg"]
+    out.loc[mask, "pace"] = out.loc[mask, "_adj_pace"]
+    # Efficiency rates: scale by opponent strength (e.g. TS% vs defense faced)
+    # adj_TS ≈ raw_TS + 0.12 * (league_avg_DRtg - avg_opp_DRtg) so ~1.2 pts per 10 pts of schedule
+    if "true_shooting_pct" in out.columns:
+        out["_adj_ts"] = out["true_shooting_pct"] + 0.12 * (
+            out["league_avg_drtg"].fillna(100) - out["avg_opp_defensive_rating"].fillna(out["league_avg_drtg"])
+        )
+        out.loc[mask, "true_shooting_pct"] = out.loc[mask, "_adj_ts"]
+    if "turnover_rate" in out.columns:
+        out["_adj_tov"] = out["turnover_rate"] + 0.08 * (
+            out["league_avg_ortg"].fillna(100) - out["avg_opp_offensive_rating"].fillna(out["league_avg_ortg"])
+        )
+        out.loc[mask, "turnover_rate"] = out.loc[mask, "_adj_tov"]
+    if "offensive_rebound_rate" in out.columns:
+        out["_adj_orb"] = out["offensive_rebound_rate"] + 0.06 * (
+            out["league_avg_drtg"].fillna(100) - out["avg_opp_defensive_rating"].fillna(out["league_avg_drtg"])
+        )
+        out.loc[mask, "offensive_rebound_rate"] = out.loc[mask, "_adj_orb"]
+    if "defensive_rebound_rate" in out.columns:
+        out["_adj_drb"] = out["defensive_rebound_rate"] + 0.06 * (
+            out["league_avg_ortg"].fillna(100) - out["avg_opp_offensive_rating"].fillna(out["league_avg_ortg"])
+        )
+        out.loc[mask, "defensive_rebound_rate"] = out.loc[mask, "_adj_drb"]
+    if "free_throw_rate" in out.columns:
+        out["_adj_ftr"] = out["free_throw_rate"] * (1 + 0.01 * (
+            out["league_avg_drtg"].fillna(100) - out["avg_opp_defensive_rating"].fillna(out["league_avg_drtg"])
+        ))
+        out.loc[mask, "free_throw_rate"] = out.loc[mask, "_adj_ftr"]
+    drop_cols = [c for c in out.columns if c.startswith("_") or c in (
+        "avg_opp_defensive_rating", "avg_opp_offensive_rating", "avg_opp_pace", "n_games",
+        "league_avg_ortg", "league_avg_drtg", "league_avg_pace",
+    )]
+    out = out.drop(columns=drop_cols, errors="ignore")
+    return out
+
+
 def _game_season_from_date(game_date: Any) -> int | None:
     """Derive season (end year) from game_date. Oct+ -> next year; else current year."""
     if game_date is None or pd.isna(game_date):
@@ -371,11 +527,15 @@ def fetch_merge_and_save(
     games_df = load_games_with_season(db_path)
     if games_df.empty:
         return games_df
+    stats_df = apply_opponent_adjustments(stats_df, games_df, name_mapping)
     merged = merge_games_with_team_stats(games_df, stats_df, name_mapping)
     # Add rolling 10-game advanced analytics (NBA nba_api + NCAAB from games)
     from .advanced_analytics import add_advanced_analytics_to_games
     nba_seasons = [f"{y}-{str(y + 1)[-2:]}" for y in seasons]
     merged = add_advanced_analytics_to_games(merged, nba_seasons=nba_seasons)
+    # Add momentum features (streak, ATS/O/U last 10, pt-diff trend last 5, home/road ATS season)
+    from .momentum_features import merge_momentum_into_feature_matrix
+    merged = merge_momentum_into_feature_matrix(merged, league_col="league")
     # Add line movement features (additive: line_move_direction, line_move_magnitude, line_move_velocity_6h, sharp_money_indicator)
     from .line_movement import merge_line_movement_into_feature_matrix
     merged = merge_line_movement_into_feature_matrix(merged, odds_db_path=None)

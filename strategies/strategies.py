@@ -10,6 +10,9 @@ from typing import Callable
 
 # -----------------------------------------------------------------------------
 # American odds conversion (canonical format: +150, -110)
+# Standard formulas: +X -> implied = 100/(X+100); -X -> implied = |X|/(|X|+100).
+# Equivalently: decimal = 1 + 100/|american| for negative, 1 + american/100 for positive;
+# implied = 1 / decimal.
 # -----------------------------------------------------------------------------
 
 
@@ -34,12 +37,17 @@ def decimal_to_american(decimal: float) -> float:
 
 
 def implied_probability(odds_american: float) -> float:
-    """Convert American odds to implied probability. Works for any market (ML, spread, total)."""
+    """
+    Convert American odds to implied probability. Works for any market (ML, spread, total).
+    Formula: implied = 1 / decimal_odds (equivalent to 100/(X+100) for +X, |X|/(|X|+100) for -X).
+    """
     dec = american_to_decimal(odds_american)
     return 1.0 / dec if dec > 0 else 0.0
 
 
-# Vig adjustment: assume 4.5% sportsbook hold; no-vig implied prob for EV comparison
+# Vig removal: approximate fair probability by scaling down book implied.
+# Typical overround is ~4.5%; we use fair ≈ raw_implied / (1 + VIG_HOLD).
+# For exact no-vig across two outcomes use fair_i = implied_i / sum(implieds).
 VIG_HOLD = 0.045
 
 
