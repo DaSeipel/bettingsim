@@ -23,6 +23,7 @@ REQUEST_DELAY_SECONDS = 1.0
 LEAGUES = {
     "nfl": ("football", "nfl"),
     "nba": ("basketball", "nba"),
+    "ncaab": ("basketball", "mens-college-basketball"),
     "mlb": ("baseball", "mlb"),
     "nhl": ("hockey", "nhl"),
 }

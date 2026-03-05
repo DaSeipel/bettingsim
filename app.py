@@ -4,6 +4,7 @@ Daily picks sheet: Play of the Day (NBA + NCAAB) and All Value Plays. Dark theme
 Live odds from The Odds API; stakes from fractional Kelly.
 """
 
+import json
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -51,6 +52,7 @@ from engine.clv_tracker import (
     get_bet_outcomes_summary,
 )
 from engine.play_history import archive_value_plays, load_play_history, update_play_result
+from engine.auto_result_job import run_auto_result
 from engine.ncaab_march_context import add_ncaab_march_context_to_df
 from engine.betting_models import (
     load_feature_matrix_for_inference,
@@ -66,11 +68,13 @@ from engine.betting_models import (
 
 
 def format_american(odds: float) -> str:
-    """Format American odds for display: +150, -110."""
+    """Format American odds for display: +150, -110. Returns "—" for missing/NaN/invalid."""
+    if odds is None or pd.isna(odds):
+        return "—"
     try:
         x = int(round(float(odds)))
         return f"{x:+d}" if x != 0 else "—"
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return "—"
 
 
@@ -221,12 +225,21 @@ def select_play_of_the_day(
         top = sorted_df.iloc[0]
         # After merge, point may appear as point_x (left) or point
         point_val = top.get("point_x") if "point_x" in top.index else top.get("point")
+        # Odds: store None when missing/NaN (e.g. API returned spread but no moneyline) so card shows "—"
+        odds_raw = top.get("Odds", 0)
+        if odds_raw is None or pd.isna(odds_raw):
+            odds_for_pick = None
+        else:
+            try:
+                odds_for_pick = int(round(float(odds_raw)))
+            except (TypeError, ValueError):
+                odds_for_pick = None
         pick: dict = {
             "League": league,
             "Event": top.get("Event", ""),
             "Selection": top.get("Selection", ""),
             "Market": top.get("Market", ""),
-            "Odds": int(top.get("Odds", 0)),
+            "Odds": odds_for_pick,
             "Value (%)": float(top.get("Value (%)", 0)),
             "point": point_val,
             "Recommended Stake": top.get("Recommended Stake", 0),
@@ -237,6 +250,56 @@ def select_play_of_the_day(
         result[league] = pick
 
     return result
+
+
+# #region agent log
+def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = "") -> None:
+    try:
+        payload = {"sessionId": "a60dbe", "location": location, "message": message, "data": data, "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)}
+        if hypothesis_id:
+            payload["hypothesisId"] = hypothesis_id
+        with open("/Users/robertseipel/Desktop/bettingsim/.cursor/debug-a60dbe.log", "a") as f:
+            f.write(json.dumps(payload, default=str) + "\n")
+    except Exception:
+        pass
+# #endregion
+
+
+def _get_yesterday_potd_results() -> list[dict]:
+    """
+    Load yesterday's play history and return the two POTD picks (one per sport, max edge that day).
+    Each item: {"sport": "NBA"|"NCAAB", "side": "Team Name", "result": "W"|"L"|"P"|None}.
+    """
+    yesterday = date.today() - timedelta(days=1)
+    hist = load_play_history(from_date=yesterday, to_date=yesterday)
+    if hist.empty or "my_edge_pct" not in hist.columns:
+        return []
+    hist = hist.copy()
+    hist["result_clean"] = hist["result"].apply(
+        lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
+    )
+    # One top play per (date, sport) by edge
+    top = hist.loc[hist.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
+    # Order: NBA then NCAAB (match Overview columns)
+    top = top.sort_values("sport", ascending=True)  # NBA then NCAAB
+    rows = []
+    for _, r in top.iterrows():
+        # #region agent log
+        _debug_log("app.py:_get_yesterday_potd_results", "top row", {"sport": str(r.get("sport")), "recommended_side": str(r.get("recommended_side")), "result_raw": r.get("result"), "result_clean": r.get("result_clean"), "bet_type": str(r.get("bet_type"))}, "A")
+        # #endregion
+        sport = str(r.get("sport", "")).strip() or "—"
+        side = str(r.get("recommended_side", "")).strip() or "—"
+        res = r.get("result_clean")
+        if res is not None and not pd.isna(res) and str(res).upper() in ("W", "L", "P"):
+            res = str(res).upper()
+        else:
+            res = None
+        rows.append({"sport": sport, "side": side, "result": res})
+    # #region agent log
+    ncaab_all = hist[hist["sport"].astype(str).str.strip().str.upper() == "NCAAB"] if not hist.empty else pd.DataFrame()
+    _debug_log("app.py:_get_yesterday_potd_results", "all NCAAB yesterday", {"n_rows": len(ncaab_all), "results": ncaab_all["result"].tolist() if not ncaab_all.empty else [], "sides": ncaab_all["recommended_side"].tolist() if not ncaab_all.empty else []}, "B")
+    # #endregion
+    return rows
 
 
 def _html_escape(s: str) -> str:
@@ -370,14 +433,23 @@ def _potd_badge_text(row: pd.Series) -> str:
     """Recommended bet label for badge: e.g. 'Spread · Lakers -3.5', 'Over 220.5', 'Moneyline · Lakers'."""
     market = str(row.get("Market", ""))
     selection = str(row.get("Selection", ""))
+    # Avoid showing "+nan" when odds were missing (e.g. API had spread but no moneyline)
+    for suffix in (" +nan", " +NaN", " +NAN", " -nan", " -NaN"):
+        if selection.endswith(suffix):
+            selection = selection[: -len(suffix)].strip()
+            break
     market_label = MARKET_LABELS.get(market, market)
     point = row.get("point")
     if point is not None:
         try:
             pt = float(point)
-            if market == "totals":
+            # For h2h (moneyline), point is NaN; do not append it (would show "+nan")
+            if pd.isna(pt) or (isinstance(pt, float) and pt != pt):
+                pass  # fall through to no-point return below
+            elif market == "totals":
                 return f"{market_label} · {selection} {pt:.1f}" if f"{pt:.1f}" not in selection else f"{market_label} · {selection}"
-            return f"{market_label} · {selection} {pt:+.1f}"
+            else:
+                return f"{market_label} · {selection} {pt:+.1f}"
         except (TypeError, ValueError):
             pass
     return f"{market_label} · {selection}"
@@ -488,8 +560,38 @@ POTD_CARD_CSS = """
 .vp-confidence-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
 .vp-confidence-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #43a047, #66bb6a); transition: width 0.2s ease; }
 .vp-reasoning { font-size: 0.8rem; color: rgba(255,255,255,0.65); font-style: italic; margin-top: 0.5rem; line-height: 1.35; }
+/* Yesterday's Results strip (slim badges above Play of the Day) */
+.yesterday-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 1rem; padding: 0.5rem 0; font-family: inherit; }
+.yesterday-strip-label { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.7); margin-right: 0.25rem; }
+.yesterday-badge { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.75rem; border-radius: 8px; font-size: 0.9rem; font-weight: 700; }
+.yesterday-badge--win { background: rgba(46,125,50,0.5); color: #a5d6a7; }
+.yesterday-badge--loss { background: rgba(198,40,40,0.5); color: #ef9a9a; }
+.yesterday-badge--pending { background: rgba(96,125,139,0.4); color: #b0bec5; }
 </style>
 """
+
+
+def _render_yesterday_strip_html(rows: list[dict]) -> str:
+    """Render slim 'Yesterday's Results' strip: sport, team, W/L badge. Green=win, red=loss, grey=push/unresolved."""
+    if not rows:
+        return ""
+    parts = ['<div class="yesterday-strip">', '<span class="yesterday-strip-label">Yesterday\'s Results</span>']
+    for r in rows:
+        sport = _html_escape(str(r.get("sport", "")))
+        side = _html_escape(str(r.get("side", "")))
+        res = r.get("result")
+        if res == "W":
+            cls = "yesterday-badge yesterday-badge--win"
+            label = "W"
+        elif res == "L":
+            cls = "yesterday-badge yesterday-badge--loss"
+            label = "L"
+        else:
+            cls = "yesterday-badge yesterday-badge--pending"
+            label = "P" if res == "P" else "—"
+        parts.append(f'<span class="{cls}">{sport} · {side} · {label}</span>')
+    parts.append("</div>")
+    return "\n".join(parts)
 
 
 def _value_play_reasoning(row: pd.Series) -> str:
@@ -827,8 +929,12 @@ def _aggregate_odds_best_line_avg_implied(odds_df: pd.DataFrame) -> pd.DataFrame
     - best_odds: best available line (max American odds = best price for bettor).
     - avg_implied_prob: mean of implied probability (no-vig) across all bookmakers.
     - bookmaker_count: number of books offering this line (for min-threshold filter).
+    Drops rows with missing/NaN odds so we never surface moneyline when API returned spread but no moneyline.
     """
     if odds_df.empty or "odds" not in odds_df.columns:
+        return odds_df
+    odds_df = odds_df.loc[odds_df["odds"].notna()].copy()
+    if odds_df.empty:
         return odds_df
     key_cols = ["event_id", "sport_key", "league", "commence_time", "home_team", "away_team", "event_name", "market_type", "selection", "point"]
     missing = [c for c in key_cols if c not in odds_df.columns]
@@ -1290,6 +1396,14 @@ def _bet_history_table(records: list) -> None:
         },
     )
 
+# Score yesterday's plays from ESPN so Win/Loss show correctly when opening the next day
+if "auto_result_run" not in st.session_state:
+    try:
+        run_auto_result()
+    except Exception:
+        pass
+    st.session_state["auto_result_run"] = True
+
 # Persistent banner: unresolved plays older than 24 hours
 _ph_all = load_play_history()
 _cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24)
@@ -1312,9 +1426,13 @@ st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
 tab_overview, tab_ncaab, tab_nba, tab_clv, tab_mark_results, tab_play_history = st.tabs(["Overview", "NCAAB", "NBA", "CLV Summary", "Mark Results", "Play of the Day History"])
 
 with tab_overview:
+    st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
+    # ——— Yesterday's Results (slim strip: two POTD badges W/L) ———
+    yesterday_rows = _get_yesterday_potd_results()
+    if yesterday_rows:
+        st.markdown(_render_yesterday_strip_html(yesterday_rows), unsafe_allow_html=True)
     # ——— Play of the Day (backend selection: edge > 4%, tie-break bookmakers / model gap / no injury) ———
     st.subheader("Play of the Day")
-    st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
     potd_picks = select_play_of_the_day(value_plays_df, live_odds_df, min_edge_pct=POTD_MIN_EDGE_PCT)
     pod_nba = potd_picks["NBA"]
     pod_ncaab = potd_picks["NCAAB"]

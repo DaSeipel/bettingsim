@@ -6,7 +6,8 @@ from ESPN and sets W/L/P. If ESPN has no result, sets manual_review_flag for das
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+import json
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -174,6 +175,14 @@ def run_auto_result(as_of_date: date | None = None, db_path: Path | None = None)
 
     for league_key in set(_norm(str(s)) for s in unresolved["sport"].unique()):
         if league_key not in LEAGUES:
+            # #region agent log
+            try:
+                n_skipped = len(unresolved[unresolved["sport"].astype(str).str.strip().str.lower() == league_key])
+                with open(Path(__file__).resolve().parent.parent / ".cursor" / "debug-a60dbe.log", "a") as f:
+                    f.write(json.dumps({"sessionId": "a60dbe", "location": "auto_result_job.py:run_auto_result", "message": "league skipped", "data": {"league_key": league_key, "n_skipped": n_skipped}, "hypothesisId": "C", "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)}, default=str) + "\n")
+            except Exception:
+                pass
+            # #endregion
             skipped_league += len(unresolved[unresolved["sport"].astype(str).str.strip().str.lower() == league_key])
             continue
         games = fetch_scoreboard(league_key, yesterday)

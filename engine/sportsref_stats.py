@@ -162,7 +162,7 @@ def _team_row(team: Any, league: str, season: int) -> dict[str, Any] | None:
         "defensive_rebound_rate": _rebound_rate(drb or 0, opp_orb or 0),
         "true_shooting_pct": _true_shooting_pct(pts or 0, fga or 0, fta or 0),
         "free_throw_rate": _free_throw_rate(fta or 0, fga or 0),
-        "strength_of_schedule": None,  # sportsreference Team does not expose SOS; can be filled from elsewhere
+        "strength_of_schedule": _safe_float(getattr(team, "strength_of_schedule", None)) or _safe_float(getattr(team, "sos", None)) or _safe_float(getattr(team, "srs", None)) or None,
     }
 
 
@@ -312,11 +312,14 @@ def apply_opponent_adjustments(
 ) -> pd.DataFrame:
     """
     Return a copy of stats_df with efficiency metrics replaced by opponent-adjusted values.
-    Adjustment: raw is adjusted for strength of schedule using actual opponents from games_df.
+    Strength of schedule: we use each team's actual opponents (from games_df) and their
+    sportsreference defensive/offensive ratings to compute average opponent quality, then
+    adjust so that raw stats are normalized for schedule. E.g. Team A scoring 110 vs weak
+    defenses gets a lower adjusted offensive rating.
     - Adjusted ORtg = raw_ORtg + (league_avg_DRtg - avg_opp_DRtg). Facing easier defense inflates raw; we subtract.
     - Adjusted DRtg = raw_DRtg + (avg_opp_ORtg - league_avg_ORtg). Facing weaker offense deflates raw; we add back.
     - Adjusted pace = raw_pace + (avg_opp_pace - league_avg_pace).
-    Applies to offensive_rating, defensive_rating, pace; also scales true_shooting_pct, turnover_rate by same logic.
+    Applies to offensive_rating, defensive_rating, pace, true_shooting_pct, turnover_rate, rebound rates, free_throw_rate.
     """
     if stats_df.empty:
         return stats_df
