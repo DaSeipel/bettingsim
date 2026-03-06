@@ -35,11 +35,39 @@ def _norm(s: str) -> str:
     return (s or "").strip().lower()
 
 
+def _normalize_team_for_match(s: str) -> str:
+    """Normalize team name for matching: lowercase, hyphens→spaces, St→State, collapse spaces."""
+    s = (s or "").strip().lower()
+    s = s.replace("-", " ").replace("'", "")
+    # NCAAB: "Morehead St" ↔ "Morehead State", "SE Missouri St" ↔ "Southeast Missouri State"
+    words = s.split()
+    out = []
+    for w in words:
+        if w == "st" and out and len(out) >= 1:
+            out.append("state")  # "morehead st" -> "morehead state"
+        else:
+            out.append(w)
+    return " ".join(out)
+
+
 def _team_match(ph_team: str, espn_team: str) -> bool:
-    a, b = _norm(ph_team), _norm(espn_team)
+    """Match play_history team to ESPN team. Handles UT-Arlington vs UT Arlington, St. John's vs St Johns, etc."""
+    a = _normalize_team_for_match(ph_team)
+    b = _normalize_team_for_match(espn_team)
     if not a or not b:
         return False
-    return a == b or a in b or b in a
+    if a == b:
+        return True
+    # Substring: "ut arlington" in "ut arlington mavericks" or vice versa
+    if a in b or b in a:
+        return True
+    # Core name match: "ut arlington mavericks" vs "ut arlington" (ESPN sometimes drops mascot)
+    a_words, b_words = set(a.split()), set(b.split())
+    if len(a_words) >= 2 and len(b_words) >= 2:
+        overlap = a_words & b_words
+        if len(overlap) >= min(2, len(a_words), len(b_words)):
+            return True
+    return False
 
 
 def _match_game(play: dict[str, Any], games: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -175,14 +203,6 @@ def run_auto_result(as_of_date: date | None = None, db_path: Path | None = None)
 
     for league_key in set(_norm(str(s)) for s in unresolved["sport"].unique()):
         if league_key not in LEAGUES:
-            # #region agent log
-            try:
-                n_skipped = len(unresolved[unresolved["sport"].astype(str).str.strip().str.lower() == league_key])
-                with open(Path(__file__).resolve().parent.parent / ".cursor" / "debug-a60dbe.log", "a") as f:
-                    f.write(json.dumps({"sessionId": "a60dbe", "location": "auto_result_job.py:run_auto_result", "message": "league skipped", "data": {"league_key": league_key, "n_skipped": n_skipped}, "hypothesisId": "C", "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)}, default=str) + "\n")
-            except Exception:
-                pass
-            # #endregion
             skipped_league += len(unresolved[unresolved["sport"].astype(str).str.strip().str.lower() == league_key])
             continue
         games = fetch_scoreboard(league_key, yesterday)

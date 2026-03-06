@@ -46,10 +46,8 @@ from engine.injury_scraper import add_injury_features
 from engine.clv_tracker import (
     record_recommendations as clv_record_recommendations,
     update_closing_odds as clv_update_closing_odds,
-    get_clv_summary_last_30_days,
     get_clv_row_for_play,
     mark_bet_result,
-    get_bet_outcomes_summary,
 )
 from engine.play_history import archive_value_plays, load_play_history, update_play_result
 from engine.auto_result_job import run_auto_result
@@ -58,6 +56,8 @@ from engine.betting_models import (
     load_feature_matrix_for_inference,
     get_feature_row_for_game,
     get_top_shap_reasoning,
+    get_feature_based_reasoning,
+    build_feature_row_for_upcoming_game,
     predict_spread_prob,
     predict_totals_prob,
     predict_moneyline_prob,
@@ -88,6 +88,36 @@ def format_currency(val: float) -> str:
 
 # Human-readable market labels (replaces h2h, spreads, totals in UI)
 MARKET_LABELS = {"h2h": "Winner", "spreads": "Spread", "totals": "Over/Under"}
+
+# NBA team full name -> abbreviation
+NBA_TEAM_ABBREV: dict[str, str] = {
+    "Atlanta Hawks": "ATL", "Boston Celtics": "BOS", "Brooklyn Nets": "BKN",
+    "Charlotte Hornets": "CHA", "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN", "Detroit Pistons": "DET",
+    "Golden State Warriors": "GSW", "Houston Rockets": "HOU", "Indiana Pacers": "IND",
+    "Los Angeles Clippers": "LAC", "Los Angeles Lakers": "LAL", "Memphis Grizzlies": "MEM",
+    "Miami Heat": "MIA", "Milwaukee Bucks": "MIL", "Minnesota Timberwolves": "MIN",
+    "New Orleans Pelicans": "NOP", "New York Knicks": "NYK", "Oklahoma City Thunder": "OKC",
+    "Orlando Magic": "ORL", "Philadelphia 76ers": "PHI", "Phoenix Suns": "PHX",
+    "Portland Trail Blazers": "POR", "Sacramento Kings": "SAC", "San Antonio Spurs": "SAS",
+    "Toronto Raptors": "TOR", "Utah Jazz": "UTA", "Washington Wizards": "WAS",
+}
+
+
+def _team_abbrev(team_name: str, league: str) -> str:
+    """Return abbreviation for team. NBA uses standard 3-letter; NCAAB derives from name."""
+    s = (team_name or "").strip()
+    if not s:
+        return ""
+    if str(league).strip().upper() == "NBA":
+        return NBA_TEAM_ABBREV.get(s, s[:8])  # fallback: first 8 chars
+    # NCAAB: use first 2 letters of key words (e.g. "SE Missouri St Redhawks" -> "SEMO", "Morehead St Eagles" -> "MOR")
+    words = s.replace(".", "").split()
+    skip = {"St", "State", "St.", "University", "U", "of", "The", "Eagles", "Redhawks", "Wildcats", "Bearcats", "etc"}
+    key = [w for w in words if w not in skip][:3]
+    if len(key) >= 2:
+        return "".join(w[:2] for w in key).upper()[:6]
+    return (key[0][:4].upper() if key else s[:6])[:6]
 
 
 def _build_pick_explanation(row: pd.Series) -> str:
@@ -234,6 +264,7 @@ def select_play_of_the_day(
                 odds_for_pick = int(round(float(odds_raw)))
             except (TypeError, ValueError):
                 odds_for_pick = None
+        commence_time = top.get("commence_time") or top.get("commence_time_x") or ""
         pick: dict = {
             "League": league,
             "Event": top.get("Event", ""),
@@ -244,6 +275,7 @@ def select_play_of_the_day(
             "point": point_val,
             "Recommended Stake": top.get("Recommended Stake", 0),
             "Start Time": top.get("Start Time", "—"),
+            "commence_time": commence_time,
             "Injury Alert": top.get("Injury Alert", "—"),
             "high_variance": _is_large_spread(top),
         }
@@ -367,8 +399,12 @@ def _filter_correlated_plays(
     return sorted_df.loc[indices].reset_index(drop=True)
 
 
-def _potd_reason(row, feature_matrix: Optional[pd.DataFrame] = None) -> str:
-    """Build a 2–3 sentence explanation for why this play was chosen (POTD card)."""
+def _potd_reason(
+    row,
+    feature_matrix: Optional[pd.DataFrame] = None,
+    b2b_teams: Optional[set[str]] = None,
+) -> str:
+    """Build a 3–4 sentence explanation for why this play was chosen (POTD card)."""
     market = str(row.get("Market", ""))
     market_label = MARKET_LABELS.get(market, market)
     selection = str(row.get("Selection", ""))
@@ -377,6 +413,15 @@ def _potd_reason(row, feature_matrix: Optional[pd.DataFrame] = None) -> str:
     league = str(row.get("League", ""))
     point = row.get("point")
     away, home = _parse_event_teams(event)
+    # #region agent log
+    try:
+        import time
+        fm_shape = (len(feature_matrix), len(feature_matrix.columns)) if feature_matrix is not None and not feature_matrix.empty else None
+        with open("/Users/robertseipel/Desktop/bettingsim/bettingsim/.cursor/debug-e8fe0d.log", "a") as f:
+            f.write(json.dumps({"sessionId":"e8fe0d","hypothesisId":"H4,H5","location":"app.py:_potd_reason","message":"potd_reason_entry","data":{"fm_shape":fm_shape,"home":home,"away":away,"league":league,"event":event},"timestamp":int(time.time()*1000)}) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
     # Sentence 1: what we're betting and the edge
     point_str = ""
@@ -394,8 +439,9 @@ def _potd_reason(row, feature_matrix: Optional[pd.DataFrame] = None) -> str:
         f"the best {league} play we're highlighting today."
     )
 
-    # Sentences 2–3: why (SHAP drivers if available, else methodology)
+    # Sentences 2–4: why (SHAP drivers if available, else feature-based, else minimal fallback)
     why_sentences: list[str] = []
+    feature_row: Optional[pd.Series] = None
     if feature_matrix is not None and not feature_matrix.empty and home and away:
         feature_row = get_feature_row_for_game(
             feature_matrix,
@@ -403,28 +449,64 @@ def _potd_reason(row, feature_matrix: Optional[pd.DataFrame] = None) -> str:
             away_team=away,
             league=league,
         )
-        if feature_row is not None:
-            shap_reason = get_top_shap_reasoning(
-                feature_row, market, home_team=home, away_team=away, top_k=3
+        # #region agent log
+        if feature_row is None:
+            try:
+                import time
+                with open("/Users/robertseipel/Desktop/bettingsim/bettingsim/.cursor/debug-e8fe0d.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"e8fe0d","hypothesisId":"H1","location":"app.py:_potd_reason","message":"feature_row_none","data":{"home":home,"away":away,"league":league},"timestamp":int(time.time()*1000)}) + "\n")
+            except Exception:
+                pass
+        # #endregion
+    if feature_row is None and home and away:
+        game_date_str = None
+        if row.get("commence_time"):
+            try:
+                dt = datetime.fromisoformat(str(row["commence_time"]).replace("Z", "+00:00"))
+                game_date_str = dt.strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        feature_row = build_feature_row_for_upcoming_game(
+            home_team=home,
+            away_team=away,
+            league=league.strip().lower(),
+            game_date=game_date_str,
+            b2b_teams=b2b_teams,
+        )
+    if feature_row is not None:
+        # #region agent log
+        try:
+            import time
+            with open("/Users/robertseipel/Desktop/bettingsim/bettingsim/.cursor/debug-e8fe0d.log", "a") as f:
+                f.write(json.dumps({"sessionId":"e8fe0d","hypothesisId":"H1","location":"app.py:_potd_reason","message":"feature_row_found","data":{"home":home,"away":away},"timestamp":int(time.time()*1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        shap_reason = get_top_shap_reasoning(
+            feature_row, market, home_team=home, away_team=away, top_k=4
+        )
+        feat_reason = None
+        if shap_reason:
+            why_sentences.append(shap_reason)
+        if not shap_reason:
+            feat_reason = get_feature_based_reasoning(
+                feature_row, market, home_team=home, away_team=away, top_k=4
             )
-            if shap_reason:
-                why_sentences.append(shap_reason)
+            if feat_reason:
+                why_sentences.append(feat_reason)
+        # #region agent log
+        try:
+            import time
+            with open("/Users/robertseipel/Desktop/bettingsim/bettingsim/.cursor/debug-e8fe0d.log", "a") as f:
+                f.write(json.dumps({"sessionId":"e8fe0d","hypothesisId":"H2,H3","location":"app.py:_potd_reason","message":"reasoning_results","data":{"shap_ok":bool(shap_reason),"feat_ok":bool(feat_reason),"why_count":len(why_sentences)},"timestamp":int(time.time()*1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
     if not why_sentences:
         opponent = away if (selection.strip() == home.strip()) else home
-        if market == "spreads":
-            why_sentences.append(
-                f"{selection}'s power rating versus {opponent}, plus schedule and rest (e.g. back-to-backs), "
-                f"suggest the market is mispricing this spread."
-            )
-        elif market == "totals":
-            why_sentences.append(
-                f"Pace and efficiency for {home} and {away}, plus key-number analysis, suggest the "
-                f"posted total is off from our projection."
-            )
-        else:
-            why_sentences.append(
-                f"Our model gives {selection} a higher win probability than the odds imply against {opponent}."
-            )
+        why_sentences.append(
+            f"Our model gives {selection} a higher win probability than the odds imply against {opponent}."
+        )
 
     return " ".join([opening] + why_sentences)
 
@@ -492,18 +574,23 @@ POTD_CARD_CSS = """
     color: #fafafa;
 }
 .potd-matchup .potd-vs { font-weight: 400; opacity: 0.7; font-size: 1rem; }
+.potd-matchup .potd-abbrev { font-size: 0.75rem; font-weight: 500; opacity: 0.7; margin-left: 0.25rem; }
+.potd-tipoff { font-size: 0.85rem; color: rgba(255,255,255,0.8); margin-bottom: 0.5rem; }
+.potd-current-line { font-size: 0.8rem; color: rgba(255,255,255,0.7); margin-top: -0.35rem; margin-bottom: 0.35rem; }
+.potd-line-as-of { font-size: 0.7rem; color: rgba(255,255,255,0.5); margin-top: 0.5rem; }
+.potd-badge-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem; }
 .potd-badge {
     display: inline-block;
     padding: 0.5rem 1rem;
     border-radius: 8px;
     font-size: 1.35rem;
     font-weight: 800;
-    margin-bottom: 0.75rem;
     letter-spacing: 0.02em;
     line-height: 1.3;
 }
 .potd-card--blue .potd-badge  { background: rgba(30,136,229,0.4); color: #90caf9; }
 .potd-card--orange .potd-badge { background: rgba(245,124,0,0.4); color: #ffe0b2; }
+.potd-odds-inline { font-size: 1.2rem; font-weight: 700; color: rgba(255,255,255,0.95); }
 .potd-edge {
     font-size: 1.75rem;
     font-weight: 800;
@@ -525,11 +612,6 @@ POTD_CARD_CSS = """
     line-height: 1.4;
     color: rgba(255,255,255,0.85);
     margin-bottom: 0.6rem;
-}
-.potd-odds {
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: rgba(255,255,255,0.95);
 }
 .potd-empty-msg {
     font-size: 1.1rem;
@@ -739,6 +821,8 @@ def _render_potd_card_html(
     row: Optional[pd.Series],
     accent: str,
     feature_matrix: Optional[pd.DataFrame] = None,
+    odds_as_of: Optional[datetime] = None,
+    b2b_teams: Optional[set[str]] = None,
 ) -> str:
     """Return HTML for one Play of the Day card. accent: 'blue' | 'orange' | 'grey'. Grey when no play."""
     if row is None or (isinstance(row, pd.Series) and (row.empty or len(row) == 0)):
@@ -759,9 +843,37 @@ def _render_potd_card_html(
     else:
         confidence = "Medium"
     away, home = _parse_event_teams(str(r.get("Event", "")))
+    away_abbrev = _team_abbrev(away, league)
+    home_abbrev = _team_abbrev(home, league)
+    matchup_html = f"{_html_escape(away)}"
+    if away_abbrev:
+        matchup_html += f' <span class="potd-abbrev">({away_abbrev})</span>'
+    matchup_html += f' <span class="potd-vs">@</span> {_html_escape(home)}'
+    if home_abbrev:
+        matchup_html += f' <span class="potd-abbrev">({home_abbrev})</span>'
+    tipoff = format_start_time(str(r.get("commence_time", "") or ""))
     badge_text = _potd_badge_text(r)
-    reason = _potd_reason(r, feature_matrix=feature_matrix)
+    reason = _potd_reason(r, feature_matrix=feature_matrix, b2b_teams=b2b_teams)
     odds_str = format_american(r.get("Odds", 0))
+    market = str(r.get("Market", "")).strip().lower()
+    point_val = r.get("point_x") or r.get("point")
+    current_line = ""
+    if point_val is not None and not pd.isna(point_val):
+        try:
+            pt = float(point_val)
+            if market == "spreads":
+                current_line = f"Current line: {pt:+.1f}"
+            elif market == "totals":
+                current_line = f"Current O/U: {pt:.1f}"
+        except (TypeError, ValueError):
+            pass
+    line_as_of = ""
+    if odds_as_of:
+        try:
+            et = odds_as_of.astimezone(ZoneInfo("America/New_York"))
+            line_as_of = f"Line as of {et.strftime('%b %d, %I:%M %p ET')}"
+        except Exception:
+            line_as_of = f"Line as of {odds_as_of.strftime('%b %d, %I:%M %p')}"
     potd_march = ""
     if league == "NCAAB":
         march_badges = _march_context_badges(r)
@@ -770,13 +882,15 @@ def _render_potd_card_html(
     html = f"""
     <div class="potd-card potd-card--{accent}">
         <div class="potd-league">{_html_escape(league)}</div>
-        <div class="potd-matchup">{_html_escape(away)} <span class="potd-vs">@</span> {_html_escape(home)}</div>
-        <div class="potd-badge">{_html_escape(badge_text)}</div>
+        <div class="potd-tipoff">Tip-off: {_html_escape(tipoff)}</div>
+        <div class="potd-matchup">{matchup_html}</div>
+        <div class="potd-badge-row"><div class="potd-badge">{_html_escape(badge_text)}</div><span class="potd-odds-inline">{odds_str}</span></div>
+        {f'<div class="potd-current-line">{_html_escape(current_line)}</div>' if current_line else ''}
         <div class="potd-edge">{edge_pct:.1f}% Edge</div>
         {potd_march}
         <div class="potd-confidence{f' potd-confidence--warning' if high_variance else ''}">Confidence: {_html_escape(confidence)}</div>
         <div class="potd-reason">{_html_escape(reason)}</div>
-        <div class="potd-odds">{odds_str}</div>
+        {f'<div class="potd-line-as-of">{_html_escape(line_as_of)}</div>' if line_as_of else ''}
     </div>
     """
     return _html_one_line_per_block(html)
@@ -1184,6 +1298,7 @@ def _get_b2b_teams_cached(as_of_date_iso: str, refresh_key: int = 0) -> frozense
 if "odds_refresh_key" not in st.session_state:
     st.session_state["odds_refresh_key"] = 0
 
+b2b_teams: set[str] = set()
 if (odds_api_key or "").strip():
     try:
         today_et = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
@@ -1219,7 +1334,7 @@ if (odds_api_key or "").strip():
             value_plays_df = value_plays_df.copy()
             value_plays_df["confidence_tier"] = value_plays_df.apply(_confidence_tier, axis=1)
             value_plays_df["reasoning_summary"] = value_plays_df.apply(
-                lambda r: _potd_reason(r, feature_matrix=feature_matrix_inference), axis=1
+                lambda r: _potd_reason(r, feature_matrix=feature_matrix_inference, b2b_teams=b2b_teams), axis=1
             )
         # Archive today's plays to play_history (stricter: min 6% edge, max 10 per day by edge)
         try:
@@ -1423,7 +1538,7 @@ if _unresolved_stale > 0:
     )
     st.markdown("[→ Go to Play of the Day History](#play-history)")
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
-tab_overview, tab_ncaab, tab_nba, tab_clv, tab_mark_results, tab_play_history = st.tabs(["Overview", "NCAAB", "NBA", "CLV Summary", "Mark Results", "Play of the Day History"])
+tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history = st.tabs(["Overview", "NCAAB", "NBA", "Mark Results", "Play of the Day History"])
 
 with tab_overview:
     st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
@@ -1442,12 +1557,12 @@ with tab_overview:
     col_nba, col_ncaab = st.columns(2)
     with col_nba:
         st.markdown(
-            _render_potd_card_html("NBA", pod_nba, "blue", feature_matrix=feature_matrix_potd),
+            _render_potd_card_html("NBA", pod_nba, "blue", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams),
             unsafe_allow_html=True,
         )
     with col_ncaab:
         st.markdown(
-            _render_potd_card_html("NCAAB", pod_ncaab, "orange", feature_matrix=feature_matrix_potd),
+            _render_potd_card_html("NCAAB", pod_ncaab, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams),
             unsafe_allow_html=True,
         )
     if value_plays_df.empty:
@@ -1569,47 +1684,13 @@ with tab_ncaab:
         else:
             st.info("Set Odds API key in the sidebar to load today's NCAAB games and value plays.")
 
-with tab_clv:
-    st.subheader("CLV Summary")
-    # Bet outcome record (W-L and ROI from marked results)
-    _outcomes = get_bet_outcomes_summary()
-    if _outcomes["total_bets"] > 0:
-        st.markdown("**Bet outcome record** (from Mark Result on play cards)")
-        _w, _l = _outcomes["wins"], _outcomes["losses"]
-        _staked = _outcomes["total_staked"]
-        _profit = _outcomes["total_profit"]
-        _roi = _outcomes["roi_pct"]
-        st.metric("Record", f"{_w}-{_l}")
-        st.metric("Total staked", format_currency(_staked))
-        st.metric("P/L", format_currency(_profit))
-        st.metric("ROI", f"{_roi:+.1f}%")
-        st.divider()
-    st.caption("Average Closing Line Value by sport and bet type over the last 30 days. Positive CLV = you got a better number than the closing line.")
-    _clv_summary = get_clv_summary_last_30_days()
-    if not _clv_summary.empty and _clv_summary["n_bets"].sum() > 0:
-        _clv_summary = _clv_summary.copy()
-        _clv_summary["bet_type"] = _clv_summary["bet_type"].map(lambda x: MARKET_LABELS.get(str(x).lower(), str(x)))
-        _disp = _clv_summary.rename(columns={"league": "Sport", "avg_clv_pct": "Avg CLV %", "n_bets": "Bets"})
-        _disp["Avg CLV %"] = _disp["Avg CLV %"].apply(lambda x: f"{x:+.2f}%")
-        st.dataframe(
-            _disp,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Sport": st.column_config.TextColumn("Sport", width="small"),
-                "bet_type": st.column_config.TextColumn("Bet type", width="small"),
-                "Avg CLV %": st.column_config.TextColumn("Avg CLV %", width="small"),
-                "Bets": st.column_config.NumberColumn("Bets", width="small"),
-            },
-        )
-    else:
-        st.info("No CLV data yet. Record recommendations (use the app to load value plays) and run odds fetches so closing odds can be backfilled. Data appears here once you have bets with closing odds in the last 30 days.")
-
 with tab_mark_results:
     st.subheader("Mark Results")
-    st.caption("Mark Win / Loss / Push for every play the model generated today. Results are saved to your record and used for ROI.")
+    st.caption("Mark Win / Loss / Push for past plays (yesterday and earlier). Today's plays are not shown here. Results are saved to your record and used for ROI.")
     _today = date.today()
-    _mr_history = load_play_history(from_date=_today, to_date=_today)
+    _yesterday = _today - timedelta(days=1)
+    _mr_from = _today - timedelta(days=90)  # show last 90 days of past plays
+    _mr_history = load_play_history(from_date=_mr_from, to_date=_yesterday)
     if not _mr_history.empty:
         _mr_history = _mr_history.copy()
         _mr_history["result_clean"] = _mr_history["result"].apply(
@@ -1634,7 +1715,9 @@ with tab_mark_results:
                     pass
             return f"{d}|{s}|{h}|{a}|{bt}|{side}"
         _mr_history["_matchup_key"] = _mr_history.apply(_mr_matchup_key, axis=1)
-        _mr_list = _mr_history.drop_duplicates(subset=["_matchup_key"], keep="last").sort_values("my_edge_pct", ascending=False)
+        _mr_list = _mr_history.drop_duplicates(subset=["_matchup_key"], keep="last").sort_values(
+            ["date_generated", "my_edge_pct"], ascending=[False, False]
+        )
 
         st.markdown("""
         <style>
@@ -1714,7 +1797,7 @@ with tab_mark_results:
                             update_play_result(_pid, "P")
                         st.rerun()
     else:
-        st.info("No plays for today yet. Load the dashboard and open this app before games so today's plays are archived (or wait for the 9am ET archive).")
+        st.info("No past plays in the last 90 days to mark. Plays from yesterday and earlier appear here once they are archived.")
 
 with tab_play_history:
     st.subheader("Play of the Day History")
