@@ -47,14 +47,27 @@ def implied_probability(odds_american: float) -> float:
 
 # Vig removal: approximate fair probability by scaling down book implied.
 # Typical overround is ~4.5%; we use fair ≈ raw_implied / (1 + VIG_HOLD).
-# For exact no-vig across two outcomes use fair_i = implied_i / sum(implieds).
+# For exact no-vig across two outcomes use implied_probability_fair_two_sided.
 VIG_HOLD = 0.045
 
 
 def implied_probability_no_vig(odds_american: float) -> float:
-    """No-vig implied probability (fair market). Raw implied / (1 + vig hold)."""
+    """No-vig implied probability (fair market). Raw implied / (1 + vig hold). Use only when other side unavailable."""
     raw = implied_probability(odds_american)
     return raw / (1.0 + VIG_HOLD) if raw > 0 else 0.0
+
+
+def implied_probability_fair_two_sided(odds_american_a: float, odds_american_b: float) -> tuple[float, float]:
+    """
+    Standard two-outcome vig removal: implied = 1 / decimal_odds for each side,
+    then normalize so both sum to 100%. Returns (fair_a, fair_b).
+    """
+    impl_a = implied_probability(odds_american_a)
+    impl_b = implied_probability(odds_american_b)
+    total = impl_a + impl_b
+    if total <= 0:
+        return (0.0, 0.0)
+    return (impl_a / total, impl_b / total)
 
 
 # Probability damping: pull extreme predictions toward league average (more realistic for NBA)

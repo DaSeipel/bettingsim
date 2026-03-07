@@ -47,6 +47,10 @@ from .betting_models import (
     train_totals_model,
     train_moneyline_model,
     train_all_models,
+    train_ncaab_models,
+    SPREAD_MODEL_PATH_NCAAB,
+    TOTALS_MODEL_PATH_NCAAB,
+    MONEYLINE_MODEL_PATH_NCAAB,
     load_metrics,
     load_feature_matrix_for_inference,
     get_feature_row_for_game,
@@ -107,6 +111,17 @@ from .situational_features import (
     NBA_TEAM_CITY,
     SITUATIONAL_FEATURE_COLUMNS,
 )
+from .historical_odds import (
+    fetch_historical_odds,
+    fetch_and_store_historical_week,
+    fetch_last_n_seasons,
+    load_historical_odds,
+    get_closing_lines_per_game,
+    append_live_snapshot_to_historical,
+    merge_historical_closing_into_games,
+    report_closing_join_rate_by_league,
+    NCAAB_ESPN_TO_ODDS_API,
+)
 
 __all__ = [
     "BettingEngine",
@@ -148,6 +163,10 @@ __all__ = [
     "train_totals_model",
     "train_moneyline_model",
     "train_all_models",
+    "train_ncaab_models",
+    "SPREAD_MODEL_PATH_NCAAB",
+    "TOTALS_MODEL_PATH_NCAAB",
+    "MONEYLINE_MODEL_PATH_NCAAB",
     "load_metrics",
     "load_feature_matrix_for_inference",
     "get_feature_row_for_game",
@@ -195,4 +214,13 @@ __all__ = [
     "load_situational_features_from_sqlite",
     "NBA_TEAM_CITY",
     "SITUATIONAL_FEATURE_COLUMNS",
+    "fetch_historical_odds",
+    "fetch_and_store_historical_week",
+    "fetch_last_n_seasons",
+    "load_historical_odds",
+    "get_closing_lines_per_game",
+    "append_live_snapshot_to_historical",
+    "merge_historical_closing_into_games",
+    "report_closing_join_rate_by_league",
+    "NCAAB_ESPN_TO_ODDS_API",
 ]

@@ -364,18 +364,23 @@ def save_situational_features_to_sqlite(df: pd.DataFrame, db_path: Optional[Path
 def load_situational_features_from_sqlite(
     league: Optional[str] = None, db_path: Optional[Path] = None
 ) -> pd.DataFrame:
-    """Load game_situational_features from SQLite."""
+    """Load game_situational_features from SQLite. Returns empty DataFrame if table does not exist."""
     path = db_path or _db_path()
     if not path.exists():
         return pd.DataFrame()
     conn = sqlite3.connect(path)
     try:
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='game_situational_features'"
+        )
+        if cur.fetchone() is None:
+            return pd.DataFrame()
         if league:
             return pd.read_sql_query(
                 "SELECT * FROM game_situational_features WHERE league = ?", conn, params=(league,)
             )
         return pd.read_sql_query("SELECT * FROM game_situational_features", conn)
-    except sqlite3.OperationalError:
+    except (sqlite3.OperationalError, Exception):
         return pd.DataFrame()
     finally:
         conn.close()
@@ -394,7 +399,7 @@ def build_and_save_situational_features(
         return existing
     if not existing.empty:
         other = existing[existing["league"] != league]
-        combined = pd.concat([other, new_df], ignore_index=True)
+        combined = pd.concat([other, new_df], ignore_index=True) if not other.empty else new_df
     else:
         combined = new_df
     save_situational_features_to_sqlite(combined, db_path=db_path)

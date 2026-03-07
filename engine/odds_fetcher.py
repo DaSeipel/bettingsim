@@ -213,13 +213,19 @@ def save_dataframe_to_sqlite(df: pd.DataFrame, sport_key: str, db_path: Path | N
         conn.close()
 
 
-def append_odds_snapshot(sport_key: str, df: pd.DataFrame, db_path: Path | None = None) -> None:
+def append_odds_snapshot(
+    sport_key: str,
+    df: pd.DataFrame,
+    db_path: Path | None = None,
+    snapshot_at: str | None = None,
+) -> None:
     """Append a timestamped snapshot of parsed odds to SQLite for line movement tracking."""
     if df.empty:
         return
     path = db_path or _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    snapshot_at = datetime.now(timezone.utc).isoformat()
+    if not snapshot_at:
+        snapshot_at = datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(path)
     try:
         conn.execute("""
@@ -255,8 +261,11 @@ def fetch_and_store(
     """
     For each sport (default: NBA and NCAAB), fetch odds (with 15-min cache),
     store raw response in SQLite and in cache, parse to DataFrame, save to SQLite.
-    Returns dict mapping sport_key -> parsed DataFrame.
+    Every snapshot is also appended to historical_odds in odds.db (for NCAAB so we
+    build real closing lines going forward). Returns dict mapping sport_key -> parsed DataFrame.
     """
+    from engine.historical_odds import append_live_snapshot_to_historical
+
     sport_keys = sport_keys or [BASKETBALL_NBA, BASKETBALL_NCAAB]
     db_path = db_path or _db_path()
     result: dict[str, pd.DataFrame] = {}
@@ -265,7 +274,14 @@ def fetch_and_store(
         save_raw_to_sqlite(sport_key, raw, db_path=db_path)
         df = parse_raw_to_dataframe(raw)
         save_dataframe_to_sqlite(df, sport_key, db_path=db_path)
-        append_odds_snapshot(sport_key, df, db_path=db_path)
+        snapshot_at = datetime.now(timezone.utc).isoformat()
+        append_odds_snapshot(sport_key, df, db_path=db_path, snapshot_at=snapshot_at)
+        if not df.empty and sport_key == BASKETBALL_NCAAB:
+            n = append_live_snapshot_to_historical(
+                sport_key, df, snapshot_at, db_path=db_path
+            )
+            if n > 0:
+                pass  # optional: log "Appended N NCAAB odds rows to historical_odds"
         result[sport_key] = df
     return result
 

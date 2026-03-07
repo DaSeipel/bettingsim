@@ -210,6 +210,50 @@ def fetch_ncaab_team_stats(seasons: list[int] | None = None) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _team_stats_from_games(games_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fallback: derive minimal team stats from game scores when Sports Reference has no data.
+    Per (league, season, team): pts_for, pts_against, poss_est -> offensive_rating, defensive_rating, pace (league default).
+    """
+    if games_df.empty or "home_score" not in games_df.columns or "away_score" not in games_df.columns:
+        return pd.DataFrame()
+    g = games_df.copy()
+    if "season" not in g.columns and "game_date" in g.columns:
+        g["season"] = g["game_date"].apply(_game_season_from_date)
+    if "season" not in g.columns:
+        return pd.DataFrame()
+    rows = []
+    for (league, season), grp in g.groupby(["league", "season"]):
+        league = str(league).strip().lower()
+        season = int(season) if pd.notna(season) else None
+        if season is None:
+            continue
+        pace_default = 100.0 if league == "nba" else 70.0
+        for _, r in grp.iterrows():
+            h_name = str(r.get("home_team_name", "")).strip()
+            a_name = str(r.get("away_team_name", "")).strip()
+            h_pts = _safe_float(r.get("home_score")) or 0
+            a_pts = _safe_float(r.get("away_score")) or 0
+            if h_name:
+                rows.append({"league": league, "season": season, "team_name": h_name, "pts_for": h_pts, "pts_against": a_pts, "pace": pace_default})
+            if a_name:
+                rows.append({"league": league, "season": season, "team_name": a_name, "pts_for": a_pts, "pts_against": h_pts, "pace": pace_default})
+    if not rows:
+        return pd.DataFrame()
+    tl = pd.DataFrame(rows)
+    agg = tl.groupby(["league", "season", "team_name"]).agg(
+        pts_for=("pts_for", "mean"),
+        pts_against=("pts_against", "mean"),
+        pace=("pace", "first"),
+    ).reset_index()
+    poss = agg["pace"]
+    agg["offensive_rating"] = 100.0 * agg["pts_for"] / poss
+    agg["defensive_rating"] = 100.0 * agg["pts_against"] / poss
+    for c in ["turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "true_shooting_pct", "free_throw_rate", "strength_of_schedule"]:
+        agg[c] = None
+    return agg[["league", "season", "team_name", "offensive_rating", "defensive_rating", "pace", "turnover_rate", "offensive_rebound_rate", "defensive_rebound_rate", "true_shooting_pct", "free_throw_rate", "strength_of_schedule"]]
+
+
 def fetch_all_team_stats(seasons: list[int] | None = None) -> pd.DataFrame:
     """Fetch NBA and NCAAB team stats for the last 5 seasons (default)."""
     seasons = seasons or _default_seasons()
@@ -516,33 +560,49 @@ def fetch_merge_and_save(
     seasons: list[int] | None = None,
     db_path: Path | None = None,
     name_mapping: dict[str, str] | None = None,
+    skip_advanced_analytics: bool = False,
+    skip_fetch_team_stats: bool = False,
+    max_games: int | None = None,
 ) -> pd.DataFrame:
     """
     Fetch NBA + NCAAB team stats, load games from SQLite, merge with name mapping, return merged games.
     Optionally save team_advanced_stats to SQLite (always) and merged games to a new table (optional).
+    When skip_advanced_analytics is True, skips nba_api/NCAAB rolling (faster; use when Sports Reference is down).
+    When skip_fetch_team_stats is True, skips Sports-Reference fetch and uses stats derived from games only.
+    When max_games is set, only process that many games (by game_date) for faster runs; still writes full table.
     """
     seasons = seasons or _default_seasons()
     db_path = db_path or _espn_db_path()
     name_mapping = name_mapping or TEAM_NAME_MAPPING
-    stats_df = fetch_all_team_stats(seasons)
-    if not stats_df.empty:
-        save_team_stats_to_sqlite(stats_df, db_path)
+    if skip_fetch_team_stats:
+        stats_df = pd.DataFrame()
+    else:
+        stats_df = fetch_all_team_stats(seasons)
     games_df = load_games_with_season(db_path)
     if games_df.empty:
         return games_df
+    if max_games is not None and max_games > 0 and len(games_df) > max_games:
+        games_df = games_df.sort_values("game_date", ascending=False).head(max_games).reset_index(drop=True)
+    if stats_df.empty:
+        stats_df = _team_stats_from_games(games_df)
+    if not stats_df.empty:
+        save_team_stats_to_sqlite(stats_df, db_path)
     stats_df = apply_opponent_adjustments(stats_df, games_df, name_mapping)
     merged = merge_games_with_team_stats(games_df, stats_df, name_mapping)
-    # Add rolling 10-game advanced analytics (NBA nba_api + NCAAB from games)
-    from .advanced_analytics import add_advanced_analytics_to_games
-    nba_seasons = [f"{y}-{str(y + 1)[-2:]}" for y in seasons]
-    merged = add_advanced_analytics_to_games(merged, nba_seasons=nba_seasons)
+    # Add rolling 10-game advanced analytics (NBA nba_api + NCAAB from games) unless skipped
+    if not skip_advanced_analytics:
+        from .advanced_analytics import add_advanced_analytics_to_games
+        nba_seasons = [f"{y}-{str(y + 1)[-2:]}" for y in seasons]
+        merged = add_advanced_analytics_to_games(merged, nba_seasons=nba_seasons)
     # Add momentum features (streak, ATS/O/U last 10, pt-diff trend last 5, home/road ATS season)
     from .momentum_features import merge_momentum_into_feature_matrix
     merged = merge_momentum_into_feature_matrix(merged, league_col="league")
     # Add line movement features (additive: line_move_direction, line_move_magnitude, line_move_velocity_6h, sharp_money_indicator)
     from .line_movement import merge_line_movement_into_feature_matrix
     merged = merge_line_movement_into_feature_matrix(merged, odds_db_path=None)
-    # Save full feature matrix to SQLite (all existing + line movement columns)
+    from .ncaab_march_context import merge_ncaab_march_seeds_into_feature_matrix
+    merged = merge_ncaab_march_seeds_into_feature_matrix(merged)
+    # Save full feature matrix to SQLite (all existing + line movement + NCAAB March seeds)
     if not merged.empty and db_path.exists():
         conn = sqlite3.connect(db_path)
         try:

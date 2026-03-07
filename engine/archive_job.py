@@ -163,7 +163,7 @@ def run_daily_archive(as_of_date: date | None = None) -> int:
             in_house_spread = in_house_spread_from_ratings(home_rating, away_rating)
             we_cover_favorite = "-" in selection
             fallback = model_prob_from_in_house_spread(in_house_spread, market_spread, we_cover_favorite)
-            model_prob, consensus_ok = consensus_spread(feature_row, market_spread, we_cover_favorite, in_house_spread, fallback)
+            model_prob, consensus_ok = consensus_spread(feature_row, market_spread, we_cover_favorite, in_house_spread, fallback, league=league)
             if not consensus_ok:
                 continue
         elif market_type == "h2h":
@@ -171,7 +171,7 @@ def run_daily_archive(as_of_date: date | None = None) -> int:
             away_rating = power_ratings.get(away_team, default_rating) - get_schedule_fatigue_penalty(away_team, as_of_date)
             selection_is_home = (str(selection).strip().lower() == str(home_team).strip().lower() or str(home_team).strip().lower() in str(selection).strip().lower())
             fallback = model_prob_from_ratings_moneyline(home_rating, away_rating, selection_is_home)
-            model_prob, consensus_ok = consensus_moneyline(feature_row, selection_is_home, home_rating, away_rating, fallback)
+            model_prob, consensus_ok = consensus_moneyline(feature_row, selection_is_home, home_rating, away_rating, fallback, league=league)
             if not consensus_ok:
                 continue
         else:

@@ -2,6 +2,7 @@
 from .strategies import (
     american_to_decimal,
     decimal_to_american,
+    implied_probability_fair_two_sided,
     kelly_fraction,
     is_value_bet,
     find_value_bets,
@@ -16,6 +17,7 @@ from .strategies import (
 __all__ = [
     "american_to_decimal",
     "decimal_to_american",
+    "implied_probability_fair_two_sided",
     "kelly_fraction",
     "is_value_bet",
     "find_value_bets",

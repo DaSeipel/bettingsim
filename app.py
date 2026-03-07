@@ -29,6 +29,7 @@ from strategies.strategies import (
     kelly_fraction,
     implied_probability,
     implied_probability_no_vig,
+    implied_probability_fair_two_sided,
     american_to_decimal,
     damp_probability,
     predict_nba_total,
@@ -483,7 +484,7 @@ def _potd_reason(
             pass
         # #endregion
         shap_reason = get_top_shap_reasoning(
-            feature_row, market, home_team=home, away_team=away, top_k=4
+            feature_row, market, home_team=home, away_team=away, top_k=4, league=league.strip().lower()
         )
         feat_reason = None
         if shap_reason:
@@ -637,6 +638,7 @@ POTD_CARD_CSS = """
 .vp-bet-type { background: rgba(76, 175, 80, 0.35); color: #a5d6a7; padding: 0.2rem 0.5rem; border-radius: 6px; font-weight: 600; }
 .vp-edge { color: #66bb6a; font-weight: 700; }
 .vp-odds { color: rgba(255,255,255,0.9); font-weight: 600; }
+.vp-underdog-value { background: rgba(255, 193, 7, 0.3); color: #ffc107; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; }
 .vp-march-context { font-size: 0.75rem; color: #ffb74d; margin-top: 0.35rem; }
 .vp-confidence-wrap { margin-top: 0.5rem; }
 .vp-confidence-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
@@ -792,6 +794,7 @@ def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> 
     odds_str = format_american(row.get("Odds", 0))
     bar_pct = min(100.0, max(0.0, (edge_pct / edge_max_pct) * 100.0))
     reasoning = _html_escape(_value_play_reasoning(row))
+    underdog_badge = '<span class="vp-underdog-value">Underdog value</span>' if row.get("underdog_value") else ""
     march_line = ""
     if league == "NCAAB":
         march_badges = _march_context_badges(row)
@@ -805,6 +808,7 @@ def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> 
             <span class="vp-bet-type">{bet_type}</span>
             <span class="vp-edge">{edge_pct:.1f}% edge</span>
             <span class="vp-odds">{odds_str}</span>
+            {underdog_badge}
         </div>
         {march_line}
         <div class="vp-confidence-wrap">
@@ -1062,6 +1066,18 @@ def _aggregate_odds_best_line_avg_implied(odds_df: pd.DataFrame) -> pd.DataFrame
         avg_implied_prob=("odds", _mean_implied),
         bookmaker_count=("odds", "count"),
     ).reset_index()
+    # Standard two-outcome vig removal: normalize both sides so they sum to 100%
+    agg["fair_implied_prob"] = agg["avg_implied_prob"].copy()
+    spread_mask = agg["market_type"].astype(str).str.strip().str.lower() == "spreads"
+    if spread_mask.any():
+        spread_df = agg.loc[spread_mask]
+        for (eid, league, ct, mt), g in spread_df.groupby(["event_id", "league", "commence_time", "market_type"]):
+            if len(g) == 2:
+                idx = g.index.tolist()
+                o1, o2 = float(agg.loc[idx[0], "odds"]), float(agg.loc[idx[1], "odds"])
+                f1, f2 = implied_probability_fair_two_sided(o1, o2)
+                agg.loc[idx[0], "fair_implied_prob"] = f1
+                agg.loc[idx[1], "fair_implied_prob"] = f2
     return agg
 
 
@@ -1145,7 +1161,7 @@ def _live_odds_to_value_plays(
             we_cover_favorite = "-" in selection
             fallback = model_prob_from_in_house_spread(in_house_spread, market_spread, we_cover_favorite)
             model_prob, consensus_ok = consensus_spread(
-                feature_row, market_spread, we_cover_favorite, in_house_spread, fallback
+                feature_row, market_spread, we_cover_favorite, in_house_spread, fallback, league=league_lookup
             )
             if not consensus_ok:
                 continue
@@ -1159,7 +1175,7 @@ def _live_odds_to_value_plays(
             )
             fallback = model_prob_from_ratings_moneyline(home_rating, away_rating, selection_is_home)
             model_prob, consensus_ok = consensus_moneyline(
-                feature_row, selection_is_home, home_rating, away_rating, fallback
+                feature_row, selection_is_home, home_rating, away_rating, fallback, league=league_lookup
             )
             if not consensus_ok:
                 continue
@@ -1168,8 +1184,16 @@ def _live_odds_to_value_plays(
             edge = np.random.uniform(0, 0.08)
             model_prob = damp_probability(min(0.92, implied + edge))
 
-        # Edge at best line; compare model to average implied across bookmakers when available
-        implied_prob = float(r.get("avg_implied_prob")) if r.get("avg_implied_prob") is not None and not pd.isna(r.get("avg_implied_prob")) else implied_probability_no_vig(odds_val)
+        # Edge at best line; use fair implied (two-sided vig removal) when available, else avg or single-outcome no-vig
+        implied_prob = r.get("fair_implied_prob")
+        if implied_prob is None or pd.isna(implied_prob):
+            implied_prob = r.get("avg_implied_prob")
+        if implied_prob is None or pd.isna(implied_prob):
+            implied_prob = implied_probability_no_vig(odds_val)
+        implied_prob = float(implied_prob)
+        # Underdog value: model thinks underdog covers more often than market implies (sharp target)
+        is_underdog_side = market_type == "spreads" and "+" in selection
+        underdog_value = is_underdog_side and (model_prob > implied_prob)
         ev_decimal = (model_prob * american_to_decimal(odds_val)) - 1.0
         ev_pct = ev_decimal * 100.0
         line_for_key = float(point) if point is not None else 0.0
@@ -1203,6 +1227,7 @@ def _live_odds_to_value_plays(
             "away_team": away_team,
             "is_home_b2b": is_home_b2b,
             "is_away_b2b": is_away_b2b,
+            "underdog_value": underdog_value,
         })
     return pd.DataFrame(rows), n_flagged
 

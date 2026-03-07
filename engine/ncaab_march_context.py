@@ -2,6 +2,9 @@
 NCAAB late-season and conference tournament context features for March betting.
 Flags: conference tournament game, seeds, days since last tournament game,
 clinched NCAA bid (reduced motivation), bubble team (increased desperation).
+
+CSV data (maintain from free bracket/seed sources): data/ncaab_seeds.csv (team, seed),
+data/ncaab_clinched_bid.csv, data/ncaab_bubble_teams.csv.
 """
 
 from __future__ import annotations
@@ -197,4 +200,56 @@ def add_ncaab_march_context_to_df(
         )
         for k, v in ctx.items():
             out.at[idx, k] = v
+    return out
+
+
+def merge_ncaab_march_seeds_into_feature_matrix(
+    df: pd.DataFrame,
+    league_col: str = "league",
+    home_col: str = "home_team_name",
+    away_col: str = "away_team_name",
+    date_col: str = "game_date",
+) -> pd.DataFrame:
+    """
+    Add home_seed, away_seed (and other March context) to NCAAB rows in games_with_team_stats-style DataFrame.
+    For rows where league is ncaab and game_date is in March, look up seeds from ncaab_seeds.csv.
+    Other columns (is_conference_tournament, clinched, bubble) are also set when applicable.
+    """
+    if df.empty or league_col not in df.columns or home_col not in df.columns or away_col not in df.columns:
+        return df
+    ncaab_mask = df[league_col].astype(str).str.strip().str.lower() == "ncaab"
+    if not ncaab_mask.any():
+        return df
+    out = df.copy()
+    for col in [
+        "home_seed", "away_seed", "is_conference_tournament",
+        "home_clinched_ncaa_bid", "away_clinched_ncaa_bid",
+        "home_is_bubble_team", "away_is_bubble_team",
+    ]:
+        if col not in out.columns:
+            out[col] = None
+    date_ser = out[date_col] if date_col in out.columns else None
+    for idx in out.index:
+        if not ncaab_mask.loc[idx]:
+            continue
+        try:
+            gd = date_ser.loc[idx] if date_ser is not None else None
+            if gd is not None and pd.notna(gd):
+                gd_str = str(gd)[:10]
+                if len(gd_str) >= 10 and gd_str[5:7] != "03":
+                    continue
+                commence = f"{gd_str}T12:00:00" if gd_str else None
+            else:
+                commence = None
+            ctx = get_ncaab_march_context(
+                "",
+                out.at[idx, home_col],
+                out.at[idx, away_col],
+                commence,
+            )
+            for k, v in ctx.items():
+                if k in out.columns:
+                    out.at[idx, k] = v
+        except Exception:
+            continue
     return out

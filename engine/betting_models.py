@@ -27,6 +27,7 @@ TOTALS_FEATURE_COLUMNS = [
     "home_ts_pct_roll10", "away_ts_pct_roll10",
 ]
 # Spreads: defensive ratings, situational spots, and momentum (heavily weighted by sharp bettors).
+# home_is_favorite included for SHAP bias audit; remove and retrain if it has disproportionate importance.
 SPREAD_FEATURE_COLUMNS = [
     "home_defensive_rating", "away_defensive_rating",
     "home_offensive_rating", "away_offensive_rating",
@@ -43,7 +44,21 @@ SPREAD_FEATURE_COLUMNS = [
     "home_ats_pct_home_season", "home_ats_pct_road_season",
     "away_ats_pct_home_season", "away_ats_pct_road_season",
     "line_move_direction", "line_move_magnitude", "sharp_money_indicator",
+    "home_is_favorite",
 ]
+# NCAAB spread: same as SPREAD_FEATURE_COLUMNS plus seed columns when available (March context).
+NCAAB_SPREAD_FEATURE_COLUMNS = SPREAD_FEATURE_COLUMNS + ["home_seed", "away_seed"]
+
+# NCAAB spread trained only on games with KenPom stats + closing line: KenPom + situational.
+NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS = [
+    "home_ADJOE", "away_ADJOE", "home_ADJDE", "away_ADJDE",
+    "home_BARTHAG", "away_BARTHAG",
+    "home_EFG_O", "away_EFG_O", "home_EFG_D", "away_EFG_D",
+    "home_TOR", "away_TOR", "home_ORB", "away_ORB",
+    "home_ADJ_T", "away_ADJ_T", "home_SEED", "away_SEED",
+    "home_days_rest", "away_days_rest", "home_is_b2b", "away_is_b2b",
+]
+
 # Moneylines: power-style and situational.
 MONEYLINE_FEATURE_COLUMNS = [
     "home_offensive_rating", "away_offensive_rating",
@@ -60,6 +75,9 @@ MODELS_DIR = Path(__file__).resolve().parent.parent / "data" / "models"
 SPREAD_MODEL_PATH = MODELS_DIR / "xgboost_spread.pkl"
 TOTALS_MODEL_PATH = MODELS_DIR / "xgboost_totals.pkl"
 MONEYLINE_MODEL_PATH = MODELS_DIR / "xgboost_moneyline.pkl"
+SPREAD_MODEL_PATH_NCAAB = MODELS_DIR / "xgboost_spread_ncaab.pkl"
+TOTALS_MODEL_PATH_NCAAB = MODELS_DIR / "xgboost_totals_ncaab.pkl"
+MONEYLINE_MODEL_PATH_NCAAB = MODELS_DIR / "xgboost_moneyline_ncaab.pkl"
 METRICS_PATH = MODELS_DIR / "metrics.json"
 
 
@@ -123,6 +141,13 @@ def get_training_data(
                 df = df.loc[:, ~df.columns.duplicated()]
         except Exception:
             pass
+    # Favorite flag for spread model (proxy: home has higher offensive rating). Used for SHAP bias audit.
+    if "home_offensive_rating" in df.columns and "away_offensive_rating" in df.columns:
+        df["home_is_favorite"] = (
+            (df["home_offensive_rating"].fillna(0) - df["away_offensive_rating"].fillna(0)) > 0
+        ).astype(int)
+    else:
+        df["home_is_favorite"] = 0
     return df, df, df
 
 
@@ -131,15 +156,20 @@ def train_spread_model(
     test_size: float = 0.2,
     random_state: int = 42,
     db_path: Optional[Path] = None,
+    spread_features: Optional[list[str]] = None,
+    model_path: Optional[Path] = None,
 ) -> dict[str, float]:
-    """Train XGBoost regressor to predict margin (home - away). Evaluate with MAE and R². Returns metrics."""
+    """Train XGBoost regressor to predict margin (home - away). Evaluate with MAE and R². Returns metrics.
+    If spread_features is provided, use it instead of SPREAD_FEATURE_COLUMNS (e.g. to debias by removing home_is_favorite).
+    If model_path is provided, save there; else SPREAD_MODEL_PATH."""
     try:
         import xgboost as xgb
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import mean_absolute_error, r2_score
     except ImportError:
         return {}
-    X, used = _select_features(df, SPREAD_FEATURE_COLUMNS)
+    cols = spread_features if spread_features is not None else SPREAD_FEATURE_COLUMNS
+    X, used = _select_features(df, cols)
     if X.empty or "margin" not in df.columns:
         return {}
     y = df["margin"].astype(float)
@@ -150,7 +180,8 @@ def train_spread_model(
     mae = mean_absolute_error(y_test, pred)
     r2 = r2_score(y_test, pred)
     _ensure_models_dir()
-    with open(SPREAD_MODEL_PATH, "wb") as f:
+    out_path = model_path or SPREAD_MODEL_PATH
+    with open(out_path, "wb") as f:
         pickle.dump({"model": model, "feature_columns": used}, f)
     return {"spread_mae": round(mae, 4), "spread_r2": round(r2, 4), "spread_n_features": len(used)}
 
@@ -160,8 +191,9 @@ def train_totals_model(
     test_size: float = 0.2,
     random_state: int = 42,
     db_path: Optional[Path] = None,
+    model_path: Optional[Path] = None,
 ) -> dict[str, float]:
-    """Train XGBoost regressor to predict total_pts. Returns metrics."""
+    """Train XGBoost regressor to predict total_pts. Returns metrics. If model_path given, save there."""
     try:
         import xgboost as xgb
         from sklearn.model_selection import train_test_split
@@ -179,7 +211,8 @@ def train_totals_model(
     mae = mean_absolute_error(y_test, pred)
     r2 = r2_score(y_test, pred)
     _ensure_models_dir()
-    with open(TOTALS_MODEL_PATH, "wb") as f:
+    out_path = model_path or TOTALS_MODEL_PATH
+    with open(out_path, "wb") as f:
         pickle.dump({"model": model, "feature_columns": used}, f)
     return {"totals_mae": round(mae, 4), "totals_r2": round(r2, 4), "totals_n_features": len(used)}
 
@@ -189,8 +222,9 @@ def train_moneyline_model(
     test_size: float = 0.2,
     random_state: int = 42,
     db_path: Optional[Path] = None,
+    model_path: Optional[Path] = None,
 ) -> dict[str, float]:
-    """Train XGBoost classifier for home_win (0/1). Returns metrics (accuracy, log_loss)."""
+    """Train XGBoost classifier for home_win (0/1). Returns metrics (accuracy, log_loss). If model_path given, save there."""
     try:
         import xgboost as xgb
         from sklearn.model_selection import train_test_split
@@ -209,9 +243,35 @@ def train_moneyline_model(
     acc = accuracy_score(y_test, pred_label)
     ll = log_loss(y_test, pred_proba)
     _ensure_models_dir()
-    with open(MONEYLINE_MODEL_PATH, "wb") as f:
+    out_path = model_path or MONEYLINE_MODEL_PATH
+    with open(out_path, "wb") as f:
         pickle.dump({"model": model, "feature_columns": used}, f)
     return {"moneyline_accuracy": round(acc, 4), "moneyline_log_loss": round(ll, 4), "moneyline_n_features": len(used)}
+
+
+def _spread_shap_favorite_rank(payload: dict, df: pd.DataFrame) -> Optional[int]:
+    """Return 1-based rank of home_is_favorite by mean |SHAP| (1 = most important). None if not computable."""
+    try:
+        import shap
+    except ImportError:
+        return None
+    model = payload.get("model")
+    used = payload.get("feature_columns") or []
+    if model is None or "home_is_favorite" not in used:
+        return None
+    X, _ = _select_features(df, used)
+    if X.empty or len(X) > 500:
+        X = X.head(500)  # limit for speed
+    if X.empty:
+        return None
+    explainer = shap.TreeExplainer(model)
+    sv = explainer.shap_values(X)
+    if isinstance(sv, list):
+        sv = sv[0] if len(sv) else sv
+    mean_abs = np.abs(sv).mean(axis=0)
+    idx = used.index("home_is_favorite")
+    rank = int((mean_abs >= mean_abs[idx]).sum())
+    return rank
 
 
 def train_all_models(
@@ -219,18 +279,60 @@ def train_all_models(
     league: Optional[str] = None,
     test_size: float = 0.2,
     random_state: int = 42,
+    debias_spread_if_favorite_dominant: bool = True,
 ) -> dict[str, float]:
-    """Load training data, train all three models, save metrics. Returns combined metrics dict."""
+    """Load training data, train all three models, save metrics. Returns combined metrics dict.
+    If debias_spread_if_favorite_dominant, after training the spread model we run SHAP; if home_is_favorite
+    is in the top 3 by importance we retrain the spread model without it."""
     df, _, _ = get_training_data(db_path=db_path, league=league, merge_situational=True)
     if df.empty or len(df) < 50:
         return {}
     metrics = {}
     metrics.update(train_spread_model(df, test_size=test_size, random_state=random_state))
+    if debias_spread_if_favorite_dominant:
+        payload = load_model(SPREAD_MODEL_PATH)
+        if payload:
+            rank = _spread_shap_favorite_rank(payload, df)
+            if rank is not None and rank <= 3:
+                spread_without_fav = [c for c in SPREAD_FEATURE_COLUMNS if c != "home_is_favorite"]
+                metrics.update(
+                    train_spread_model(
+                        df, test_size=test_size, random_state=random_state, spread_features=spread_without_fav
+                    )
+                )
     metrics.update(train_totals_model(df, test_size=test_size, random_state=random_state))
     metrics.update(train_moneyline_model(df, test_size=test_size, random_state=random_state))
     _ensure_models_dir()
     with open(METRICS_PATH, "w") as f:
         json.dump(metrics, f, indent=2)
+    return metrics
+
+
+def train_ncaab_models(
+    db_path: Optional[Path] = None,
+    test_size: float = 0.2,
+    random_state: int = 42,
+) -> dict[str, float]:
+    """Train spread, totals, and moneyline models on NCAAB only; save to *_ncaab.pkl paths."""
+    df, _, _ = get_training_data(db_path=db_path, league="ncaab", merge_situational=True)
+    if df.empty or len(df) < 50:
+        return {}
+    metrics = {}
+    metrics.update(
+        train_spread_model(
+            df,
+            test_size=test_size,
+            random_state=random_state,
+            model_path=SPREAD_MODEL_PATH_NCAAB,
+            spread_features=NCAAB_SPREAD_FEATURE_COLUMNS,
+        )
+    )
+    metrics.update(
+        train_totals_model(df, test_size=test_size, random_state=random_state, model_path=TOTALS_MODEL_PATH_NCAAB)
+    )
+    metrics.update(
+        train_moneyline_model(df, test_size=test_size, random_state=random_state, model_path=MONEYLINE_MODEL_PATH_NCAAB)
+    )
     return metrics
 
 
@@ -245,18 +347,40 @@ def load_model(path: Path) -> Optional[dict]:
         return None
 
 
+def _spread_model_path_for_league(league: Optional[str]) -> Path:
+    """Return NCAAB spread model path when league is ncaab and file exists; else default."""
+    if str(league or "").strip().lower() == "ncaab" and SPREAD_MODEL_PATH_NCAAB.exists():
+        return SPREAD_MODEL_PATH_NCAAB
+    return SPREAD_MODEL_PATH
+
+
+def _totals_model_path_for_league(league: Optional[str]) -> Path:
+    if str(league or "").strip().lower() == "ncaab" and TOTALS_MODEL_PATH_NCAAB.exists():
+        return TOTALS_MODEL_PATH_NCAAB
+    return TOTALS_MODEL_PATH
+
+
+def _moneyline_model_path_for_league(league: Optional[str]) -> Path:
+    if str(league or "").strip().lower() == "ncaab" and MONEYLINE_MODEL_PATH_NCAAB.exists():
+        return MONEYLINE_MODEL_PATH_NCAAB
+    return MONEYLINE_MODEL_PATH
+
+
 def predict_spread_prob(
     row: pd.Series,
     market_spread: float,
     we_cover_favorite: bool,
     fallback_prob: Optional[float] = None,
+    league: Optional[str] = None,
 ) -> float:
     """
     Predict P(cover) for the spread. market_spread is home spread (e.g. -3.5).
     we_cover_favorite True = we're on the favorite (home/away favored).
-    Uses loaded XGBoost spread model if available; else returns fallback_prob or 0.5.
+    Uses loaded XGBoost spread model if available; when league is ncaab, uses NCAAB model if present.
+    NCAAB model may include calibration_shift_fav/calibration_shift_dog; applied so favorites and underdogs average ~50%.
     """
-    payload = load_model(SPREAD_MODEL_PATH)
+    path = _spread_model_path_for_league(league)
+    payload = load_model(path)
     if payload is None:
         return fallback_prob if fallback_prob is not None else 0.5
     model = payload["model"]
@@ -267,17 +391,22 @@ def predict_spread_prob(
     pred_margin = float(model.predict(X)[0])
     # P(home covers market_spread) = P(margin > market_spread). Approximate with sigmoid.
     diff = pred_margin - market_spread
-    # Home covers if margin > market_spread. So prob = 1 / (1 + exp(-k*diff)), k~0.3
     k = 0.35
     prob_home_cover = 1.0 / (1.0 + np.exp(-k * diff))
+    # Which side we're on: favorite vs underdog (for NCAAB calibration)
+    home_favored = market_spread <= 0
     if we_cover_favorite:
-        # Favorite: home favored when market_spread < 0, away when market_spread > 0. We're on favorite.
-        if market_spread <= 0:
-            return float(np.clip(prob_home_cover, 0.02, 0.98))
-        return float(np.clip(1.0 - prob_home_cover, 0.02, 0.98))
-    if market_spread <= 0:
-        return float(np.clip(1.0 - prob_home_cover, 0.02, 0.98))
-    return float(np.clip(prob_home_cover, 0.02, 0.98))
+        raw = prob_home_cover if home_favored else (1.0 - prob_home_cover)
+        is_favorite = True
+    else:
+        raw = (1.0 - prob_home_cover) if home_favored else prob_home_cover
+        is_favorite = False
+    # Apply NCAAB calibration if present (shifts so avg fav and avg dog are 50%)
+    shift_fav = payload.get("calibration_shift_fav")
+    shift_dog = payload.get("calibration_shift_dog")
+    if shift_fav is not None and shift_dog is not None:
+        raw = raw + (float(shift_fav) if is_favorite else float(shift_dog))
+    return float(np.clip(raw, 0.02, 0.98))
 
 
 def predict_totals_prob(
@@ -285,9 +414,11 @@ def predict_totals_prob(
     market_total: float,
     prefer_over: bool,
     fallback_prob: Optional[float] = None,
+    league: Optional[str] = None,
 ) -> float:
-    """Predict P(over) or P(under) from totals model. prefer_over True = Over."""
-    payload = load_model(TOTALS_MODEL_PATH)
+    """Predict P(over) or P(under) from totals model. prefer_over True = Over. Uses NCAAB model when league is ncaab."""
+    path = _totals_model_path_for_league(league)
+    payload = load_model(path)
     if payload is None:
         return fallback_prob if fallback_prob is not None else 0.5
     model = payload["model"]
@@ -308,9 +439,11 @@ def predict_moneyline_prob(
     row: pd.Series,
     selection_is_home: bool,
     fallback_prob: Optional[float] = None,
+    league: Optional[str] = None,
 ) -> float:
-    """Predict P(selection wins). selection_is_home True = home team."""
-    payload = load_model(MONEYLINE_MODEL_PATH)
+    """Predict P(selection wins). selection_is_home True = home team. Uses NCAAB model when league is ncaab."""
+    path = _moneyline_model_path_for_league(league)
+    payload = load_model(path)
     if payload is None:
         return fallback_prob if fallback_prob is not None else 0.5
     model = payload["model"]
@@ -329,11 +462,14 @@ NBA_LEAGUE_AVG_TOTAL = 220.0
 NCAAB_LEAGUE_AVG_TOTAL = 140.0
 
 
-def _spread_direction_home_cover(row: Optional[pd.Series], market_spread: float) -> Optional[bool]:
-    """True if model says home covers. None if model unavailable."""
+def _spread_direction_home_cover(
+    row: Optional[pd.Series], market_spread: float, league: Optional[str] = None
+) -> Optional[bool]:
+    """True if model says home covers. None if model unavailable. Uses NCAAB model when league is ncaab."""
     if row is None:
         return None
-    payload = load_model(SPREAD_MODEL_PATH)
+    path = _spread_model_path_for_league(league)
+    payload = load_model(path)
     if payload is None:
         return None
     model = payload["model"]
@@ -347,11 +483,12 @@ def _spread_direction_home_cover(row: Optional[pd.Series], market_spread: float)
     return prob_home_cover > 0.5
 
 
-def _moneyline_direction_home(row: Optional[pd.Series]) -> Optional[bool]:
-    """True if model says home wins. None if model unavailable."""
+def _moneyline_direction_home(row: Optional[pd.Series], league: Optional[str] = None) -> Optional[bool]:
+    """True if model says home wins. None if model unavailable. Uses NCAAB model when league is ncaab."""
     if row is None:
         return None
-    payload = load_model(MONEYLINE_MODEL_PATH)
+    path = _moneyline_model_path_for_league(league)
+    payload = load_model(path)
     if payload is None:
         return None
     model = payload["model"]
@@ -363,11 +500,14 @@ def _moneyline_direction_home(row: Optional[pd.Series]) -> Optional[bool]:
     return prob_home > 0.5
 
 
-def _totals_direction_over(row: Optional[pd.Series], market_total: float) -> Optional[bool]:
-    """True if model says over. None if model unavailable."""
+def _totals_direction_over(
+    row: Optional[pd.Series], market_total: float, league: Optional[str] = None
+) -> Optional[bool]:
+    """True if model says over. None if model unavailable. Uses NCAAB model when league is ncaab."""
     if row is None:
         return None
-    payload = load_model(TOTALS_MODEL_PATH)
+    path = _totals_model_path_for_league(league)
+    payload = load_model(path)
     if payload is None:
         return None
     model = payload["model"]
@@ -385,16 +525,17 @@ def consensus_spread(
     we_cover_favorite: bool,
     in_house_spread: float,
     fallback_prob: float,
+    league: Optional[str] = None,
 ) -> tuple[float, bool]:
     """
     Return (model_prob, passes_consensus). Only pass when >= 2 of 3 sub-models agree on direction.
-    Sub-models: (1) XGBoost spread, (2) in-house spread, (3) XGBoost moneyline.
+    Sub-models: (1) XGBoost spread, (2) in-house spread, (3) XGBoost moneyline. Uses NCAAB models when league is ncaab.
     """
-    prob = predict_spread_prob(feature_row, market_spread, we_cover_favorite, fallback_prob=fallback_prob)
+    prob = predict_spread_prob(feature_row, market_spread, we_cover_favorite, fallback_prob=fallback_prob, league=league)
     recommended_home_cover = (we_cover_favorite and market_spread <= 0) or (not we_cover_favorite and market_spread > 0)
-    v1 = _spread_direction_home_cover(feature_row, market_spread)
+    v1 = _spread_direction_home_cover(feature_row, market_spread, league=league)
     v2 = in_house_spread > market_spread  # in-house likes home to cover when our line is higher than market
-    v3 = _moneyline_direction_home(feature_row)
+    v3 = _moneyline_direction_home(feature_row, league=league)
     votes = [v for v in (v1, v2, v3) if v is not None]
     if len(votes) < 2:
         return (prob, True)  # not enough models, don't suppress
@@ -414,8 +555,8 @@ def consensus_totals(
     Return (model_prob, passes_consensus). Only pass when >= 2 of 3 sub-models agree on over/under.
     Sub-models: (1) XGBoost totals, (2) in-house total, (3) league-avg lean (market low => lean over).
     """
-    prob = predict_totals_prob(feature_row, market_total, prefer_over, fallback_prob=fallback_prob)
-    v1 = _totals_direction_over(feature_row, market_total)
+    prob = predict_totals_prob(feature_row, market_total, prefer_over, fallback_prob=fallback_prob, league=league)
+    v1 = _totals_direction_over(feature_row, market_total, league=league)
     v2 = in_house_total > market_total
     league_avg = NBA_LEAGUE_AVG_TOTAL if str(league).strip().upper() == "NBA" else NCAAB_LEAGUE_AVG_TOTAL
     v3 = market_total < league_avg  # low total => lean over
@@ -433,17 +574,18 @@ def consensus_moneyline(
     home_rating: float,
     away_rating: float,
     fallback_prob: float,
+    league: Optional[str] = None,
 ) -> tuple[float, bool]:
     """
     Return (model_prob, passes_consensus). Only pass when >= 2 of 3 sub-models agree on home vs away.
-    Sub-models: (1) XGBoost moneyline, (2) in-house ratings, (3) XGBoost spread (home cover => home win lean).
+    Sub-models: (1) XGBoost moneyline, (2) in-house ratings, (3) XGBoost spread (home cover => home win lean). Uses NCAAB when league is ncaab.
     """
-    prob = predict_moneyline_prob(feature_row, selection_is_home, fallback_prob=fallback_prob)
+    prob = predict_moneyline_prob(feature_row, selection_is_home, fallback_prob=fallback_prob, league=league)
     in_house_spread = home_rating - away_rating
     recommended_home = selection_is_home
-    v1 = _moneyline_direction_home(feature_row)
+    v1 = _moneyline_direction_home(feature_row, league=league)
     v2 = in_house_spread > 0  # ratings favor home
-    v3 = _spread_direction_home_cover(feature_row, in_house_spread)  # use in_house_spread as proxy market
+    v3 = _spread_direction_home_cover(feature_row, in_house_spread, league=league)  # use in_house_spread as proxy market
     votes = [v for v in (v1, v2, v3) if v is not None]
     if len(votes) < 2:
         return (prob, True)
@@ -822,10 +964,11 @@ def get_top_shap_reasoning(
     home_team: str,
     away_team: str,
     top_k: int = 3,
+    league: Optional[str] = None,
 ) -> Optional[str]:
     """
     Pull top-k SHAP feature values for this prediction and build a unique sentence.
-    market: 'spreads' | 'totals' | 'h2h'. Returns None if SHAP unavailable (fall back to generic).
+    market: 'spreads' | 'totals' | 'h2h'. Uses NCAAB model when league is ncaab. Returns None if SHAP unavailable.
     """
     # #region agent log
     _shap_log_path = "/Users/robertseipel/Desktop/bettingsim/bettingsim/.cursor/debug-e8fe0d.log"
@@ -848,11 +991,11 @@ def get_top_shap_reasoning(
     model_path: Optional[Path] = None
     cols: list[str] = []
     if market == "spreads":
-        model_path, cols = SPREAD_MODEL_PATH, SPREAD_FEATURE_COLUMNS
+        model_path, cols = _spread_model_path_for_league(league), SPREAD_FEATURE_COLUMNS
     elif market == "totals":
-        model_path, cols = TOTALS_MODEL_PATH, TOTALS_FEATURE_COLUMNS
+        model_path, cols = _totals_model_path_for_league(league), TOTALS_FEATURE_COLUMNS
     elif market == "h2h":
-        model_path, cols = MONEYLINE_MODEL_PATH, MONEYLINE_FEATURE_COLUMNS
+        model_path, cols = _moneyline_model_path_for_league(league), MONEYLINE_FEATURE_COLUMNS
     else:
         _shap_dbg("return_none", {"reason": "unknown_market"})
         return None
