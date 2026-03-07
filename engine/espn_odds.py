@@ -365,12 +365,14 @@ def _ncaab_odds_from_scoreboard(
     now_utc: datetime,
     tz: ZoneInfo,
     use_tz_for_today: bool,
+    include_all_today: bool = False,
 ) -> list[dict]:
     """
     Fetch NCAAB events and odds using the site scoreboard endpoint (full daily slate).
     Parses home, away, commence time, and when present competitions[0].odds (spread, moneyline, total).
     When scoreboard has no odds for an event, fetches odds from core API for that event.
-    Filters to today (ET) and future games only.
+    If include_all_today=False, filters to today (ET) and future games only.
+    If include_all_today=True, includes all events for today (no future filter) for use as primary source.
     """
     league_slug = "mens-college-basketball"
     if _debug_espn_odds():
@@ -403,7 +405,7 @@ def _ncaab_odds_from_scoreboard(
             event_date_et = _event_date_in_tz(commence_time, tz) if use_tz_for_today else _parse_commence_date_utc(commence_time)
             if event_date_et is None or event_date_et != today:
                 continue
-            if not _is_future(commence_time, now_utc=now_utc):
+            if not include_all_today and not _is_future(commence_time, now_utc=now_utc):
                 continue
             comps = ev.get("competitions") or []
             if not comps:
@@ -430,13 +432,14 @@ def get_espn_live_odds(
     sport_keys: list[str] | None = None,
     display_timezone: str = "America/New_York",
     commence_on_date: date | None = None,
+    ncaab_include_all_today: bool = False,
 ) -> pd.DataFrame:
     """
     Fetch live odds from ESPN's free API for NBA and/or NCAAB.
     NCAAB uses the site scoreboard endpoint (full daily slate); NBA uses core events endpoint.
     Returns a DataFrame with the same columns as get_live_odds: sport_key, league, event_id,
     commence_time, home_team, away_team, event_name, market_type, selection, point, odds (American).
-    Only includes events for today (ET) and commence_time in the future.
+    Only includes events for today (ET) and commence_time in the future, unless ncaab_include_all_today=True.
     """
     sport_keys = sport_keys or [BASKETBALL_NBA, BASKETBALL_NCAAB]
     tz = ZoneInfo(display_timezone)
@@ -466,7 +469,8 @@ def get_espn_live_odds(
     for league_slug, sport_key, league in league_slugs:
         if league_slug == "mens-college-basketball":
             rows = _ncaab_odds_from_scoreboard(
-                session, sport_key, league, today, now_utc, tz, use_tz_for_today
+                session, sport_key, league, today, now_utc, tz, use_tz_for_today,
+                include_all_today=ncaab_include_all_today,
             )
             all_rows.extend(rows)
             continue

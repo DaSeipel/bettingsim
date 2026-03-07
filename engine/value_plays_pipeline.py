@@ -68,7 +68,7 @@ from strategies.strategies import (
 # Constants (mirror app.py)
 # -----------------------------------------------------------------------------
 LIVE_ODDS_SPORT_KEYS = [BASKETBALL_NCAAB]
-EV_EPSILON_MIN_PCT = 3.0
+EV_EPSILON_MIN_PCT = 2.0
 EV_EPSILON_MAX_PCT = 15.0
 MIN_BOOKMAKERS_VALUE_PLAY = 3
 HIGH_RISK_ODDS_AMERICAN = 500
@@ -78,9 +78,9 @@ POTD_LARGE_SPREAD_POINTS = 12.0
 POTD_LARGE_SPREAD_EDGE_PENALTY = 0.30
 ARCHIVE_MIN_EDGE_PCT = 6.0
 ARCHIVE_MAX_PLAYS_PER_DAY = 10
-# NCAAB spreads: require at least 3% edge; only show when 8 <= |line_error| <= 20 (filter out bad model predictions)
-NCAAB_SPREAD_MIN_EDGE_PCT = 3.0
-SPREAD_LINE_ERROR_MIN_PTS = 8.0
+# NCAAB: min edge 2%. Spreads only: require 3 <= |line_error| <= 20 (moneylines have no line error filter)
+NCAAB_SPREAD_MIN_EDGE_PCT = 2.0
+SPREAD_LINE_ERROR_MIN_PTS = 3.0
 SPREAD_LINE_ERROR_MAX_PTS = 20.0
 MAX_VALUE_PLAYS_CACHE = 10
 # Diversity cap: reserve slots for underdog vs favorite so dashboard shows a mix
@@ -89,6 +89,125 @@ DIVERSITY_FAVORITE_SLOTS = 5
 DIVERSITY_FLEX_SLOTS = 5
 MARKET_LABELS = {"h2h": "Winner", "spreads": "Spread", "totals": "Over/Under"}
 BANKROLL_FOR_STAKES = 1000.0
+
+# Mascot suffixes to strip for NCAAB game matching (ESPN vs Rundown)
+_NCAAB_CORE_SUFFIXES = (
+    " cyclones", " wildcats", " volunteers", " commodores", " bulldogs", " tigers", " crimson tide",
+    " tar heels", " blue devils", " jayhawks", " cardinals", " hurricanes", " seminoles",
+    " gators", " gamecocks", " razorbacks", " rebels", " aggies", " horned frogs", " sooners",
+    " longhorns", " red raiders", " cougars", " bearcats", " mountaineers", " buckeyes",
+    " wolverines", " spartans", " hoosiers", " boilermakers", " fighting illini", " hawkeyes",
+    " sun devils", " bruins", " trojans", " huskies", " shockers", " panthers", " orange",
+    " demon deacons", " eagles", " ramblers", " revolutionaries", " sharks", " seahawks",
+    " catamounts", " big green", " big red", " crimson", " highlanders", " wolfpack",
+    " mustangs", " miners", " owls", " bearkats", " flames", " hilltoppers", " roadrunners",
+    " mavericks", " lakers", " skyhawks", " spiders", " rams", " dukes", " bonnies",
+    " blue demons", " musketeers", " fighting irish", " yellow jackets", " blue hens",
+    " great danes", " river hawks", " retrievers", " explorers", " hawks", " billikens",
+    " patriots", " black bears", " lobos", " broncos", " golden bears", " pirates",
+    " paladins", " braves", " red foxes", " bobcats", " golden eagles", " mountaineers",
+    " lancers", " thunderbirds", " pilots", " dones", " chanticleers", " tritons",
+    " gauchos", " wolverines", " trailblazers", " hornets", " vandals", " falcons",
+    " wolf pack", " redhawks", " rainbow warriors", " beach",
+)
+
+
+def _ncaab_team_core(s: str) -> str:
+    """Normalize team name for matching: lowercase, strip, drop common mascot."""
+    if not s or not isinstance(s, str):
+        return ""
+    n = " ".join(s.lower().strip().split())
+    for suffix in _NCAAB_CORE_SUFFIXES:
+        if n.endswith(suffix):
+            n = n[: -len(suffix)].strip()
+            break
+    return n
+
+
+def _ncaab_game_key(away: str, home: str) -> tuple[str, str]:
+    """Canonical key for matching: (core_away, core_home)."""
+    return (_ncaab_team_core(away), _ncaab_team_core(home))
+
+
+def _get_ncaab_odds_espn_primary_rundown_supplement(
+    app_root: Path,
+    commence_on_date: date | None = None,
+) -> tuple[pd.DataFrame, dict]:
+    """
+    ESPN = primary NCAAB odds (full slate). Rundown = supplement; merge by team match.
+    Returns (combined_df, meta) with meta keys: ncaab_espn_games, ncaab_rundown_games, ncaab_merged_games, ncaab_odds_rows.
+    """
+    from engine.espn_odds import get_espn_live_odds
+    from engine.rundown_odds import get_rundown_live_odds
+
+    empty_df = pd.DataFrame(columns=[
+        "sport_key", "league", "event_id", "commence_time", "home_team", "away_team",
+        "event_name", "market_type", "selection", "point", "odds",
+    ])
+    meta: dict = {}
+
+    espn_df = get_espn_live_odds(
+        sport_keys=[BASKETBALL_NCAAB],
+        commence_on_date=commence_on_date,
+        ncaab_include_all_today=True,
+    )
+    if espn_df.empty:
+        espn_df = empty_df.copy()
+    elif "league" in espn_df.columns:
+        espn_df = espn_df[espn_df["league"].astype(str).str.strip().str.upper() == "NCAAB"].copy()
+    n_espn = espn_df["event_id"].nunique() if not espn_df.empty and "event_id" in espn_df.columns else 0
+    meta["ncaab_espn_games"] = n_espn
+    meta["ncaab_espn_rows"] = len(espn_df)
+
+    rundown_df = get_rundown_live_odds(
+        sport_keys=[BASKETBALL_NCAAB],
+        commence_on_date=commence_on_date,
+    )
+    if rundown_df.empty:
+        live_odds_df = espn_df
+        meta["ncaab_rundown_games"] = 0
+        meta["ncaab_rundown_rows"] = 0
+        meta["ncaab_merged_games"] = n_espn
+        meta["ncaab_odds_rows"] = len(espn_df)
+        return (live_odds_df, meta)
+
+    rundown_df = rundown_df[rundown_df["league"].astype(str).str.strip().str.upper() == "NCAAB"].copy()
+    n_rundown_raw = rundown_df["event_id"].nunique() if not rundown_df.empty else 0
+    meta["ncaab_rundown_games"] = n_rundown_raw
+    meta["ncaab_rundown_rows"] = len(rundown_df)
+
+    # Build ESPN canonical lookup: game_key -> first row's event_id, event_name, home_team, away_team, commence_time
+    espn_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for _, row in espn_df.drop_duplicates(subset=["event_id"]).iterrows():
+        key = _ncaab_game_key(str(row.get("away_team", "")), str(row.get("home_team", "")))
+        if key not in espn_lookup:
+            espn_lookup[key] = {
+                "event_id": row.get("event_id"),
+                "event_name": row.get("event_name"),
+                "home_team": row.get("home_team"),
+                "away_team": row.get("away_team"),
+                "commence_time": row.get("commence_time"),
+            }
+        # Also add reversed key (home/away swap) so we match regardless of order
+        key_rev = (key[1], key[0])
+        if key_rev not in espn_lookup:
+            espn_lookup[key_rev] = espn_lookup[key]
+
+    # Relabel Rundown rows with ESPN canonical when match found
+    def _canonical(row: pd.Series) -> dict[str, Any]:
+        key = _ncaab_game_key(str(row.get("away_team", "")), str(row.get("home_team", "")))
+        canonical = espn_lookup.get(key)
+        if canonical:
+            return {**row.to_dict(), **canonical}
+        return row.to_dict()
+
+    rundown_relabeled = pd.DataFrame([
+        _canonical(rundown_df.iloc[i]) for i in range(len(rundown_df))
+    ])
+    live_odds_df = pd.concat([espn_df, rundown_relabeled], ignore_index=True)
+    meta["ncaab_merged_games"] = live_odds_df["event_id"].nunique() if not live_odds_df.empty else 0
+    meta["ncaab_odds_rows"] = len(live_odds_df)
+    return (live_odds_df, meta)
 
 
 def _format_start_time(commence_time: str) -> str:
@@ -188,6 +307,9 @@ def _live_odds_to_value_plays(
             ),
             0,
         )
+    if verbose_stats is not None and "event_id" in odds_df.columns:
+        verbose_stats["ncaab_events_in_agg"] = odds_df["event_id"].nunique()
+        verbose_stats["ncaab_events_with_features_set"] = set()
     np.random.seed(seed)
     pace_stats = pace_stats or {}
     b2b_teams = b2b_teams or set()
@@ -236,6 +358,10 @@ def _live_odds_to_value_plays(
             feature_row = build_ncaab_feature_row_from_team_stats(
                 home_team, away_team, game_date=game_date_str
             )
+        if verbose_stats is not None and league_lookup == "ncaab" and feature_row is not None:
+            eid = r.get("event_id")
+            if eid is not None:
+                verbose_stats.setdefault("ncaab_events_with_features_set", set()).add(eid)
 
         model_prob = None
         consensus_ok = True
@@ -341,6 +467,14 @@ def _live_odds_to_value_plays(
         ev_pct = ev_decimal * 100.0
         line_for_key = float(point) if point is not None else 0.0
         ev_pct += key_number_value_adjustment(line_for_key, league, market_type)
+        if verbose_stats is not None and league_lookup == "ncaab" and market_type == "h2h":
+            verbose_stats.setdefault("ncaab_h2h_raw_edges", []).append({
+                "event": r.get("event_name", ""),
+                "selection": selection,
+                "model_prob": round(float(model_prob), 4),
+                "implied_prob": round(implied_prob, 4),
+                "raw_edge_pct": round(ev_pct, 2),
+            })
         if ev_pct < min_ev_pct:
             if verbose_stats is not None and market_type == "spreads" and league_lookup == "ncaab":
                 verbose_stats.setdefault("near_misses", []).append({
@@ -460,7 +594,7 @@ def select_play_of_the_day(
     live_odds_df: pd.DataFrame,
     min_edge_pct: float = POTD_MIN_EDGE_PCT,
 ) -> dict[str, Optional[dict]]:
-    """Select two NCAAB POTD picks. Pick 1 = highest edge moneyline. Pick 2 = highest edge spread (8–20 pt line error); if none, 2nd moneyline."""
+    """Select two NCAAB POTD picks. Pick 1 = highest edge moneyline. Pick 2 = highest edge spread (3–20 pt line error); if none, 2nd moneyline."""
     result: dict[str, Optional[dict]] = {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
     if value_plays_df.empty or "League" not in value_plays_df.columns:
         return result
@@ -621,6 +755,32 @@ def _json_sanitize(obj: Any) -> Any:
     return obj
 
 
+def _print_verbose_ncaab_h2h_edges(verbose_stats: dict) -> None:
+    """Print raw edge for every NCAAB moneyline (h2h) before any threshold filtering. Highlight Vandy/Tennessee and Texas Tech/BYU."""
+    edges = verbose_stats.get("ncaab_h2h_raw_edges", [])
+    if not edges:
+        print("\n--- NCAAB moneyline (h2h) raw edges: none in today's data ---")
+        return
+    print("\n--- NCAAB moneyline (h2h) raw edge calculations (before 2% threshold) ---")
+    print(f"{'Event':<45} | {'Selection':<28} | {'model_prob':>10} | {'implied_prob':>12} | {'raw_edge_%':>10}")
+    print("-" * 115)
+    for rec in edges:
+        evt = (rec.get("event") or "")[:45]
+        sel = (rec.get("selection") or "")[:28]
+        mp = rec.get("model_prob", 0)
+        ip = rec.get("implied_prob", 0)
+        edge = rec.get("raw_edge_pct", 0)
+        print(f"  {evt:<45} | {sel:<28} | {mp:>10.4f} | {ip:>12.4f} | {edge:>+9.2f}%")
+    # Highlight Vanderbilt @ Tennessee and Texas Tech vs BYU
+    evt_lower = [((rec.get("event") or "").lower(), rec) for rec in edges]
+    for evt_str, rec in evt_lower:
+        if "vanderbilt" in evt_str and "tennessee" in evt_str:
+            print(f"\n  >>> Vanderbilt @ Tennessee: {rec.get('selection')}  model_prob={rec.get('model_prob')}  implied_prob={rec.get('implied_prob')}  raw_edge_%={rec.get('raw_edge_pct')}%")
+        if "texas tech" in evt_str and "byu" in evt_str:
+            print(f"  >>> Texas Tech vs BYU: {rec.get('selection')}  model_prob={rec.get('model_prob')}  implied_prob={rec.get('implied_prob')}  raw_edge_%={rec.get('raw_edge_pct')}%")
+    print("---\n")
+
+
 def _print_verbose_spread_stats(verbose_stats: dict) -> None:
     """Print NCAAB spread considered/passed, top 5 near-misses, and line errors for every spread."""
     considered = verbose_stats.get("ncaab_spread_considered", 0)
@@ -652,6 +812,12 @@ def _print_verbose_spread_stats(verbose_stats: dict) -> None:
             le_str = f"{le:+.2f}" if le is not None else "N/A"
             print(f"  {e.get('event', '')[:40]}  |  {e.get('selection', '')} {e.get('point', 0):+.1f}  |  pred_margin={e.get('pred_margin')}  |  line_error={le_str} pts")
         print(f"\nGames with |line_error| > 3 pts: {len(above_3)}")
+        alabama_75 = [e for e in all_err if "alabama" in (e.get("event") or "").lower() and (e.get("selection") or "").strip() == "Alabama" and e.get("point") == -7.5]
+        if alabama_75:
+            e = alabama_75[0]
+            le = e.get("line_error")
+            le_str = f"{le:+.2f} pts" if le is not None else "N/A"
+            print(f"\n--- Alabama -7.5 (from spread line errors) ---  line_error = {le_str}  |  pred_margin = {e.get('pred_margin')} ---")
         # Top 5 spread plays today by |line_error| (largest disagreement with market first)
         with_abs = [(e, abs(e["line_error"]) if e.get("line_error") is not None else 0.0) for e in all_err]
         with_abs.sort(key=lambda x: x[1], reverse=True)
@@ -671,7 +837,101 @@ def _print_verbose_spread_stats(verbose_stats: dict) -> None:
         for k in sorted(kp.keys()):
             print(f"  {k}: {kp[k]}")
         print("---")
-    print(f"\n>>> NCAAB spread plays passed (>= {NCAAB_SPREAD_MIN_EDGE_PCT}% edge): {passed} <<<\n")
+        print(f"\n>>> NCAAB spread plays passed (>= {NCAAB_SPREAD_MIN_EDGE_PCT}% edge): {passed} <<<\n")
+
+
+def _print_verbose_auburn_alabama(
+    live_odds_df: pd.DataFrame,
+    verbose_stats: dict,
+) -> None:
+    """Print (1) Is Auburn @ Alabama in the 25 after future filter? (2) If yes: pred margin, closing spread, line error. (3) Exact exclusion reason."""
+    if live_odds_df.empty or "event_name" not in live_odds_df.columns or "league" not in live_odds_df.columns:
+        return
+    ncaab = live_odds_df["league"].astype(str).str.strip().str.upper() == "NCAAB"
+    sub = live_odds_df.loc[ncaab]
+    if sub.empty:
+        return
+    event_names = sub["event_name"].astype(str).str.strip().drop_duplicates()
+    auburn_alabama_events = [
+        e for e in event_names
+        if "auburn" in e.lower() and "alabama" in e.lower()
+    ]
+    in_future_25 = bool(auburn_alabama_events)
+    event_str = auburn_alabama_events[0] if auburn_alabama_events else ""
+
+    print("\n--- Auburn @ Alabama (requested debug) ---")
+    print(f"  (1) Is Auburn @ Alabama in the games that pass the future filter?  {'Yes' if in_future_25 else 'No'}")
+    if not in_future_25:
+        print("  (2) N/A — game not in the 25.")
+        print("  (3) N/A.")
+        print("---\n")
+        return
+
+    all_err = verbose_stats.get("all_spread_line_errors", [])
+    spread_rows = [
+        e for e in all_err
+        if "auburn" in (e.get("event") or "").lower() and "alabama" in (e.get("event") or "").lower()
+    ]
+    with_features = spread_rows and any(
+        e.get("pred_margin") is not None or e.get("line_error") is not None
+        for e in spread_rows
+    )
+    # Prefer a row that has pred_margin/line_error
+    row = None
+    for e in spread_rows:
+        if e.get("pred_margin") is not None or e.get("line_error") is not None:
+            row = e
+            break
+    if row is None and spread_rows:
+        row = spread_rows[0]
+
+    if row is not None:
+        pred = row.get("pred_margin")
+        spread_val = row.get("market_spread")
+        le = row.get("line_error")
+        print(f"  (2) Event: {event_str}")
+        print(f"      Predicted margin: {pred if pred is not None else 'N/A'}")
+        print(f"      Closing spread (home): {spread_val if spread_val is not None else 'N/A'}")
+        print(f"      Line error (pts): {le if le is not None else 'N/A'}")
+    else:
+        print(f"  (2) Event: {event_str}")
+        print(f"      Predicted margin: N/A (spread not evaluated)")
+        print(f"      Closing spread: N/A")
+        print(f"      Line error: N/A")
+
+    # (3) Exact reason
+    features_set = verbose_stats.get("ncaab_events_with_features_set") or set()
+    # We don't have event_id in all_spread_line_errors; match by event name. Check if any event_id in sub for this event is in features_set.
+    event_ids_for_game = sub.loc[sub["event_name"].astype(str).str.strip() == event_str, "event_id"].drop_duplicates().tolist()
+    has_features = any(eid in features_set for eid in event_ids_for_game)
+
+    if not has_features:
+        print(f"  (3) Excluded: feature matrix match failed — no KenPom/team stats for this game (Auburn / Alabama).")
+    elif row is None or (row.get("pred_margin") is None and row.get("line_error") is None):
+        print(f"  (3) Excluded: spread not evaluated (no predicted margin / line error).")
+    else:
+        le_val = row.get("line_error")
+        abs_le = abs(le_val) if le_val is not None else None
+        in_line_range = (
+            abs_le is not None
+            and SPREAD_LINE_ERROR_MIN_PTS <= abs_le <= SPREAD_LINE_ERROR_MAX_PTS
+        )
+        near = verbose_stats.get("near_misses", [])
+        auburn_alabama_near = [
+            n for n in near
+            if "auburn" in (n.get("event") or "").lower() and "alabama" in (n.get("event") or "").lower()
+        ]
+        failed_edge = bool(auburn_alabama_near)
+
+        if not in_line_range and failed_edge:
+            print(f"  (3) Excluded: (a) line error filter — |line_error| = {abs_le} pts not in {SPREAD_LINE_ERROR_MIN_PTS}–{SPREAD_LINE_ERROR_MAX_PTS} pt range; (b) edge filter — edge {auburn_alabama_near[0].get('edge_pct')}% below 2% threshold.")
+        elif not in_line_range:
+            print(f"  (3) Excluded: line error filter — |line_error| = {abs_le} pts not in {SPREAD_LINE_ERROR_MIN_PTS}–{SPREAD_LINE_ERROR_MAX_PTS} pt range.")
+        elif failed_edge:
+            print(f"  (3) Excluded: edge filter — edge {auburn_alabama_near[0].get('edge_pct')}% below 2% threshold.")
+        else:
+            print(f"  (3) Excluded: other (e.g. diversity cap or not in top value plays).")
+    print("---\n")
 
 
 def run_pipeline_to_cache(
@@ -706,49 +966,27 @@ def run_pipeline_to_cache(
             json.dump(payload, f, indent=2)
 
     try:
-        # Fetch odds
-        live_odds_df = get_live_odds(
-            api_key=api_key.strip(),
-            sport_keys=LIVE_ODDS_SPORT_KEYS,
-            commence_on_date=None,
-        )
+        # NCAAB: ESPN primary, Rundown supplement (merge by team match for multiple bookmakers)
         meta: dict = {}
-        quota = get_quota_status()
-        remaining = quota.get("requests_remaining")
-        if verbose:
-            print(f"[DEBUG_RUNDOWN] Pipeline: live_odds_df.empty={live_odds_df.empty}, remaining={remaining!r}.")
-        if live_odds_df.empty and remaining is not None:
-            try:
-                r = int(remaining)
-            except (TypeError, ValueError):
-                r = 999
-            if verbose:
-                print(f"[DEBUG_RUNDOWN] Pipeline: credits remaining={r}, r<10={r < 10}. Will try Rundown then ESPN when r<10.")
-            if r < 10:
-                # Primary fallback: The Rundown (RapidAPI); then ESPN
-                if verbose:
-                    os.environ["DEBUG_RUNDOWN_ODDS"] = "1"
-                live_odds_df, n_games, n_odds_rows = get_rundown_live_odds_with_stats(
-                    sport_keys=LIVE_ODDS_SPORT_KEYS,
-                    commence_on_date=None,
-                )
-                if verbose:
-                    os.environ.pop("DEBUG_RUNDOWN_ODDS", None)
-                if not live_odds_df.empty:
-                    meta = {"used_rundown_fallback": True, "rundown_games": n_games, "rundown_odds_rows": n_odds_rows}
-                else:
-                    if verbose:
-                        os.environ["DEBUG_ESPN_ODDS"] = "1"
-                    live_odds_df, n_games, n_odds_rows = get_espn_live_odds_with_stats(
-                        sport_keys=LIVE_ODDS_SPORT_KEYS,
-                        commence_on_date=None,
-                    )
-                    if verbose:
-                        os.environ.pop("DEBUG_ESPN_ODDS", None)
-                    meta = {"used_espn_fallback": True, "espn_games": n_games, "espn_odds_rows": n_odds_rows}
+        as_of_date = date.today()
+        live_odds_df, meta = _get_ncaab_odds_espn_primary_rundown_supplement(
+            app_root=app_root,
+            commence_on_date=as_of_date,
+        )
+        meta["used_ncaab_espn_primary"] = True
+        n_ncaab_before_future = (
+            live_odds_df.loc[live_odds_df["league"] == "NCAAB", "event_id"].nunique()
+            if not live_odds_df.empty and "league" in live_odds_df.columns and "event_id" in live_odds_df.columns
+            else 0
+        )
+        odds_event_ids_before_future: set[str] = set()
+        if not live_odds_df.empty and "league" in live_odds_df.columns and "event_id" in live_odds_df.columns:
+            ncaab_pre = live_odds_df[live_odds_df["league"].astype(str).str.strip().str.upper() == "NCAAB"]
+            odds_event_ids_before_future = set(ncaab_pre["event_id"].astype(str).dropna().unique())
         if not live_odds_df.empty and "commence_time" in live_odds_df.columns:
             now_utc = datetime.now(timezone.utc)
-            cutoff_end = now_utc + timedelta(hours=24)
+            # Include games starting within the next 12 hours (e.g. Alabama 8:30pm ET)
+            cutoff_end = now_utc + timedelta(hours=12)
 
             def _in_window(ct: Any) -> bool:
                 if pd.isna(ct) or ct is None:
@@ -764,31 +1002,52 @@ def run_pipeline_to_cache(
             mask = live_odds_df["commence_time"].apply(_in_window)
             live_odds_df = live_odds_df.loc[mask].copy()
 
+        n_ncaab_after_future = (
+            live_odds_df.loc[live_odds_df["league"] == "NCAAB", "event_id"].nunique()
+            if not live_odds_df.empty and "league" in live_odds_df.columns and "event_id" in live_odds_df.columns
+            else 0
+        )
+
         as_of_date = date.today()
         b2b_teams = set(get_nba_teams_back_to_back(api_key.strip(), as_of_date))
         feature_matrix = load_feature_matrix_for_inference(league=None)
         pace_stats = get_nba_team_pace_stats()
-        use_rundown_fallback = bool(meta.get("used_rundown_fallback"))
-        use_espn_fallback = bool(meta.get("used_espn_fallback"))
-        use_fallback = use_rundown_fallback or use_espn_fallback
+        use_fallback = True  # NCAAB uses ESPN + Rundown (no Odds API)
         min_ev = 1.5 if use_fallback else EV_EPSILON_MIN_PCT
         min_books_override = 1 if use_fallback else None
 
         if verbose:
-            if use_rundown_fallback:
-                n_g = meta.get("rundown_games", 0)
-                n_o = meta.get("rundown_odds_rows", 0)
-                ncaab_g = (live_odds_df.loc[live_odds_df["league"] == "NCAAB", "event_id"].nunique()
-                    if not live_odds_df.empty and "league" in live_odds_df.columns else 0)
-                print(f"The Rundown fallback: Yes. NCAAB games: {ncaab_g}. Total games: {n_g}. Odds rows: {n_o}.")
-            elif use_espn_fallback:
-                n_espn = meta.get("espn_games", 0)
-                n_odds = meta.get("espn_odds_rows", 0)
-                print(f"ESPN fallback: Yes. NCAAB games from ESPN: {n_espn}. Odds rows: {n_odds}.")
-            else:
-                ncaab_games = (live_odds_df.loc[live_odds_df["league"] == "NCAAB", "event_id"].nunique()
-                    if not live_odds_df.empty and "league" in live_odds_df.columns else 0)
-                print(f"ESPN fallback: No. NCAAB games from Odds API: {ncaab_games}.")
+            n_espn = meta.get("ncaab_espn_games", 0)
+            n_rundown = meta.get("ncaab_rundown_games", 0)
+            n_merged = meta.get("ncaab_merged_games", 0)
+            n_rows = meta.get("ncaab_odds_rows", 0)
+            print(f"NCAAB odds: ESPN primary ({n_espn} games), Rundown supplement ({n_rundown} games). Merged: {n_merged} games, {n_rows} odds rows.")
+            # Master schedule as source of truth: flag games with no odds
+            master_path = app_root / "data" / "cache" / "espn_master_schedule.json"
+            if master_path.exists():
+                try:
+                    with open(master_path) as f:
+                        master_data = json.load(f)
+                    matchups = master_data.get("matchups") or []
+                    odds_event_ids = odds_event_ids_before_future
+                    no_odds: list[str] = []
+                    for m in matchups:
+                        if not isinstance(m, dict):
+                            continue
+                        gid = str(m.get("game_id", "")).strip()
+                        away = (m.get("away_team") or "").strip()
+                        home = (m.get("home_team") or "").strip()
+                        if gid in odds_event_ids:
+                            continue
+                        no_odds.append(f"  {away} @ {home}")
+                    if no_odds:
+                        print("\n--- ESPN master schedule: No odds available (from ESPN or Rundown) ---")
+                        for line in no_odds:
+                            print(line)
+                        print(f"--- {len(no_odds)} game(s) with no odds ---\n")
+                except Exception as e:
+                    if verbose:
+                        print(f"[verbose] Could not load master schedule for no-odds check: {e}")
 
         vp_frames: list[pd.DataFrame] = []
         value_plays_flagged_count = 0
@@ -804,6 +1063,8 @@ def run_pipeline_to_cache(
             if sub.empty:
                 continue
             agg = _aggregate_odds_best_line_avg_implied(sub)
+            if verbose and verbose_stats is not None and not agg.empty and "event_id" in agg.columns:
+                verbose_stats["ncaab_events_after_odds_parsing"] = agg["event_id"].nunique()
             vp, flagged = _live_odds_to_value_plays(
                 agg if not agg.empty else sub,
                 bankroll=bankroll,
@@ -824,7 +1085,19 @@ def run_pipeline_to_cache(
             value_plays_flagged_count += flagged
 
         if verbose and verbose_stats:
+            n_before = n_ncaab_before_future
+            n_after_future = n_ncaab_after_future
+            n_after_odds = verbose_stats.get("ncaab_events_after_odds_parsing") or verbose_stats.get("ncaab_events_in_agg") or 0
+            n_with_features = len(verbose_stats.get("ncaab_events_with_features_set") or set())
+            print("\n--- NCAAB filter steps (Rundown API 87 → pipeline) ---")
+            print(f"  (0) NCAAB events in odds df (Rundown; before pipeline filters): {n_before}")
+            print(f"  (1) After future-only filter (start within next 12h):           {n_after_future}  (dropped {n_before - n_after_future})")
+            print(f"  (2) After odds parsing (aggregated lines):                      {n_after_odds}  (dropped {n_after_future - n_after_odds})")
+            print(f"  (3) After feature matrix match:                                {n_with_features}  (dropped {n_after_odds - n_with_features})")
+            print("---\n")
+            _print_verbose_ncaab_h2h_edges(verbose_stats)
             _print_verbose_spread_stats(verbose_stats)
+            _print_verbose_auburn_alabama(live_odds_df, verbose_stats)
 
         value_plays_df = (
             pd.concat(vp_frames, ignore_index=True)
@@ -847,7 +1120,7 @@ def run_pipeline_to_cache(
                 axis=1,
             )
 
-        # Moneylines: keep min edge 3%. Spreads: min edge 3% and 8 <= |line_error| <= 20 (filter out bad model predictions)
+        # Moneylines: min edge 2%, no line error filter. Spreads: min edge 2% and 3 <= |line_error| <= 20
         if not value_plays_df.empty and "League" in value_plays_df.columns and "Market" in value_plays_df.columns:
             ncaab = value_plays_df["League"].astype(str).str.strip().str.upper() == "NCAAB"
             spread = value_plays_df["Market"].astype(str).str.strip().str.lower() == "spreads"
@@ -860,12 +1133,29 @@ def run_pipeline_to_cache(
                 spread_ok_line = le.notna() & (abs_le >= SPREAD_LINE_ERROR_MIN_PTS) & (abs_le <= SPREAD_LINE_ERROR_MAX_PTS)
             else:
                 spread_ok_line = pd.Series(False, index=value_plays_df.index)
+            if verbose:
+                alabama = value_plays_df.loc[
+                    ncaab_spread
+                    & value_plays_df["Event"].astype(str).str.contains("Alabama", case=False, na=False)
+                    & (value_plays_df["Selection"].astype(str).str.strip() == "Alabama")
+                    & (pd.to_numeric(value_plays_df.get("point"), errors="coerce") == -7.5)
+                ]
+                if not alabama.empty:
+                    row = alabama.iloc[0]
+                    le_val = row.get("line_error")
+                    le_str = f"{le_val:+.2f} pts" if le_val is not None else "N/A"
+                    passes = bool(spread_ok_line.loc[alabama.index[0]] and spread_ok_edge.loc[alabama.index[0]])
+                    print(f"\n--- Alabama -7.5 (requested debug) ---\n  line_error = {le_str}  |  passes 3–20 pt filter = {passes}\n---")
             keep = other | (ncaab_spread & spread_ok_edge & spread_ok_line)
             value_plays_df = value_plays_df.loc[keep].copy()
         value_plays_df = value_plays_df.sort_values("Value (%)", ascending=False).head(MAX_VALUE_PLAYS_CACHE).reset_index(drop=True)
 
         if verbose:
             print(f"Plays passed all filters: {len(value_plays_df)}.")
+            if verbose:
+                n_with_odds = n_ncaab_before_future
+                n_after_12h = n_ncaab_after_future
+                print(f"NCAAB games with odds (ESPN + Rundown merge): {n_with_odds}. After 12h window: {n_after_12h}. Value plays generated: {len(value_plays_df)}.")
 
         try:
             to_archive = value_plays_df[value_plays_df["Value (%)"] >= ARCHIVE_MIN_EDGE_PCT].copy()
