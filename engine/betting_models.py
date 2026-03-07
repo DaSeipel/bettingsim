@@ -773,6 +773,34 @@ def _shap_feature_to_sentence(
     if "ats_pct_road_season" in name and isinstance(val, (int, float)) and val > 0.5:
         return f"{away_team} {int(round(val * 100))}% ATS on the road this season"
 
+    # NCAAB KenPom: ADJOE (adj offensive eff), ADJDE (adj defensive eff), SEED, BARTHAG
+    if name == "home_adjoe" and val > 0:
+        return f"{home_team} ADJOE {val:.1f} (adjusted offensive efficiency)"
+    if name == "away_adjoe" and val > 0:
+        return f"{away_team} ADJOE {val:.1f} (adjusted offensive efficiency)"
+    if name == "home_adjde" and val > 0:
+        return f"{home_team} ADJDE {val:.1f} (adjusted defensive efficiency)"
+    if name == "away_adjde" and val > 0:
+        return f"{away_team} ADJDE {val:.1f} (adjusted defensive efficiency)"
+    if name == "home_barthag" and 0 <= val <= 1:
+        return f"{home_team} BARTHAG {val:.2f} (win probability)"
+    if name == "away_barthag" and 0 <= val <= 1:
+        return f"{away_team} BARTHAG {val:.2f} (win probability)"
+    if name == "home_seed" and val > 0:
+        return f"{home_team} projected as No. {int(val)} seed"
+    if name == "away_seed" and val > 0:
+        return f"{away_team} projected as No. {int(val)} seed"
+    if "efg_o" in name and val > 0:
+        team = home_team if "home" in name else away_team
+        return f"{team} effective FG% (off) {val:.1f}%"
+    if "efg_d" in name and val > 0:
+        team = home_team if "home" in name else away_team
+        return f"{team} effective FG% (def) {val:.1f}%"
+    if name == "home_adj_t" and val > 0:
+        return f"{home_team} tempo (adj) {val:.1f}"
+    if name == "away_adj_t" and val > 0:
+        return f"{away_team} tempo (adj) {val:.1f}"
+
     return None
 
 
@@ -855,10 +883,34 @@ def _feature_value_to_sentence(
             return f"{home_team} on a {int(abs(val))}-game {'win' if val > 0 else 'losing'} streak"
         if "away" in name and val != 0:
             return f"{away_team} on a {int(abs(val))}-game {'win' if val > 0 else 'losing'} streak"
+    # NCAAB KenPom: ADJOE, ADJDE, SEED, BARTHAG (for feature-based fallback when SHAP unavailable)
+    if name == "home_adjoe" and val > 0:
+        return f"{home_team} ADJOE {val:.1f} (adjusted offensive efficiency)"
+    if name == "away_adjoe" and val > 0:
+        return f"{away_team} ADJOE {val:.1f} (adjusted offensive efficiency)"
+    if name == "home_adjde" and val > 0:
+        return f"{home_team} ADJDE {val:.1f} (adjusted defensive efficiency)"
+    if name == "away_adjde" and val > 0:
+        return f"{away_team} ADJDE {val:.1f} (adjusted defensive efficiency)"
+    if name == "home_barthag" and 0 <= val <= 1:
+        return f"{home_team} BARTHAG {val:.2f} (win probability)"
+    if name == "away_barthag" and 0 <= val <= 1:
+        return f"{away_team} BARTHAG {val:.2f} (win probability)"
+    if name == "home_seed" and val > 0:
+        return f"{home_team} projected as No. {int(val)} seed"
+    if name == "away_seed" and val > 0:
+        return f"{away_team} projected as No. {int(val)} seed"
+    if "efg_o" in name and val > 0:
+        team = home_team if "home" in name else away_team
+        return f"{team} effective FG% (off) {val:.1f}%"
+    if "efg_d" in name and val > 0:
+        team = home_team if "home" in name else away_team
+        return f"{team} effective FG% (def) {val:.1f}%"
     return None
 
 
 # Priority order for feature-based reasoning (when SHAP unavailable)
+# Include NCAAB KenPom so fallback uses ADJOE/ADJDE/SEED when SHAP unavailable
 _FEATURE_REASON_PRIORITY = [
     "home_days_rest", "away_days_rest", "home_is_b2b", "away_is_b2b",
     "home_travel_miles", "away_travel_miles",
@@ -870,6 +922,10 @@ _FEATURE_REASON_PRIORITY = [
     "sharp_money_indicator", "line_move_magnitude",
     "home_ats_pct_last10", "away_ats_pct_last10",
     "home_streak", "away_streak",
+    "home_ADJOE", "away_ADJOE", "home_ADJDE", "away_ADJDE",
+    "home_BARTHAG", "away_BARTHAG", "home_SEED", "away_SEED",
+    "home_EFG_O", "away_EFG_O", "home_EFG_D", "away_EFG_D",
+    "home_ADJ_T", "away_ADJ_T",
 ]
 
 

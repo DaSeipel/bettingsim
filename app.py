@@ -1,6 +1,6 @@
 """
 Bobby Bottle's Betting Model - Streamlit Dashboard
-Daily picks sheet: Play of the Day (NBA + NCAAB) and All Value Plays. Dark theme, NCAAB/NBA tabs.
+Daily picks sheet: Play of the Day (NCAAB) and All Value Plays. Dark theme, NCAAB-focused (NBA coming soon).
 Live odds from The Odds API; stakes from fractional Kelly.
 """
 
@@ -185,26 +185,23 @@ def select_play_of_the_day(
     min_edge_pct: float = POTD_MIN_EDGE_PCT,
 ) -> dict[str, Optional[dict]]:
     """
-    Select the Play of the Day for NBA and NCAAB.
-
-    Criteria: highest edge % among today's plays with edge > min_edge_pct.
-    Tie-breaks (in order): (1) more bookmakers agreeing on the line, (2) model prob
-    furthest from implied (largest |model_prob - implied_prob|), (3) no major injury flags.
-
-    Returns {"NBA": pick_dict or None, "NCAAB": pick_dict or None}. Each pick_dict has
-    all fields needed for the Play of the Day card (Event, Selection, Market, Odds,
-    Value (%), point, Recommended Stake, Start Time, League, etc.).
+    Select two NCAAB Plays of the Day: top 2 highest-conviction plays by edge % from different games.
+    Tie-breaks (in order): (1) more bookmakers, (2) model prob gap from implied, (3) no major injury flags.
+    Returns {"NCAAB Pick 1": pick_dict or None, "NCAAB Pick 2": pick_dict or None}. Each pick_dict
+    includes Event, Selection, Market, Odds, Value (%), point, home_team, away_team, model_prob,
+    confidence_tier, reasoning_summary for card display and archive.
     """
-    result: dict[str, Optional[dict]] = {"NBA": None, "NCAAB": None}
+    result: dict[str, Optional[dict]] = {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
     if value_plays_df.empty or "League" not in value_plays_df.columns:
         return result
 
-    # Only consider plays above minimum confidence
-    eligible = value_plays_df[value_plays_df["Value (%)"] > min_edge_pct].copy()
+    eligible = value_plays_df[
+        (value_plays_df["League"].astype(str).str.strip().str.upper() == "NCAAB") &
+        (value_plays_df["Value (%)"] > min_edge_pct)
+    ].copy()
     if eligible.empty:
         return result
 
-    # Attach bookmaker count from live odds (same event/market/selection/point)
     bc = _bookmaker_counts(live_odds_df)
     if not bc.empty:
         eligible = eligible.merge(
@@ -217,13 +214,11 @@ def select_play_of_the_day(
     else:
         eligible["bookmaker_count"] = 0
 
-    # Model prob gap (tie-break 2): prefer larger |model_prob - implied_prob|
     if "model_prob" in eligible.columns and "implied_prob" in eligible.columns:
         eligible["model_prob_gap"] = (eligible["model_prob"] - eligible["implied_prob"]).abs()
     else:
         eligible["model_prob_gap"] = 0.0
 
-    # Injury flag (tie-break 3): prefer no major injury
     def _has_injury_flag(row: pd.Series) -> bool:
         if row.get("top5_out_or_doubtful_home") or row.get("top5_out_or_doubtful_away"):
             return True
@@ -234,7 +229,6 @@ def select_play_of_the_day(
 
     eligible["has_injury_flag"] = eligible.apply(_has_injury_flag, axis=1)
 
-    # Large-spread penalty: for spreads with |point| > 14, use adjusted edge (30% penalty) for sorting
     def _adjusted_edge(row: pd.Series) -> float:
         if str(row.get("Market", "")).strip().lower() != "spreads":
             return float(row.get("Value (%)", 0))
@@ -258,19 +252,13 @@ def select_play_of_the_day(
         except (TypeError, ValueError):
             return False
 
-    for league in ("NBA", "NCAAB"):
-        league_plays = eligible[eligible["League"] == league]
-        if league_plays.empty:
-            continue
-        # Sort: adjusted edge desc (large spreads penalized), then bookmaker_count, model_prob_gap, has_injury_flag
-        sorted_df = league_plays.sort_values(
-            by=["_adjusted_edge", "bookmaker_count", "model_prob_gap", "has_injury_flag"],
-            ascending=[False, False, False, True],
-        )
-        top = sorted_df.iloc[0]
-        # After merge, point may appear as point_x (left) or point
+    sorted_df = eligible.sort_values(
+        by=["_adjusted_edge", "bookmaker_count", "model_prob_gap", "has_injury_flag"],
+        ascending=[False, False, False, True],
+    ).reset_index(drop=True)
+
+    def _row_to_pick(top: pd.Series, label: str) -> dict:
         point_val = top.get("point_x") if "point_x" in top.index else top.get("point")
-        # Odds: store None when missing/NaN (e.g. API returned spread but no moneyline) so card shows "—"
         odds_raw = top.get("Odds", 0)
         if odds_raw is None or pd.isna(odds_raw):
             odds_for_pick = None
@@ -280,8 +268,8 @@ def select_play_of_the_day(
             except (TypeError, ValueError):
                 odds_for_pick = None
         commence_time = top.get("commence_time") or top.get("commence_time_x") or ""
-        pick: dict = {
-            "League": league,
+        return {
+            "League": label,
             "Event": top.get("Event", ""),
             "Selection": top.get("Selection", ""),
             "Market": top.get("Market", ""),
@@ -293,8 +281,21 @@ def select_play_of_the_day(
             "commence_time": commence_time,
             "Injury Alert": top.get("Injury Alert", "—"),
             "high_variance": _is_large_spread(top),
+            "home_team": str(top.get("home_team", "")).strip() or "—",
+            "away_team": str(top.get("away_team", "")).strip() or "—",
+            "model_prob": float(top.get("model_prob", 0)),
+            "confidence_tier": str(top.get("confidence_tier", "Medium")).strip() or "Medium",
+            "reasoning_summary": top.get("reasoning_summary") if pd.notna(top.get("reasoning_summary")) else None,
         }
-        result[league] = pick
+
+    # Pick 1: top by edge
+    result["NCAAB Pick 1"] = _row_to_pick(sorted_df.iloc[0], "NCAAB Pick 1")
+    pick1_event = str(sorted_df.iloc[0].get("Event", ""))
+
+    # Pick 2: top from a different game (Event is a Series — use .str.strip())
+    other_games = sorted_df[sorted_df["Event"].astype(str).str.strip() != pick1_event.strip()]
+    if not other_games.empty:
+        result["NCAAB Pick 2"] = _row_to_pick(other_games.iloc[0], "NCAAB Pick 2")
 
     return result
 
@@ -314,8 +315,8 @@ def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = "")
 
 def _get_yesterday_potd_results() -> list[dict]:
     """
-    Load yesterday's play history and return the two POTD picks (one per sport, max edge that day).
-    Each item: {"sport": "NBA"|"NCAAB", "side": "Team Name", "result": "W"|"L"|"P"|None}.
+    Load yesterday's play history and return the two POTD picks (NCAAB Pick 1, NCAAB Pick 2).
+    Each item: {"sport": "NCAAB Pick 1"|"NCAAB Pick 2", "side": "Team Name", "result": "W"|"L"|"P"|None}.
     """
     if STRIP_DOWN_MODE:
         return []
@@ -327,10 +328,10 @@ def _get_yesterday_potd_results() -> list[dict]:
     hist["result_clean"] = hist["result"].apply(
         lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
     )
-    # One top play per (date, sport) by edge
-    top = hist.loc[hist.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
-    # Order: NBA then NCAAB (match Overview columns)
-    top = top.sort_values("sport", ascending=True)  # NBA then NCAAB
+    top = hist[hist["sport"].astype(str).str.strip().isin(("NCAAB Pick 1", "NCAAB Pick 2"))].copy()
+    if not top.empty:
+        top = top.loc[top.groupby("sport")["my_edge_pct"].idxmax()].reset_index(drop=True)
+        top = top.sort_values("sport", ascending=True)
     rows = []
     for _, r in top.iterrows():
         # #region agent log
@@ -344,10 +345,6 @@ def _get_yesterday_potd_results() -> list[dict]:
         else:
             res = None
         rows.append({"sport": sport, "side": side, "result": res})
-    # #region agent log
-    ncaab_all = hist[hist["sport"].astype(str).str.strip().str.upper() == "NCAAB"] if not hist.empty else pd.DataFrame()
-    _debug_log("app.py:_get_yesterday_potd_results", "all NCAAB yesterday", {"n_rows": len(ncaab_all), "results": ncaab_all["result"].tolist() if not ncaab_all.empty else [], "sides": ncaab_all["recommended_side"].tolist() if not ncaab_all.empty else []}, "B")
-    # #endregion
     return rows
 
 
@@ -427,7 +424,10 @@ def _potd_reason(
     selection = str(row.get("Selection", ""))
     event = str(row.get("Event", ""))
     edge_pct = float(row.get("Value (%)", 0))
-    league = str(row.get("League", ""))
+    league_raw = str(row.get("League", ""))
+    # Normalize so "NCAAB Pick 1" / "NCAAB Pick 2" use NCAAB feature lookup and SHAP model
+    league = "NCAAB" if league_raw and "NCAAB" in league_raw.strip().upper() else league_raw.strip()
+    league_shap = "ncaab" if league_raw and "ncaab" in league_raw.strip().lower() else (league_raw.strip().lower() if league_raw else "")
     point = row.get("point")
     away, home = _parse_event_teams(event)
     # #region agent log
@@ -486,7 +486,7 @@ def _potd_reason(
         feature_row = build_feature_row_for_upcoming_game(
             home_team=home,
             away_team=away,
-            league=league.strip().lower(),
+            league=league_shap or league.strip().lower(),
             game_date=game_date_str,
             b2b_teams=b2b_teams,
         )
@@ -500,7 +500,7 @@ def _potd_reason(
             pass
         # #endregion
         shap_reason = get_top_shap_reasoning(
-            feature_row, market, home_team=home, away_team=away, top_k=4, league=league.strip().lower()
+            feature_row, market, home_team=home, away_team=away, top_k=4, league=league_shap or league.strip().lower()
         )
         feat_reason = None
         if shap_reason:
@@ -670,7 +670,8 @@ POTD_CARD_CSS = """
 .yesterday-badge--loss { background: rgba(198,40,40,0.5); color: #ef9a9a; }
 .yesterday-badge--pending { background: rgba(96,125,139,0.4); color: #b0bec5; }
 /* POTD streak tracker (dots below Yesterday's Results) */
-.streak-row { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 1rem; font-size: 0.8rem; color: rgba(255,255,255,0.7); }
+.streak-row { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.5rem; font-size: 0.8rem; color: rgba(255,255,255,0.7); }
+.streak-label { min-width: 4rem; font-weight: 600; color: rgba(255,255,255,0.85); }
 .streak-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .streak-dot--w { background: #66bb6a; }
 .streak-dot--l { background: #e57373; }
@@ -703,52 +704,66 @@ def _render_yesterday_strip_html(rows: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _get_last_10_potd_results() -> list[str]:
+def _get_last_10_potd_results() -> tuple[list[str], list[str]]:
     """
-    Return the last 10 Play of the Day results (W/L/P) in chronological order (oldest first).
-    Uses same POTD logic as yesterday strip: one top play per (date, sport) by edge.
+    Return (pick1_results, pick2_results): last 10 days of NCAAB Pick 1 and Pick 2 results (W/L/P) each.
     """
     if STRIP_DOWN_MODE:
-        return []
+        return ([], [])
     from_date = date.today() - timedelta(days=31)
     to_date = date.today() - timedelta(days=1)
     hist = _load_play_history_cached(from_date_iso=from_date.isoformat(), to_date_iso=to_date.isoformat())
     if hist.empty or "my_edge_pct" not in hist.columns:
-        return []
+        return ([], [])
     hist = hist.copy()
     hist["result_clean"] = hist["result"].apply(
         lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
     )
-    top = hist.loc[hist.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
+    top = hist[hist["sport"].astype(str).str.strip().isin(("NCAAB Pick 1", "NCAAB Pick 2"))].copy()
+    if top.empty:
+        return ([], [])
+    top = top.loc[top.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
     top = top.sort_values(["date_generated", "sport"], ascending=[True, True])
-    codes: list[str] = []
-    for _, r in top.iterrows():
-        res = r.get("result_clean")
-        if res in ("W", "L", "P"):
-            codes.append(res)
-        else:
-            codes.append("P")  # grey for push/unresolved
-    return codes[-10:]
+    dates_desc = sorted(top["date_generated"].unique(), reverse=True)[:10]
+    dates_asc = list(reversed(dates_desc))
+    codes_1: list[str] = []
+    codes_2: list[str] = []
+    for d in dates_asc:
+        day = top[top["date_generated"] == d]
+        r1 = day[day["sport"].astype(str).str.strip() == "NCAAB Pick 1"]
+        r2 = day[day["sport"].astype(str).str.strip() == "NCAAB Pick 2"]
+        res1 = r1.iloc[0].get("result_clean") if not r1.empty else None
+        res2 = r2.iloc[0].get("result_clean") if not r2.empty else None
+        codes_1.append(res1 if res1 in ("W", "L", "P") else "P")
+        codes_2.append(res2 if res2 in ("W", "L", "P") else "P")
+    return (codes_1, codes_2)
 
 
-def _render_streak_html(results: list[str]) -> str:
-    """Render POTD streak as a row of colored dots (green W, red L, grey P) and 🔥 if 3+ wins in a row."""
-    if not results:
-        return ""
-    current_streak = 0
-    for r in reversed(results):
-        if r == "W":
-            current_streak += 1
-        else:
-            break
-    parts = ['<div class="streak-row">']
-    for r in results:
-        cls = f"streak-dot streak-dot--{r.lower()}"
-        parts.append(f'<span class="{cls}" title="{r}"></span>')
-    if current_streak >= 3:
-        parts.append('<span class="streak-flame" title="Current win streak: {}">🔥</span>'.format(current_streak))
-    parts.append("</div>")
-    return "\n".join(parts)
+def _render_streak_html(pick1_results: list[str], pick2_results: list[str]) -> str:
+    """Render two rows of POTD streak dots (Pick 1, Pick 2) with 🔥 if 3+ wins in a row."""
+    def _one_row(label: str, results: list[str]) -> str:
+        if not results:
+            return ""
+        current_streak = 0
+        for r in reversed(results):
+            if r == "W":
+                current_streak += 1
+            else:
+                break
+        parts = [f'<div class="streak-row"><span class="streak-label">{_html_escape(label)}</span>']
+        for r in results:
+            cls = f"streak-dot streak-dot--{r.lower()}"
+            parts.append(f'<span class="{cls}" title="{r}"></span>')
+        if current_streak >= 3:
+            parts.append(f'<span class="streak-flame" title="Current win streak: {current_streak}">🔥</span>')
+        parts.append("</div>")
+        return "\n".join(parts)
+    out = []
+    if pick1_results:
+        out.append(_one_row("Pick 1", pick1_results))
+    if pick2_results:
+        out.append(_one_row("Pick 2", pick2_results))
+    return "\n".join(out) if out else ""
 
 
 def _value_play_reasoning(row: pd.Series) -> str:
@@ -970,12 +985,12 @@ def _render_potd_card_html(
         except Exception:
             line_as_of = f"Line as of {odds_as_of.strftime('%b %d, %I:%M %p')}"
     potd_march = ""
-    if league == "NCAAB":
+    if league and "NCAAB" in league:
         march_badges = _march_context_badges(r)
         if march_badges and march_badges != "—":
             potd_march = f'<div class="potd-march-context">{_html_escape(march_badges)}</div>'
     potd_tournament_badge = ""
-    if march_madness_mode and league == "NCAAB" and _is_top_seed_play(r):
+    if march_madness_mode and league and "NCAAB" in league and _is_top_seed_play(r):
         potd_tournament_badge = '<div class="potd-tournament-context">Tournament Context</div>'
     html = f"""
     <div class="potd-card potd-card--{accent}">
@@ -1241,11 +1256,11 @@ def _basketball_to_value_plays(
     return pd.DataFrame(rows)
 
 
-# Sport keys for live Best Value Plays (The Odds API)
-LIVE_ODDS_SPORT_KEYS = [BASKETBALL_NBA, BASKETBALL_NCAAB]
+# Sport keys for live Best Value Plays (The Odds API). NCAAB only for now; NBA code kept in backend.
+LIVE_ODDS_SPORT_KEYS = [BASKETBALL_NCAAB]
 
 
-# Edge threshold (epsilon): only show Value % in [3%, 15%); >= 15% flagged as Potential Data Error
+# Edge thresholds (tuned for NCAAB): Value % in [3%, 15%); >= 15% flagged as Potential Data Error
 EV_EPSILON_MIN_PCT = 3.0
 EV_EPSILON_MAX_PCT = 15.0
 
@@ -1801,10 +1816,10 @@ if not STRIP_DOWN_MODE and (odds_api_key or "").strip():
         _use_espn_fallback = bool(st.session_state.get("odds_source_meta", {}).get("used_espn_fallback"))
         _min_ev = 1.5 if _use_espn_fallback else EV_EPSILON_MIN_PCT
         _min_books_override = 1 if _use_espn_fallback else None
-        # Process NBA and NCAAB separately to limit peak memory; del + gc after each league
+        # NCAAB only for now (NBA code kept in backend for re-enable later)
         _vp_frames: list[pd.DataFrame] = []
         value_plays_flagged_count = 0
-        for _league_name in ("NBA", "NCAAB"):
+        for _league_name in ("NCAAB",):
             _sub = live_odds_df[live_odds_df["league"] == _league_name].copy() if "league" in live_odds_df.columns and not live_odds_df.empty else pd.DataFrame()
             if _sub.empty:
                 continue
@@ -1861,6 +1876,31 @@ if not STRIP_DOWN_MODE and (odds_api_key or "").strip():
             to_archive = value_plays_df[value_plays_df["Value (%)"] >= ARCHIVE_MIN_EDGE_PCT].copy()
             to_archive = to_archive.sort_values("Value (%)", ascending=False).head(ARCHIVE_MAX_PLAYS_PER_DAY)
             archive_value_plays(to_archive, as_of_date=date.today())
+            # Archive the 2 POTD picks with sport "NCAAB Pick 1" / "NCAAB Pick 2" for separate tracking
+            potd_picks = select_play_of_the_day(value_plays_df, live_odds_df, min_edge_pct=POTD_MIN_EDGE_PCT)
+            potd_rows = []
+            for label in ("NCAAB Pick 1", "NCAAB Pick 2"):
+                p = potd_picks.get(label)
+                if not p:
+                    continue
+                potd_rows.append({
+                    "League": label,
+                    "Event": p.get("Event", ""),
+                    "Selection": p.get("Selection", ""),
+                    "Market": p.get("Market", ""),
+                    "Odds": p.get("Odds", 0) or 0,
+                    "Value (%)": p.get("Value (%)", 0),
+                    "point": p.get("point"),
+                    "Recommended Stake": p.get("Recommended Stake"),
+                    "home_team": p.get("home_team", "—"),
+                    "away_team": p.get("away_team", "—"),
+                    "model_prob": p.get("model_prob", 0),
+                    "confidence_tier": p.get("confidence_tier", "Medium"),
+                    "reasoning_summary": p.get("reasoning_summary"),
+                })
+            if potd_rows:
+                potd_archive_df = pd.DataFrame(potd_rows)
+                archive_value_plays(potd_archive_df, as_of_date=date.today())
         except Exception:
             pass
         # Record each recommended play for CLV (odds at recommendation; closing filled later)
@@ -2008,11 +2048,12 @@ def _today_str() -> str:
 
 
 st.title("Bobby Bottle's Betting Model")
+st.caption("NCAAB — college basketball value plays and Play of the Day")
 
-# Stat bar: date | plays found | NBA • NCAAB | top edge (one row, dividers)
+# Stat bar: date | plays found | NCAAB | top edge (one row, dividers)
 _summary = _summary_bar_values(value_plays_df)
 _plays_text = f"{_summary['total_plays']} play{'s' if _summary['total_plays'] != 1 else ''} found"
-_nba_ncaab = f"{_summary['n_nba']} NBA · {_summary['n_ncaab']} NCAAB"
+_nba_ncaab = f"{_summary['n_ncaab']} NCAAB"
 _stat_bar_html = f"""
 <style>
 .dashboard-stat-bar {{ display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
@@ -2116,7 +2157,7 @@ if _unresolved_stale > 0:
     )
     st.markdown(_slim_alert_html, unsafe_allow_html=True)
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
-tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history = st.tabs(["Overview", "NCAAB", "NBA", "Mark Results", "Play of the Day History"])
+tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history = st.tabs(["Overview", "NCAAB", "NBA (Coming Soon)", "Mark Results", "Play of the Day History"])
 
 with tab_overview:
     st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
@@ -2124,34 +2165,32 @@ with tab_overview:
     yesterday_rows = _get_yesterday_potd_results()
     if yesterday_rows:
         st.markdown(_render_yesterday_strip_html(yesterday_rows), unsafe_allow_html=True)
-    # ——— POTD streak (last 10 picks as dots; 🔥 if 3+ wins in a row) ———
-    streak_results = _get_last_10_potd_results()
-    if streak_results:
-        st.markdown(_render_streak_html(streak_results), unsafe_allow_html=True)
+    # ——— POTD streak (last 10 days: Pick 1 and Pick 2 as dots; 🔥 if 3+ wins in a row) ———
+    streak_pick1, streak_pick2 = _get_last_10_potd_results()
+    if streak_pick1 or streak_pick2:
+        st.markdown(_render_streak_html(streak_pick1, streak_pick2), unsafe_allow_html=True)
     # ——— Play of the Day (backend selection: edge > 4%, tie-break bookmakers / model gap / no injury) ———
     st.subheader("Play of the Day")
     potd_picks = select_play_of_the_day(value_plays_df, live_odds_df, min_edge_pct=POTD_MIN_EDGE_PCT)
-    pod_nba = potd_picks["NBA"]
-    pod_ncaab = potd_picks["NCAAB"]
-    feature_matrix_potd = (
-        _load_feature_matrix_cached(league=None) if (pod_nba or pod_ncaab) else None
-    )
-    col_nba, col_ncaab = st.columns(2)
-    with col_nba:
+    pod_1 = potd_picks.get("NCAAB Pick 1")
+    pod_2 = potd_picks.get("NCAAB Pick 2")
+    feature_matrix_potd = _load_feature_matrix_cached(league=None) if (pod_1 or pod_2) else None
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
         st.markdown(
-            _render_potd_card_html("NBA", pod_nba, "blue", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
+            _render_potd_card_html("NCAAB Pick 1", pod_1, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
             unsafe_allow_html=True,
         )
-    with col_ncaab:
+    with col_p2:
         st.markdown(
-            _render_potd_card_html("NCAAB", pod_ncaab, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
+            _render_potd_card_html("NCAAB Pick 2", pod_2, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
             unsafe_allow_html=True,
         )
     if value_plays_df.empty:
         if (odds_api_key or "").strip():
             st.caption("No Play of the Day: no games or value plays loaded for today. Try **Refresh odds** below or check back later.")
         else:
-            st.caption("No Play of the Day: set your **Odds API key** in the sidebar to load today's NBA & NCAAB games and value plays.")
+            st.caption("No Play of the Day: set your **Odds API key** in the sidebar to load today's NCAAB games and value plays.")
 
     st.divider()
 
@@ -2165,16 +2204,11 @@ with tab_overview:
     if value_plays_flagged_count > 0:
         st.warning(f"**Potential Data Error:** {value_plays_flagged_count} play(s) had Value % ≥ 15% and were excluded.")
 
-    # Filter row: league (NBA / NCAAB / Both), min edge slider (2–15%, default 2)
+    # Filter row: NCAAB only; min edge slider (2–15%, default 2)
     filter_col1, filter_col2, _ = st.columns([1, 1, 2])
     with filter_col1:
-        league_filter = st.radio(
-            "League",
-            options=["Both", "NBA", "NCAAB"],
-            index=0,
-            horizontal=True,
-            key="vp_league_filter",
-        )
+        league_filter = "NCAAB"  # NCAAB only; NBA code kept in backend
+        st.caption("League: **NCAAB**")
     with filter_col2:
         min_edge = st.slider(
             "Min edge %",
@@ -2195,8 +2229,7 @@ with tab_overview:
             eligible = value_plays_df[base_edge_ok & ncaab_min_ok].copy()
         else:
             eligible = value_plays_df[base_edge_ok].copy()
-        if league_filter != "Both":
-            eligible = eligible[eligible["League"] == league_filter]
+        eligible = eligible[eligible["League"] == "NCAAB"]
         best_per_game = (
             eligible.sort_values("Value (%)", ascending=False)
             .groupby("Event")
@@ -2245,7 +2278,7 @@ with tab_overview:
         if (odds_api_key or "").strip():
             st.info("No value plays from live odds today, or no events. Try again later or use Refresh.")
         else:
-            st.info("Set Odds API key in the sidebar to load today's NBA & NCAAB value plays.")
+            st.info("Set Odds API key in the sidebar to load today's NCAAB value plays.")
 
 with tab_ncaab:
     st.subheader("NCAAB")
@@ -2285,6 +2318,7 @@ with tab_mark_results:
     _mr_history = _load_play_history_cached(from_date_iso=_mr_from.isoformat(), to_date_iso=_yesterday.isoformat())
     if not _mr_history.empty:
         _mr_history = _mr_history.copy()
+        _mr_history = _mr_history[_mr_history["sport"].astype(str).str.strip().str.upper().str.startswith("NCAAB")]
         _mr_history["result_clean"] = _mr_history["result"].apply(
             lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
         )
@@ -2393,7 +2427,7 @@ with tab_mark_results:
 
 with tab_play_history:
     st.subheader("Play of the Day History")
-    st.caption("One top NBA and one top NCAAB pick per day (last 30 days). Results auto-filled at 8am ET from ESPN.")
+    st.caption("Two NCAAB picks per day (Pick 1 & Pick 2, last 30 days). Results auto-filled at 8am ET from ESPN.")
     _from = date.today() - timedelta(days=30)
     _history = _load_play_history_cached(from_date_iso=_from.isoformat(), to_date_iso=date.today().isoformat())
     if not _history.empty:
@@ -2422,7 +2456,9 @@ with tab_play_history:
         _history["_matchup_key"] = _history.apply(_canonical_matchup_key, axis=1)
         _history = _history.drop_duplicates(subset=["_matchup_key"], keep="last")
         top_per_day = _history.loc[_history.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
+        top_per_day = top_per_day[top_per_day["sport"].astype(str).str.strip().isin(("NCAAB Pick 1", "NCAAB Pick 2"))]
         resolved = _history[_history["result_clean"].notna()]
+        resolved = resolved[resolved["sport"].astype(str).str.strip().str.upper() == "NCAAB"]
         resolved_potd = top_per_day[top_per_day["result_clean"].notna()]
 
         def _roi_and_units(df: pd.DataFrame) -> tuple[float, float, float, float, float]:
@@ -2512,10 +2548,10 @@ with tab_play_history:
         for d in dates_desc:
             day_rows = top_per_day[top_per_day["date_generated"] == d]
             date_display = pd.to_datetime(d).strftime("%a, %b %d") if hasattr(pd.to_datetime(d), "strftime") else str(d)
-            nba_row = day_rows[day_rows["sport"].astype(str).str.upper() == "NBA"]
-            ncaab_row = day_rows[day_rows["sport"].astype(str).str.upper() == "NCAAB"]
-            col_nba, col_ncaab = st.columns(2)
-            for col, sport_label, row_df in [(col_nba, "NBA", nba_row), (col_ncaab, "NCAAB", ncaab_row)]:
+            pick1_row = day_rows[day_rows["sport"].astype(str).str.strip() == "NCAAB Pick 1"]
+            pick2_row = day_rows[day_rows["sport"].astype(str).str.strip() == "NCAAB Pick 2"]
+            col_p1, col_p2 = st.columns(2)
+            for col, sport_label, row_df in [(col_p1, "NCAAB Pick 1", pick1_row), (col_p2, "NCAAB Pick 2", pick2_row)]:
                 with col:
                     if row_df.empty:
                         st.markdown(f'<div class="ph-feed-empty">{sport_label}: No pick</div>', unsafe_allow_html=True)
@@ -2572,27 +2608,13 @@ with tab_play_history:
         st.info("No archived plays yet. Plays are saved when you load the dashboard (and at 9am ET). Open the app before games to capture today's top picks.")
 
 with tab_nba:
-    st.subheader("NBA")
-    st.caption("All NBA value plays and totals. Today's top NBA pick is on the **Overview** tab.")
-    if (odds_api_key or "").strip():
-        if st.button("Refresh", key="nba_refresh", help="Pull latest NBA odds from The Odds API (also refreshes every 15 min automatically)"):
-            st.session_state["odds_refresh_key"] = st.session_state.get("odds_refresh_key", 0) + 1
-            st.rerun()
-
-    nba_value = value_plays_df[value_plays_df["League"] == "NBA"] if not value_plays_df.empty and "League" in value_plays_df.columns else pd.DataFrame()
-    if not nba_value.empty:
-        nba_best = nba_value.sort_values("Value (%)", ascending=False).groupby("Event").head(1).reset_index(drop=True)
-        st.caption("**Best value plays (NBA)** — same model as main table")
-        _vp = nba_best.copy()
-        _vp["Odds"] = _vp["Odds"].apply(format_american)
-        if "Market" in _vp.columns:
-            _vp["Market"] = _vp["Market"].map(lambda x: MARKET_LABELS.get(x, x) if pd.notna(x) else x)
-        if "Recommended Stake" in _vp.columns:
-            _vp = _vp.drop(columns=["Recommended Stake"])
-        st.dataframe(_vp.rename(columns={"Event": "Game"}), use_container_width=True, hide_index=True)
-    st.caption("**Totals tracker** — in-house projected total vs market O/U")
+    st.subheader("NBA — Coming Soon")
+    st.info("NBA value plays and totals will return here. Backend is still in place; we're focused on NCAAB for now.")
+    # NBA tab content kept below (commented) for easy re-enable:
+    # nba_value = value_plays_df[value_plays_df["League"] == "NBA"] if not value_plays_df.empty and "League" in value_plays_df.columns else pd.DataFrame()
+    # ... (value plays table, totals tracker)
     nba_totals_df = pd.DataFrame()
-    if not live_odds_df.empty and "sport_key" in live_odds_df.columns:
+    if False and not live_odds_df.empty and "sport_key" in live_odds_df.columns:
         totals_only = live_odds_df[
             (live_odds_df["sport_key"] == BASKETBALL_NBA) &
             (live_odds_df["market_type"] == "totals") &
@@ -2604,7 +2626,6 @@ with tab_nba:
                 date.today().isoformat(),
                 refresh_key=st.session_state.get("odds_refresh_key", 0),
             )
-            # One row per game: take first occurrence per event_id (same point for Over/Under)
             seen = set()
             rows = []
             for _, r in totals_only.iterrows():
@@ -2628,7 +2649,8 @@ with tab_nba:
                     "Value": value_label,
                 })
             nba_totals_df = pd.DataFrame(rows)
-    if not nba_totals_df.empty:
+    # Original NBA totals/value-plays UI kept below for re-enable (run when LIVE_ODDS_SPORT_KEYS includes NBA again)
+    if False and not nba_totals_df.empty:
         def _edge_color(edge_series: pd.Series) -> list[str]:
             styles = []
             for idx in edge_series.index:
@@ -2654,9 +2676,4 @@ with tab_nba:
                 "Value": st.column_config.TextColumn("Value", width="small"),
             },
         )
-    else:
-        if (odds_api_key or "").strip():
-            st.info("No NBA totals for today from the Odds API, or no games with O/U lines. Try again later or use Refresh.")
-        else:
-            st.info("Set Odds API key in the sidebar to load today's NBA games and totals.")
 
