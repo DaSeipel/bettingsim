@@ -38,7 +38,8 @@ def main() -> None:
         print("No Odds API key. Set ODDS_API_KEY or add to .streamlit/secrets.toml [the_odds_api] api_key = \"...\"", file=sys.stderr)
         sys.exit(1)
     cache_path = APP_ROOT / "data" / "cache" / "value_plays_cache.json"
-    run_pipeline_to_cache(api_key, cache_path, app_root=APP_ROOT)
+    verbose = "--verbose" in sys.argv or os.environ.get("PIPELINE_VERBOSE", "").strip() == "1"
+    run_pipeline_to_cache(api_key, cache_path, app_root=APP_ROOT, verbose=verbose)
     print("Wrote", cache_path)
 
 

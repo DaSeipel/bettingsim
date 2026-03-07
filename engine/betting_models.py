@@ -422,6 +422,8 @@ def get_spread_predicted_margin(
 ) -> Optional[float]:
     """
     Return the model's predicted margin (home - away) for the spread, or None.
+    Inference assumes model output is home - away. For NCAAB, legacy models saved without
+    margin_home_minus_away=True are assumed to have been trained on away - home; we negate to get home - away.
     Only works for margin (regressor) models; returns None for classifier.
     Used for debug (e.g. line_error = pred_margin - market_spread).
     Optional home_team/away_team used for "Missing features for ..." logging when row is None or X.empty.
@@ -446,8 +448,11 @@ def get_spread_predicted_margin(
     if X.empty:
         logging.getLogger(__name__).warning("Missing features for %s", _team_label())
         return None
-    pred = float(model.predict(X)[0])
-    pred -= payload.get("margin_calibration_shift", 0.0)
+    raw = float(model.predict(X)[0])
+    # Standard: model output = home - away. Legacy NCAAB models may have been trained as away - home; negate.
+    if str(league or "").strip().lower() == "ncaab" and not payload.get("margin_home_minus_away", False):
+        raw = -raw
+    pred = raw - payload.get("margin_calibration_shift", 0.0)
     return pred
 
 
@@ -491,10 +496,10 @@ def predict_spread_prob(
     league: Optional[str] = None,
 ) -> float:
     """
-    Predict P(cover) for the spread. market_spread is home spread (e.g. -3.5).
+    Predict P(cover) for the spread. market_spread is home spread in home-minus-away terms (e.g. +3.5 = home favored by 3.5).
     we_cover_favorite True = we're on the favorite (home/away favored).
-    Uses loaded XGBoost spread model if available; when league is ncaab, uses NCAAB model if present.
-    NCAAB model may be binary classifier (underdog covered) or margin regressor; classifier uses line_value/public_fade_spot.
+    Assumes model output is home - away when margin regressor. Uses NCAAB model when league is ncaab.
+    NCAAB model may be binary classifier or margin regressor; legacy regressors without margin_home_minus_away are negated.
     """
     path = _spread_model_path_for_league(league)
     payload = load_model(path)
@@ -517,8 +522,10 @@ def predict_spread_prob(
         else:
             raw = prob_home_cover if home_underdog else (1.0 - prob_home_cover)
         return float(np.clip(raw, 0.02, 0.98))
-    pred_margin = float(model.predict(X)[0])
-    pred_margin -= payload.get("margin_calibration_shift", 0.0)
+    raw_margin = float(model.predict(X)[0])
+    if str(league or "").strip().lower() == "ncaab" and not payload.get("margin_home_minus_away", False):
+        raw_margin = -raw_margin
+    pred_margin = raw_margin - payload.get("margin_calibration_shift", 0.0)
     diff = pred_margin - market_spread
     k = 0.35
     prob_home_cover = 1.0 / (1.0 + np.exp(-k * diff))
@@ -612,8 +619,10 @@ def _spread_direction_home_cover(
         home_underdog = market_spread > 0
         prob_home_cover = prob_underdog_cover if home_underdog else (1.0 - prob_underdog_cover)
         return prob_home_cover > 0.5
-    pred_margin = float(model.predict(X)[0])
-    pred_margin -= payload.get("margin_calibration_shift", 0.0)
+    raw_margin = float(model.predict(X)[0])
+    if str(league or "").strip().lower() == "ncaab" and not payload.get("margin_home_minus_away", False):
+        raw_margin = -raw_margin
+    pred_margin = raw_margin - payload.get("margin_calibration_shift", 0.0)
     diff = pred_margin - market_spread
     prob_home_cover = 1.0 / (1.0 + np.exp(-0.35 * diff))
     return prob_home_cover > 0.5

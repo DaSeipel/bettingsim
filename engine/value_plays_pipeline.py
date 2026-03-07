@@ -25,6 +25,7 @@ from engine.betting_models import (
     get_spread_predicted_margin,
     get_top_shap_reasoning,
     load_feature_matrix_for_inference,
+    NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS,
 )
 from engine.clv_tracker import (
     record_recommendations as clv_record_recommendations,
@@ -41,6 +42,7 @@ from engine.engine import (
     get_team_power_ratings,
 )
 from engine.espn_odds import get_espn_live_odds_with_stats
+from engine.rundown_odds import get_rundown_live_odds_with_stats
 from engine.injury_scraper import add_injury_features
 from engine.ncaab_march_context import add_ncaab_march_context_to_df
 from engine.odds_quota import get_quota_status
@@ -76,9 +78,11 @@ POTD_LARGE_SPREAD_POINTS = 12.0
 POTD_LARGE_SPREAD_EDGE_PENALTY = 0.30
 ARCHIVE_MIN_EDGE_PCT = 6.0
 ARCHIVE_MAX_PLAYS_PER_DAY = 10
-# NCAAB spreads: require at least 3% edge; cap total plays in cache at 15
+# NCAAB spreads: require at least 3% edge; only show when 8 <= |line_error| <= 20 (filter out bad model predictions)
 NCAAB_SPREAD_MIN_EDGE_PCT = 3.0
-MAX_VALUE_PLAYS_CACHE = 15
+SPREAD_LINE_ERROR_MIN_PTS = 8.0
+SPREAD_LINE_ERROR_MAX_PTS = 20.0
+MAX_VALUE_PLAYS_CACHE = 10
 # Diversity cap: reserve slots for underdog vs favorite so dashboard shows a mix
 DIVERSITY_UNDERDOG_SLOTS = 5
 DIVERSITY_FAVORITE_SLOTS = 5
@@ -174,6 +178,7 @@ def _live_odds_to_value_plays(
     debug: bool = False,
     min_bookmakers_override: Optional[int] = None,
     debug_failed_underdogs: Optional[list] = None,
+    verbose_stats: Optional[dict] = None,
 ) -> tuple[pd.DataFrame, int]:
     """In-house line vs market; key-number adjustment; fractional Kelly. Returns (value_plays_df, n_flagged)."""
     if odds_df.empty:
@@ -194,7 +199,10 @@ def _live_odds_to_value_plays(
     _debug_relax = os.environ.get("DEBUG_RELAX_FILTERS", "") == "1"
     _min_books = min_bookmakers_override if min_bookmakers_override is not None else (1 if (debug and _debug_relax) else MIN_BOOKMAKERS_VALUE_PLAY)
 
+    _cur_pred_margin: Optional[float] = None
+    _cur_line_error: Optional[float] = None
     for _, r in odds_df.iterrows():
+        _cur_pred_margin, _cur_line_error = None, None
         if "bookmaker_count" in r.index and r.get("bookmaker_count") is not None and not pd.isna(r.get("bookmaker_count")):
             if int(r.get("bookmaker_count", 0)) < _min_books:
                 continue
@@ -245,6 +253,47 @@ def _live_odds_to_value_plays(
                 continue
         elif market_type == "spreads" and point is not None:
             market_spread = -float(point)
+            if league_lookup == "ncaab":
+                try:
+                    pred_m = get_spread_predicted_margin(
+                        feature_row, market_spread, league_lookup,
+                        home_team=home_team, away_team=away_team,
+                    )
+                    line_err = (pred_m - market_spread) if pred_m is not None else None
+                    _cur_pred_margin, _cur_line_error = pred_m, line_err
+                except (TypeError, ValueError):
+                    pass
+                if verbose_stats is not None:
+                    verbose_stats.setdefault("ncaab_spread_considered", 0)
+                    verbose_stats["ncaab_spread_considered"] += 1
+                    verbose_stats.setdefault("all_spread_line_errors", []).append({
+                        "event": r.get("event_name", ""),
+                        "selection": selection,
+                        "point": float(point),
+                        "market_spread": market_spread,
+                        "pred_margin": round(_cur_pred_margin, 2) if _cur_pred_margin is not None else None,
+                        "line_error": round(_cur_line_error, 2) if _cur_line_error is not None else None,
+                    })
+            # Debug: capture KenPom features for Duke/UNC to investigate extreme line errors
+            if verbose_stats is not None and feature_row is not None and "debug_duke_unc_features" not in verbose_stats:
+                evt = (r.get("event_name") or "").lower()
+                ht = (home_team or "").lower()
+                at = (away_team or "").lower()
+                if ("duke" in evt or "duke" in ht or "duke" in at) and ("north carolina" in evt or "unc" in evt or "north carolina" in ht or "north carolina" in at):
+                    raw = {}
+                    for col in NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS:
+                        if col in feature_row.index:
+                            v = feature_row[col]
+                            raw[col] = float(v) if v is not None and not (isinstance(v, float) and pd.isna(v)) else None
+                    verbose_stats["debug_duke_unc_features"] = {
+                        "event": r.get("event_name", ""),
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "market_spread": market_spread,
+                        "pred_margin": _cur_pred_margin,
+                        "line_error": _cur_line_error,
+                        "kenpom_features": raw,
+                    }
             home_rating = power_ratings.get(home_team, default_rating) - get_schedule_fatigue_penalty(home_team, as_of_date)
             away_rating = power_ratings.get(away_team, default_rating) - get_schedule_fatigue_penalty(away_team, as_of_date)
             in_house_spread = in_house_spread_from_ratings(home_rating, away_rating)
@@ -253,7 +302,10 @@ def _live_odds_to_value_plays(
             model_prob, consensus_ok = consensus_spread(
                 feature_row, market_spread, we_cover_favorite, in_house_spread, fallback, league=league_lookup
             )
-            if _debug_relax:
+            # NCAAB: only one spread model — skip consensus and pass on edge % alone
+            if league_lookup == "ncaab":
+                consensus_ok = True
+            elif _debug_relax:
                 consensus_ok = True
             if not consensus_ok:
                 continue
@@ -290,6 +342,15 @@ def _live_odds_to_value_plays(
         line_for_key = float(point) if point is not None else 0.0
         ev_pct += key_number_value_adjustment(line_for_key, league, market_type)
         if ev_pct < min_ev_pct:
+            if verbose_stats is not None and market_type == "spreads" and league_lookup == "ncaab":
+                verbose_stats.setdefault("near_misses", []).append({
+                    "event": r.get("event_name", ""),
+                    "selection": selection,
+                    "point": float(point) if point is not None else None,
+                    "edge_pct": round(ev_pct, 2),
+                    "pred_margin": _cur_pred_margin,
+                    "line_error": round(_cur_line_error, 2) if _cur_line_error is not None else None,
+                })
             if debug_failed_underdogs is not None and market_type == "spreads" and point is not None:
                 try:
                     pt_float = float(point)
@@ -320,6 +381,12 @@ def _live_odds_to_value_plays(
             continue
         is_home_b2b = home_team in b2b_teams
         is_away_b2b = away_team in b2b_teams
+        if verbose_stats is not None and league_lookup == "ncaab" and market_type == "spreads":
+            verbose_stats.setdefault("ncaab_spread_passed", 0)
+            verbose_stats["ncaab_spread_passed"] += 1
+        line_error_for_row: Optional[float] = None
+        if league_lookup == "ncaab" and market_type == "spreads":
+            line_error_for_row = round(_cur_line_error, 2) if _cur_line_error is not None else None
         rows.append({
             "League": league,
             "Event": r.get("event_name", ""),
@@ -339,6 +406,7 @@ def _live_odds_to_value_plays(
             "is_home_b2b": is_home_b2b,
             "is_away_b2b": is_away_b2b,
             "underdog_value": is_underdog_side and (model_prob > implied_prob),
+            "line_error": line_error_for_row,
         })
     return pd.DataFrame(rows), n_flagged
 
@@ -392,7 +460,7 @@ def select_play_of_the_day(
     live_odds_df: pd.DataFrame,
     min_edge_pct: float = POTD_MIN_EDGE_PCT,
 ) -> dict[str, Optional[dict]]:
-    """Select two NCAAB POTD picks. Returns {"NCAAB Pick 1": pick_dict or None, "NCAAB Pick 2": ...}."""
+    """Select two NCAAB POTD picks. Pick 1 = highest edge moneyline. Pick 2 = highest edge spread (8–20 pt line error); if none, 2nd moneyline."""
     result: dict[str, Optional[dict]] = {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
     if value_plays_df.empty or "League" not in value_plays_df.columns:
         return result
@@ -402,45 +470,9 @@ def select_play_of_the_day(
     ].copy()
     if eligible.empty:
         return result
-    bc = _bookmaker_counts(live_odds_df)
-    if not bc.empty:
-        eligible = eligible.merge(
-            bc,
-            left_on=["Event", "Market", "Selection", "point"],
-            right_on=["event_name", "market_type", "selection", "point"],
-            how="left",
-        )
-        eligible["bookmaker_count"] = eligible["bookmaker_count"].fillna(0).astype(int)
-    else:
-        eligible["bookmaker_count"] = 0
-    if "model_prob" in eligible.columns and "implied_prob" in eligible.columns:
-        eligible["model_prob_gap"] = (eligible["model_prob"] - eligible["implied_prob"]).abs()
-    else:
-        eligible["model_prob_gap"] = 0.0
-
-    def _has_injury_flag(row: pd.Series) -> bool:
-        if row.get("top5_out_or_doubtful_home") or row.get("top5_out_or_doubtful_away"):
-            return True
-        score = row.get("injury_impact_score")
-        if pd.isna(score):
-            return False
-        return float(score) > 0.5
-
-    eligible["has_injury_flag"] = eligible.apply(_has_injury_flag, axis=1)
-
-    def _adjusted_edge(row: pd.Series) -> float:
-        if str(row.get("Market", "")).strip().lower() != "spreads":
-            return float(row.get("Value (%)", 0))
-        pt = row.get("point_x") if "point_x" in row.index else row.get("point")
-        try:
-            abs_spread = abs(float(pt))
-        except (TypeError, ValueError):
-            return float(row.get("Value (%)", 0))
-        if abs_spread > POTD_LARGE_SPREAD_POINTS:
-            return float(row.get("Value (%)", 0)) * (1.0 - POTD_LARGE_SPREAD_EDGE_PENALTY)
-        return float(row.get("Value (%)", 0))
-
-    eligible["_adjusted_edge"] = eligible.apply(_adjusted_edge, axis=1)
+    market_str = eligible["Market"].astype(str).str.strip().str.lower()
+    moneylines = eligible.loc[market_str == "h2h"].sort_values("Value (%)", ascending=False).reset_index(drop=True)
+    spreads = eligible.loc[market_str == "spreads"].sort_values("Value (%)", ascending=False).reset_index(drop=True)
 
     def _is_large_spread(row: pd.Series) -> bool:
         if str(row.get("Market", "")).strip().lower() != "spreads":
@@ -450,11 +482,6 @@ def select_play_of_the_day(
             return abs(float(pt)) > POTD_LARGE_SPREAD_POINTS
         except (TypeError, ValueError):
             return False
-
-    sorted_df = eligible.sort_values(
-        by=["_adjusted_edge", "bookmaker_count", "model_prob_gap", "has_injury_flag"],
-        ascending=[False, False, False, True],
-    ).reset_index(drop=True)
 
     def _row_to_pick(top: pd.Series, label: str) -> dict:
         point_val = top.get("point_x") if "point_x" in top.index else top.get("point")
@@ -484,13 +511,15 @@ def select_play_of_the_day(
             "model_prob": float(top.get("model_prob", 0)),
             "confidence_tier": str(top.get("confidence_tier", "Medium")).strip() or "Medium",
             "reasoning_summary": top.get("reasoning_summary") if pd.notna(top.get("reasoning_summary")) else None,
+            "line_error": top.get("line_error"),
         }
 
-    result["NCAAB Pick 1"] = _row_to_pick(sorted_df.iloc[0], "NCAAB Pick 1")
-    pick1_event = str(sorted_df.iloc[0].get("Event", ""))
-    other_games = sorted_df[sorted_df["Event"].astype(str).str.strip() != pick1_event.strip()]
-    if not other_games.empty:
-        result["NCAAB Pick 2"] = _row_to_pick(other_games.iloc[0], "NCAAB Pick 2")
+    if not moneylines.empty:
+        result["NCAAB Pick 1"] = _row_to_pick(moneylines.iloc[0], "NCAAB Pick 1")
+    if not spreads.empty:
+        result["NCAAB Pick 2"] = _row_to_pick(spreads.iloc[0], "NCAAB Pick 2")
+    elif len(moneylines) >= 2:
+        result["NCAAB Pick 2"] = _row_to_pick(moneylines.iloc[1], "NCAAB Pick 2")
     return result
 
 
@@ -592,6 +621,59 @@ def _json_sanitize(obj: Any) -> Any:
     return obj
 
 
+def _print_verbose_spread_stats(verbose_stats: dict) -> None:
+    """Print NCAAB spread considered/passed, top 5 near-misses, and line errors for every spread."""
+    considered = verbose_stats.get("ncaab_spread_considered", 0)
+    passed = verbose_stats.get("ncaab_spread_passed", 0)
+    print("\n--- NCAAB spread pipeline (verbose) ---")
+    print(f"NCAAB spread plays considered (before {NCAAB_SPREAD_MIN_EDGE_PCT}% edge filter): {considered}")
+    print(f"NCAAB spread plays passed (>= {NCAAB_SPREAD_MIN_EDGE_PCT}% edge): {passed}")
+
+    near = verbose_stats.get("near_misses", [])
+    if near:
+        by_edge = sorted(near, key=lambda x: x.get("edge_pct", -999), reverse=True)
+        top5 = by_edge[:5]
+        print(f"\nTop 5 NCAAB spread plays closest to passing (passed consensus, edge < {NCAAB_SPREAD_MIN_EDGE_PCT}%):")
+        for i, rec in enumerate(top5, 1):
+            le = rec.get("line_error")
+            le_str = f"{le:+.2f}" if le is not None else "N/A"
+            pt = rec.get("point")
+            pt_str = f"{pt:+.1f}" if pt is not None else "?"
+            print(f"  {i}. {rec.get('selection', '')} ({pt_str})  |  {rec.get('event', '')[:45]}  |  Edge {rec.get('edge_pct', 0):.2f}%  |  Line error {le_str} pts")
+    else:
+        print(f"\nTop 5 near-misses: none (all NCAAB spread plays had edge >= {NCAAB_SPREAD_MIN_EDGE_PCT}% or failed other filters).")
+
+    all_err = verbose_stats.get("all_spread_line_errors", [])
+    if all_err:
+        above_3 = [e for e in all_err if e.get("line_error") is not None and abs(e["line_error"]) > 3]
+        print(f"\nLine error for every NCAAB spread game today ({len(all_err)} rows):")
+        for e in all_err:
+            le = e.get("line_error")
+            le_str = f"{le:+.2f}" if le is not None else "N/A"
+            print(f"  {e.get('event', '')[:40]}  |  {e.get('selection', '')} {e.get('point', 0):+.1f}  |  pred_margin={e.get('pred_margin')}  |  line_error={le_str} pts")
+        print(f"\nGames with |line_error| > 3 pts: {len(above_3)}")
+        # Top 5 spread plays today by |line_error| (largest disagreement with market first)
+        with_abs = [(e, abs(e["line_error"]) if e.get("line_error") is not None else 0.0) for e in all_err]
+        with_abs.sort(key=lambda x: x[1], reverse=True)
+        top5_by_error = [e for e, _ in with_abs[:5]]
+        if top5_by_error:
+            print(f"\nTop 5 NCAAB spread plays today by |line_error|:")
+            for i, e in enumerate(top5_by_error, 1):
+                le = e.get("line_error")
+                le_str = f"{le:+.2f}" if le is not None else "N/A"
+                print(f"  {i}. {e.get('event', '')[:42]}  |  {e.get('selection', '')} {e.get('point', 0):+.1f}  |  pred_margin={e.get('pred_margin')}  |  line_error={le_str} pts")
+    duke_unc = verbose_stats.get("debug_duke_unc_features")
+    if duke_unc:
+        print("\n--- Duke / North Carolina: raw KenPom features fed to spread model ---")
+        print(f"Event: {duke_unc.get('event', '')}  |  home: {duke_unc.get('home_team')}  |  away: {duke_unc.get('away_team')}")
+        print(f"market_spread={duke_unc.get('market_spread')}  |  pred_margin={duke_unc.get('pred_margin')}  |  line_error={duke_unc.get('line_error')}")
+        kp = duke_unc.get("kenpom_features") or {}
+        for k in sorted(kp.keys()):
+            print(f"  {k}: {kp[k]}")
+        print("---")
+    print(f"\n>>> NCAAB spread plays passed (>= {NCAAB_SPREAD_MIN_EDGE_PCT}% edge): {passed} <<<\n")
+
+
 def run_pipeline_to_cache(
     api_key: str,
     cache_path: Path,
@@ -600,6 +682,7 @@ def run_pipeline_to_cache(
     kelly_frac: float = 0.25,
     include_high_risk: bool = False,
     march_madness_mode: bool = False,
+    verbose: bool = False,
 ) -> None:
     """
     Run the full value-plays pipeline and write results to cache_path (JSON).
@@ -632,17 +715,37 @@ def run_pipeline_to_cache(
         meta: dict = {}
         quota = get_quota_status()
         remaining = quota.get("requests_remaining")
+        if verbose:
+            print(f"[DEBUG_RUNDOWN] Pipeline: live_odds_df.empty={live_odds_df.empty}, remaining={remaining!r}.")
         if live_odds_df.empty and remaining is not None:
             try:
                 r = int(remaining)
             except (TypeError, ValueError):
                 r = 999
+            if verbose:
+                print(f"[DEBUG_RUNDOWN] Pipeline: credits remaining={r}, r<10={r < 10}. Will try Rundown then ESPN when r<10.")
             if r < 10:
-                live_odds_df, n_games, n_odds_rows = get_espn_live_odds_with_stats(
+                # Primary fallback: The Rundown (RapidAPI); then ESPN
+                if verbose:
+                    os.environ["DEBUG_RUNDOWN_ODDS"] = "1"
+                live_odds_df, n_games, n_odds_rows = get_rundown_live_odds_with_stats(
                     sport_keys=LIVE_ODDS_SPORT_KEYS,
                     commence_on_date=None,
                 )
-                meta = {"used_espn_fallback": True, "espn_games": n_games, "espn_odds_rows": n_odds_rows}
+                if verbose:
+                    os.environ.pop("DEBUG_RUNDOWN_ODDS", None)
+                if not live_odds_df.empty:
+                    meta = {"used_rundown_fallback": True, "rundown_games": n_games, "rundown_odds_rows": n_odds_rows}
+                else:
+                    if verbose:
+                        os.environ["DEBUG_ESPN_ODDS"] = "1"
+                    live_odds_df, n_games, n_odds_rows = get_espn_live_odds_with_stats(
+                        sport_keys=LIVE_ODDS_SPORT_KEYS,
+                        commence_on_date=None,
+                    )
+                    if verbose:
+                        os.environ.pop("DEBUG_ESPN_ODDS", None)
+                    meta = {"used_espn_fallback": True, "espn_games": n_games, "espn_odds_rows": n_odds_rows}
         if not live_odds_df.empty and "commence_time" in live_odds_df.columns:
             now_utc = datetime.now(timezone.utc)
             cutoff_end = now_utc + timedelta(hours=24)
@@ -665,13 +768,32 @@ def run_pipeline_to_cache(
         b2b_teams = set(get_nba_teams_back_to_back(api_key.strip(), as_of_date))
         feature_matrix = load_feature_matrix_for_inference(league=None)
         pace_stats = get_nba_team_pace_stats()
+        use_rundown_fallback = bool(meta.get("used_rundown_fallback"))
         use_espn_fallback = bool(meta.get("used_espn_fallback"))
-        min_ev = 1.5 if use_espn_fallback else EV_EPSILON_MIN_PCT
-        min_books_override = 1 if use_espn_fallback else None
+        use_fallback = use_rundown_fallback or use_espn_fallback
+        min_ev = 1.5 if use_fallback else EV_EPSILON_MIN_PCT
+        min_books_override = 1 if use_fallback else None
+
+        if verbose:
+            if use_rundown_fallback:
+                n_g = meta.get("rundown_games", 0)
+                n_o = meta.get("rundown_odds_rows", 0)
+                ncaab_g = (live_odds_df.loc[live_odds_df["league"] == "NCAAB", "event_id"].nunique()
+                    if not live_odds_df.empty and "league" in live_odds_df.columns else 0)
+                print(f"The Rundown fallback: Yes. NCAAB games: {ncaab_g}. Total games: {n_g}. Odds rows: {n_o}.")
+            elif use_espn_fallback:
+                n_espn = meta.get("espn_games", 0)
+                n_odds = meta.get("espn_odds_rows", 0)
+                print(f"ESPN fallback: Yes. NCAAB games from ESPN: {n_espn}. Odds rows: {n_odds}.")
+            else:
+                ncaab_games = (live_odds_df.loc[live_odds_df["league"] == "NCAAB", "event_id"].nunique()
+                    if not live_odds_df.empty and "league" in live_odds_df.columns else 0)
+                print(f"ESPN fallback: No. NCAAB games from Odds API: {ncaab_games}.")
 
         vp_frames: list[pd.DataFrame] = []
         value_plays_flagged_count = 0
         debug_failed_underdogs: list = []
+        verbose_stats: Optional[dict] = {} if verbose else None
         for league_name in ("NCAAB",):
             ev_for_league = NCAAB_SPREAD_MIN_EDGE_PCT if league_name == "NCAAB" else min_ev
             sub = (
@@ -695,10 +817,14 @@ def run_pipeline_to_cache(
                 feature_matrix=feature_matrix,
                 min_bookmakers_override=min_books_override,
                 debug_failed_underdogs=debug_failed_underdogs,
+                verbose_stats=verbose_stats if verbose else None,
             )
             if not vp.empty:
                 vp_frames.append(vp)
             value_plays_flagged_count += flagged
+
+        if verbose and verbose_stats:
+            _print_verbose_spread_stats(verbose_stats)
 
         value_plays_df = (
             pd.concat(vp_frames, ignore_index=True)
@@ -721,14 +847,25 @@ def run_pipeline_to_cache(
                 axis=1,
             )
 
-        # NCAAB spreads: require min 5% edge; cap at 15 plays total, sorted by edge descending (before archive/POTD)
+        # Moneylines: keep min edge 3%. Spreads: min edge 3% and 8 <= |line_error| <= 20 (filter out bad model predictions)
         if not value_plays_df.empty and "League" in value_plays_df.columns and "Market" in value_plays_df.columns:
-            ncaab_spread = (value_plays_df["League"].astype(str).str.strip().str.upper() == "NCAAB") & (value_plays_df["Market"].astype(str).str.strip().str.lower() == "spreads")
+            ncaab = value_plays_df["League"].astype(str).str.strip().str.upper() == "NCAAB"
+            spread = value_plays_df["Market"].astype(str).str.strip().str.lower() == "spreads"
+            ncaab_spread = ncaab & spread
             other = ~ncaab_spread
-            spread_ok = value_plays_df["Value (%)"] >= NCAAB_SPREAD_MIN_EDGE_PCT
-            keep = other | (ncaab_spread & spread_ok)
+            spread_ok_edge = value_plays_df["Value (%)"] >= NCAAB_SPREAD_MIN_EDGE_PCT
+            le = value_plays_df.get("line_error")
+            if le is not None:
+                abs_le = le.abs()
+                spread_ok_line = le.notna() & (abs_le >= SPREAD_LINE_ERROR_MIN_PTS) & (abs_le <= SPREAD_LINE_ERROR_MAX_PTS)
+            else:
+                spread_ok_line = pd.Series(False, index=value_plays_df.index)
+            keep = other | (ncaab_spread & spread_ok_edge & spread_ok_line)
             value_plays_df = value_plays_df.loc[keep].copy()
-        value_plays_df = _apply_diversity_cap(value_plays_df, max_plays=MAX_VALUE_PLAYS_CACHE)
+        value_plays_df = value_plays_df.sort_values("Value (%)", ascending=False).head(MAX_VALUE_PLAYS_CACHE).reset_index(drop=True)
+
+        if verbose:
+            print(f"Plays passed all filters: {len(value_plays_df)}.")
 
         try:
             to_archive = value_plays_df[value_plays_df["Value (%)"] >= ARCHIVE_MIN_EDGE_PCT].copy()
@@ -838,6 +975,14 @@ def run_pipeline_to_cache(
         }
         with open(cache_path, "w") as f:
             json.dump(payload, f, indent=2)
+
+        print("\n--- Today's value plays (type and line errors) ---")
+        for i, play in enumerate(value_plays_list, 1):
+            market = play.get("Market", "—")
+            le = play.get("line_error")
+            le_str = f"{le:+.2f} pts" if le is not None else "—"
+            print(f"  {i}. [{market}] {str(play.get('Event', ''))[:45]}  |  {play.get('Selection', '')}  |  Edge {play.get('Value (%)', 0)}%  |  line_error {le_str}")
+        print("---\n")
 
     except Exception as e:
         import traceback

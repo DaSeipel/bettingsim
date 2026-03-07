@@ -26,10 +26,8 @@ from engine.betting_models import (
     get_training_data,
 )
 
-# Line-error threshold: flag when |line_error| > 6 (filters weak signals)
-LINE_ERROR_THRESHOLD_PTS = 6.0
-# Target underdog share of recommendations (calibration shift is chosen to hit this)
-TARGET_UNDERDOG_RATE_LO, TARGET_UNDERDOG_RATE_HI = 35.0, 45.0
+# Line-error threshold: recommend when |line_error| > this (model must disagree with market by at least this many points)
+LINE_ERROR_THRESHOLD_PTS = 10.0
 
 
 def main() -> None:
@@ -71,11 +69,13 @@ def main() -> None:
     n_total = len(df)
     print(f"Games with KenPom + real closing_home_spread: {n_total}")
 
-    # Target: actual margin (home - away)
+    # Target: actual margin = home_score - away_score (home - away). Positive = home wins by that many.
     df = df.copy()
     df["margin"] = df["home_score"].astype(float) - df["away_score"].astype(float)
     spread = df["closing_home_spread"].astype(float)
+    print("Margin target definition: home_score - away_score (home - away); positive = home wins by that many.")
     print(f"Margin (home-away) range: [{df['margin'].min():.1f}, {df['margin'].max():.1f}]")
+    print(f"Sample (home_score, away_score, margin): {list(zip(df['home_score'].head(3).tolist(), df['away_score'].head(3).tolist(), df['margin'].head(3).tolist()))}")
 
     feature_cols = list(NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS)
     X, used = _select_features(df, feature_cols)
@@ -116,63 +116,42 @@ def main() -> None:
         verbose=False,
     )
 
-    # Save as margin model (no classifier flag)
+    # Save as margin model. No calibration shift: raw predicted margin vs closing spread for natural edge.
     payload = {
         "model": model,
         "feature_columns": used,
         "is_underdog_cover_classifier": False,
+        "margin_home_minus_away": True,
+        "margin_calibration_shift": 0.0,
     }
     _ensure_models_dir()
     with open(SPREAD_MODEL_PATH_NCAAB, "wb") as f:
         pickle.dump(payload, f)
-    print(f"Model saved to {SPREAD_MODEL_PATH_NCAAB}")
+    print(f"Model saved to {SPREAD_MODEL_PATH_NCAAB} (no calibration shift)")
 
-    # Test set: line error = pred_margin - closing_spread (before calibration)
+    # Test set: line error = pred_margin - closing_spread (no offset)
     pred_margin_test = model.predict(X_test)
     line_error_test = pred_margin_test - spread_test
 
-    # Find calibration shift so that (pred_margin - shift) - spread gives 35-45% underdog rate
-    def underdog_rate_for_shift(shift: float) -> float:
-        le = line_error_test - shift
-        rec_dog = (le > LINE_ERROR_THRESHOLD_PTS).sum()
-        rec_fav = (le < -LINE_ERROR_THRESHOLD_PTS).sum()
-        total = rec_dog + rec_fav
-        return 100.0 * rec_dog / total if total > 0 else 0.0
-
-    # Choose shift that gives underdog rate in [35, 45]; else closest to 40%
-    candidates = [(float(shift), underdog_rate_for_shift(float(shift))) for shift in range(0, 25)]
-    in_range = [(s, r) for s, r in candidates if TARGET_UNDERDOG_RATE_LO <= r <= TARGET_UNDERDOG_RATE_HI]
-    if in_range:
-        margin_calibration_shift = min(in_range, key=lambda x: abs(x[1] - 40.0))[0]
-    else:
-        margin_calibration_shift = min(candidates, key=lambda x: abs(x[1] - 40.0))[0]
-
-    payload["margin_calibration_shift"] = margin_calibration_shift
-    with open(SPREAD_MODEL_PATH_NCAAB, "wb") as f:
-        pickle.dump(payload, f)
-
-    # Report with calibrated line error
-    line_error_cal = line_error_test - margin_calibration_shift
-    recommend_underdog = line_error_cal > LINE_ERROR_THRESHOLD_PTS
-    recommend_favorite = line_error_cal < -LINE_ERROR_THRESHOLD_PTS
-    total_recommendations = recommend_underdog.sum() + recommend_favorite.sum()
+    recommend_underdog = line_error_test > LINE_ERROR_THRESHOLD_PTS
+    recommend_favorite = line_error_test < -LINE_ERROR_THRESHOLD_PTS
+    total_recommendations = int(recommend_underdog.sum() + recommend_favorite.sum())
 
     if total_recommendations > 0:
         underdog_rate = 100.0 * recommend_underdog.sum() / total_recommendations
         print()
         print(
-            f"Underdog spread recommendation rate (test set, |line_error| > {LINE_ERROR_THRESHOLD_PTS} pts): {underdog_rate:.1f}%"
+            f"Underdog spread recommendation rate (test set, |line_error| > {LINE_ERROR_THRESHOLD_PTS} pts, no shift): {underdog_rate:.1f}%"
         )
-        print(f"  Underdog: {int(recommend_underdog.sum())}, Favorite: {int(recommend_favorite.sum())}, total: {int(total_recommendations)}")
-        print(f"  margin_calibration_shift = {margin_calibration_shift:.1f} pts (target: 35–45% underdogs)")
+        print(f"  Underdog: {int(recommend_underdog.sum())}, Favorite: {int(recommend_favorite.sum())}, total: {total_recommendations}")
+        print(f"  Target: underdog rate 30–50%, MAE < 12 pts")
     else:
         print()
-        print("No test recommendations.")
+        print("No test recommendations (|line_error| > threshold).")
 
-    # Regression metrics
     mae = np.abs(pred_margin_test - y_test).mean()
     print()
-    print(f"Test MAE (margin): {mae:.2f} pts (target: < 10 pts)")
+    print(f"Test MAE (margin): {mae:.2f} pts (target: < 12 pts)")
 
 
 if __name__ == "__main__":

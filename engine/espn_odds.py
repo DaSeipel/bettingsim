@@ -1,21 +1,29 @@
 """
 ESPN unofficial odds API (no API key).
-Fetches events and odds from sports.core.api.espn.com v2 for NBA and NCAAB.
+NCAAB: uses site scoreboard endpoint (full daily slate), then core API for odds when scoreboard has none.
+NBA: uses sports.core.api.espn.com v2 events + per-event odds.
 Maps to the same DataFrame schema as get_live_odds (live_odds_df) for pipeline compatibility.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
 
+def _debug_espn_odds() -> bool:
+    return os.environ.get("DEBUG_ESPN_ODDS", "") == "1"
+
 from .engine import BASKETBALL_NBA, BASKETBALL_NCAAB, SPORT_KEY_TO_LEAGUE
 
 ESPN_BASE = "https://sports.core.api.espn.com/v2/sports/basketball/leagues"
+# Site API scoreboard returns full daily slate (used for NCAAB)
+ESPN_SITE_SCOREBOARD_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball"
 REQUEST_TIMEOUT = 12
 REQUEST_HEADERS = {"Accept": "application/json", "User-Agent": "bettingsim/1.0"}
 
@@ -70,11 +78,14 @@ def _parse_commence_date_utc(commence_time: str) -> date | None:
     return dt.date()
 
 
-def _is_future(commence_time: str) -> bool:
+def _is_future(commence_time: str, now_utc: datetime | None = None) -> bool:
+    """True if game has not yet started (compare in UTC)."""
     dt = _parse_commence_datetime(commence_time)
     if dt is None:
         return False
-    return dt > datetime.now(timezone.utc)
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    return dt > now_utc
 
 
 def _parse_home_away_from_name(name: str) -> tuple[str, str]:
@@ -109,27 +120,89 @@ def _fetch_json(url: str, session: requests.Session) -> dict | list | None:
         return None
 
 
+def _scoreboard_url(league_slug: str, on_date: date, limit: int = 200) -> str:
+    """Scoreboard endpoint. NCAAB: groups=50 = all conferences for full daily slate (otherwise capped at 15)."""
+    dates_param = on_date.strftime("%Y%m%d")
+    if league_slug == "mens-college-basketball":
+        return f"{ESPN_SITE_SCOREBOARD_BASE}/{league_slug}/scoreboard?groups=50&limit={limit}&dates={dates_param}"
+    return f"{ESPN_SITE_SCOREBOARD_BASE}/{league_slug}/scoreboard?dates={dates_param}&limit={limit}"
+
+
+def _fetch_scoreboard(league_slug: str, session: requests.Session, on_date: date) -> dict | None:
+    """Fetch scoreboard JSON for one date. Returns None on error."""
+    url = _scoreboard_url(league_slug, on_date)
+    return _fetch_json(url, session)
+
+
+def _parse_competitors_home_away(competitors: list) -> tuple[str, str]:
+    """From scoreboard competition.competitors (homeAway + team.displayName), return (home_team, away_team)."""
+    home_team = ""
+    away_team = ""
+    for c in competitors or []:
+        if not isinstance(c, dict):
+            continue
+        ha = (c.get("homeAway") or "").strip().lower()
+        team = c.get("team") if isinstance(c.get("team"), dict) else {}
+        name = (team.get("displayName") or team.get("name") or "").strip()
+        if not name:
+            continue
+        if ha == "home":
+            home_team = name
+        elif ha == "away":
+            away_team = name
+    return (home_team, away_team)
+
+
+def _odds_items_from_scoreboard_competition(comp: dict) -> list[dict]:
+    """Parse competitions[0].odds from scoreboard. ESPN may return odds as list of provider items."""
+    odds = comp.get("odds")
+    if odds is None:
+        return []
+    if isinstance(odds, list):
+        return [o for o in odds if isinstance(o, dict)]
+    if isinstance(odds, dict):
+        return [odds]
+    return []
+
+
 def _fetch_events_list(
     league_slug: str,
     session: requests.Session,
     on_date: date,
-    limit: int = 80,
+    limit: int = 200,
 ) -> list[str]:
-    """Return list of event IDs for on_date (YYYYMMDD). Caller still filters by future commence_time."""
+    """Return list of event IDs for on_date (YYYYMMDD). Fetches all pages. Caller filters by future commence_time."""
     url = _events_url(league_slug)
     dates_param = on_date.strftime("%Y%m%d")
-    data = _fetch_json(f"{url}?limit={limit}&dates={dates_param}", session)
-    if not data or not isinstance(data, dict):
-        return []
-    items = data.get("items") or []
-    event_ids = []
-    for item in items:
-        ref = item.get("$ref") if isinstance(item, dict) else None
-        if not ref:
-            continue
-        eid = _parse_event_id_from_ref(ref)
-        if eid:
-            event_ids.append(eid)
+    event_ids: list[str] = []
+    page_index = 1
+    first_response_printed = False
+    while True:
+        full_url = f"{url}?limit={limit}&dates={dates_param}&pageIndex={page_index}"
+        if _debug_espn_odds() and page_index == 1:
+            print(f"[DEBUG_ESPN_ODDS] (1) Raw URL for NCAAB events: {full_url}")
+        data = _fetch_json(full_url, session)
+        if _debug_espn_odds() and data is not None and not first_response_printed:
+            try:
+                raw_str = json.dumps(data, indent=2)
+                print(f"[DEBUG_ESPN_ODDS] (2) Full raw response (first API call, events list):\n{raw_str[:12000]}{'...' if len(raw_str) > 12000 else ''}")
+                first_response_printed = True
+            except Exception:
+                print("[DEBUG_ESPN_ODDS] (2) Raw response (could not serialize):", type(data), str(data)[:2000])
+        if not data or not isinstance(data, dict):
+            break
+        items = data.get("items") or []
+        for item in items:
+            ref = item.get("$ref") if isinstance(item, dict) else None
+            if not ref:
+                continue
+            eid = _parse_event_id_from_ref(ref)
+            if eid:
+                event_ids.append(eid)
+        page_count = data.get("pageCount") or 1
+        if page_index >= page_count:
+            break
+        page_index += 1
     return event_ids
 
 
@@ -284,6 +357,75 @@ def _rows_from_espn_odds(
     return rows
 
 
+def _ncaab_odds_from_scoreboard(
+    session: requests.Session,
+    sport_key: str,
+    league: str,
+    today: date,
+    now_utc: datetime,
+    tz: ZoneInfo,
+    use_tz_for_today: bool,
+) -> list[dict]:
+    """
+    Fetch NCAAB events and odds using the site scoreboard endpoint (full daily slate).
+    Parses home, away, commence time, and when present competitions[0].odds (spread, moneyline, total).
+    When scoreboard has no odds for an event, fetches odds from core API for that event.
+    Filters to today (ET) and future games only.
+    """
+    league_slug = "mens-college-basketball"
+    if _debug_espn_odds():
+        now_et = now_utc.astimezone(tz)
+        print(f"[DEBUG_ESPN_ODDS] Current system time UTC: {now_utc.isoformat()}")
+        print(f"[DEBUG_ESPN_ODDS] Current system time ET:  {now_et.isoformat()}")
+        data0 = _fetch_scoreboard(league_slug, session, today)
+        events0 = (data0 or {}).get("events") or []
+        print(f"[DEBUG_ESPN_ODDS] First 5 scoreboard events (before any filtering), total today={len(events0)}:")
+        for i, ev in enumerate(events0[:5]):
+            commence = ev.get("date") or "(none)"
+            name = ev.get("name") or "(no name)"
+            print(f"[DEBUG_ESPN_ODDS]   {i+1}. commence_time={commence}  |  {name}")
+    all_rows: list[dict] = []
+    seen_events: set[str] = set()
+    for day_offset in (0, 1):
+        fetch_date = today + timedelta(days=day_offset) if use_tz_for_today else today
+        data = _fetch_scoreboard(league_slug, session, fetch_date)
+        if not data or not isinstance(data, dict):
+            continue
+        events = data.get("events") or []
+        for ev in events:
+            event_id = str(ev.get("id") or "").strip()
+            if not event_id or event_id in seen_events:
+                continue
+            seen_events.add(event_id)
+            commence_time = ev.get("date") or ""
+            if not commence_time:
+                continue
+            event_date_et = _event_date_in_tz(commence_time, tz) if use_tz_for_today else _parse_commence_date_utc(commence_time)
+            if event_date_et is None or event_date_et != today:
+                continue
+            if not _is_future(commence_time, now_utc=now_utc):
+                continue
+            comps = ev.get("competitions") or []
+            if not comps:
+                continue
+            comp = comps[0] if isinstance(comps[0], dict) else {}
+            home_team, away_team = _parse_competitors_home_away(comp.get("competitors") or [])
+            if not home_team or not away_team:
+                name = ev.get("name") or ""
+                home_team, away_team = _parse_home_away_from_name(name)
+            if not home_team or not away_team:
+                continue
+            odds_items = _odds_items_from_scoreboard_competition(comp)
+            if not odds_items:
+                comp_id = str(comp.get("id") or event_id)
+                odds_items = _fetch_odds(league_slug, event_id, comp_id, session) or []
+            rows = _rows_from_espn_odds(
+                event_id, commence_time, home_team, away_team, sport_key, league, odds_items
+            )
+            all_rows.extend(rows)
+    return all_rows
+
+
 def get_espn_live_odds(
     sport_keys: list[str] | None = None,
     display_timezone: str = "America/New_York",
@@ -291,6 +433,7 @@ def get_espn_live_odds(
 ) -> pd.DataFrame:
     """
     Fetch live odds from ESPN's free API for NBA and/or NCAAB.
+    NCAAB uses the site scoreboard endpoint (full daily slate); NBA uses core events endpoint.
     Returns a DataFrame with the same columns as get_live_odds: sport_key, league, event_id,
     commence_time, home_team, away_team, event_name, market_type, selection, point, odds (American).
     Only includes events for today (ET) and commence_time in the future.
@@ -318,9 +461,23 @@ def get_espn_live_odds(
 
     all_rows: list[dict] = []
     session = requests.Session()
+    now_utc = datetime.now(timezone.utc)
 
     for league_slug, sport_key, league in league_slugs:
-        event_ids = _fetch_events_list(league_slug, session, today)
+        if league_slug == "mens-college-basketball":
+            rows = _ncaab_odds_from_scoreboard(
+                session, sport_key, league, today, now_utc, tz, use_tz_for_today
+            )
+            all_rows.extend(rows)
+            continue
+        # NBA: use core API events list + per-event detail + odds
+        event_ids_seen: set[str] = set()
+        for day_offset in (0, 1):
+            fetch_date = today + timedelta(days=day_offset) if use_tz_for_today else today
+            for eid in _fetch_events_list(league_slug, session, fetch_date):
+                if eid not in event_ids_seen:
+                    event_ids_seen.add(eid)
+        event_ids = list(event_ids_seen)
         for event_id in event_ids:
             ev = _fetch_event_detail(league_slug, event_id, session)
             if not ev:
@@ -328,10 +485,10 @@ def get_espn_live_odds(
             commence_time = ev.get("date") or ""
             if not commence_time:
                 continue
-            event_date = _event_date_in_tz(commence_time, tz) if use_tz_for_today else _parse_commence_date_utc(commence_time)
-            if event_date is None or event_date != today:
+            event_date_et = _event_date_in_tz(commence_time, tz) if use_tz_for_today else _parse_commence_date_utc(commence_time)
+            if event_date_et is None or event_date_et != today:
                 continue
-            if not _is_future(commence_time):
+            if not _is_future(commence_time, now_utc=now_utc):
                 continue
             name = ev.get("name") or ""
             home_team, away_team = _parse_home_away_from_name(name)
@@ -344,7 +501,6 @@ def get_espn_live_odds(
                     comp_id = str(c.get("id"))
                     break
                 if isinstance(c, dict) and c.get("$ref"):
-                    # ref like .../competitions/401810763?...
                     m = re.search(r"/competitions/(\d+)(?:\?|$)", c.get("$ref", ""))
                     if m:
                         comp_id = m.group(1)
