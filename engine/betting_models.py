@@ -848,6 +848,50 @@ def _resolve_team_for_kenpom_lookup(team_name: str, stats_teams: list[str]) -> O
     return None
 
 
+# Numeric columns from team_stats_history to merge into feature row (most recent as of game_date).
+# Training-ready: same names in data/team_stats_history.csv for later join to outcomes.
+TEAM_STATS_HISTORY_NUMERIC = ["ROff", "RDef", "last_5_wins", "avg_points_for", "avg_points_against", "avg_points_for_ha", "avg_points_against_ha"]
+
+
+def _merge_team_stats_history_into_row(
+    row: dict,
+    home_team: str,
+    away_team: str,
+    game_date: Optional[str],
+    home_key: Optional[str] = None,
+    away_key: Optional[str] = None,
+) -> None:
+    """Load team_stats_history and set home_* / away_* for most recent stats as of game_date (no lookahead)."""
+    try:
+        from .team_stats_history import (
+            load_team_stats_history,
+            get_most_recent_team_stats_resolved,
+            SNAPSHOT_STAT_COLUMNS,
+        )
+    except ImportError:
+        return
+    history_df = load_team_stats_history()
+    if history_df.empty:
+        return
+    as_of = game_date or pd.Timestamp.now().strftime("%Y-%m-%d")
+    candidates = history_df["Team"].astype(str).str.strip().dropna().unique().tolist()
+    home_stats = get_most_recent_team_stats_resolved(history_df, home_key or home_team, as_of, candidate_teams=candidates)
+    away_stats = get_most_recent_team_stats_resolved(history_df, away_key or away_team, as_of, candidate_teams=candidates)
+    for col in SNAPSHOT_STAT_COLUMNS:
+        if col not in TEAM_STATS_HISTORY_NUMERIC:
+            continue
+        if home_stats is not None and col in home_stats.index:
+            try:
+                row[f"home_{col}"] = float(home_stats[col]) if pd.notna(home_stats[col]) else 0.0
+            except (TypeError, ValueError):
+                row[f"home_{col}"] = 0.0
+        if away_stats is not None and col in away_stats.index:
+            try:
+                row[f"away_{col}"] = float(away_stats[col]) if pd.notna(away_stats[col]) else 0.0
+            except (TypeError, ValueError):
+                row[f"away_{col}"] = 0.0
+
+
 def build_ncaab_feature_row_from_team_stats(
     home_team: str,
     away_team: str,
@@ -856,6 +900,7 @@ def build_ncaab_feature_row_from_team_stats(
 ) -> Optional[pd.Series]:
     """
     Build a synthetic NCAAB feature row from ncaab_team_season_stats when no game row exists.
+    Also merges most recent team_stats_history (ROff, RDef, last_5_wins, etc.) as of game_date for prediction and training-ready features.
     Returns a Series with NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS + home_team_name, away_team_name, league;
     days_rest/b2b default to 0. Returns None if table missing or either team not found.
     """
@@ -919,6 +964,8 @@ def build_ncaab_feature_row_from_team_stats(
     row["away_games_in_last_5_days"] = 0
     row["home_is_b2b"] = 0
     row["away_is_b2b"] = 0
+    # Enrich with most recent team_stats_history (e.g. ROff, RDef, last_5_wins) for prediction and training-ready features
+    _merge_team_stats_history_into_row(row, home_team, away_team, game_date, home_key=home_key, away_key=away_key)
     return pd.Series(row)
 
 

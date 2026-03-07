@@ -5,6 +5,7 @@ Uses American odds throughout. Works for moneyline, spreads, and totals (Over/Un
 
 from __future__ import annotations
 
+import math
 import pandas as pd
 from typing import Callable
 
@@ -378,3 +379,26 @@ def strategy_value_betting_basketball(
             stake = bankroll * stake_pct
         return max(0.0, round(stake, 2))
     return _strategy
+
+
+def spread_cover_prob_from_margins(
+    pred_margin: float,
+    market_spread: float,
+    we_cover_favorite: bool,
+    k: float = 0.35,
+) -> float:
+    """
+    P(cover) for the spread using a logistic in point difference (same idea as predict_spread_prob).
+    pred_margin = home - away (positive = home wins by X). market_spread = home spread (negative = home favored).
+    diff = pred_margin - market_spread: positive means model likes home to cover vs market.
+    prob_home_cover = 1 / (1 + exp(-k * diff)); then map to our side via we_cover_favorite and home_favored.
+    Returns value in [0.02, 0.98].
+    """
+    diff = pred_margin - market_spread
+    prob_home_cover = 1.0 / (1.0 + math.exp(-k * diff))
+    home_favored = market_spread <= 0
+    if we_cover_favorite:
+        raw = prob_home_cover if home_favored else (1.0 - prob_home_cover)
+    else:
+        raw = (1.0 - prob_home_cover) if home_favored else prob_home_cover
+    return max(0.02, min(0.98, raw))

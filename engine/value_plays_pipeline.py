@@ -62,6 +62,7 @@ from strategies.strategies import (
     model_prob_from_in_house_total,
     model_prob_from_ratings_moneyline,
     predict_nba_total,
+    spread_cover_prob_from_margins,
 )
 
 # -----------------------------------------------------------------------------
@@ -208,6 +209,149 @@ def _get_ncaab_odds_espn_primary_rundown_supplement(
     meta["ncaab_merged_games"] = live_odds_df["event_id"].nunique() if not live_odds_df.empty else 0
     meta["ncaab_odds_rows"] = len(live_odds_df)
     return (live_odds_df, meta)
+
+
+# Default odds for manual spread/total sides when not provided (standard -110)
+_MANUAL_DEFAULT_SPREAD_OR_TOTAL_ODDS = -110
+
+
+def _load_manual_odds_df(app_root: Path, commence_on_date: date) -> pd.DataFrame:
+    """
+    Load manual odds from data/cache/manual_odds.json and convert to live_odds_df schema.
+    Each entry: home_team, away_team, sport (NCAAB|NBA), spread (home spread), moneyline_home, moneyline_away, total (optional).
+    Dedupes by (home_team, away_team, commence_date) keeping last. Only includes games for commence_on_date.
+    """
+    from zoneinfo import ZoneInfo
+
+    cache_dir = app_root / "data" / "cache"
+    path = cache_dir / "manual_odds.json"
+    empty = pd.DataFrame(columns=[
+        "sport_key", "league", "event_id", "commence_time", "home_team", "away_team",
+        "event_name", "market_type", "selection", "point", "odds",
+    ])
+    if not path.exists():
+        return empty
+    try:
+        raw = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return empty
+    if not isinstance(raw, list):
+        return empty
+
+    et = ZoneInfo("America/New_York")
+    default_commence = datetime(commence_on_date.year, commence_on_date.month, commence_on_date.day, 18, 0, 0, tzinfo=et)
+    default_commence_utc = default_commence.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    # Dedupe: (home, away, date) -> last entry
+    by_key: dict[tuple[str, str, date], dict] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        home = (entry.get("home_team") or "").strip()
+        away = (entry.get("away_team") or "").strip()
+        sport = (entry.get("sport") or "NCAAB").strip().upper()
+        if not home or not away:
+            continue
+        if sport not in ("NCAAB", "NBA"):
+            sport = "NCAAB"
+        commence_str = entry.get("commence_time")
+        if commence_str:
+            try:
+                dt = datetime.fromisoformat(commence_str.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                game_date = dt.date()
+            except (ValueError, TypeError):
+                game_date = commence_on_date
+        else:
+            game_date = commence_on_date
+        by_key[(home, away, game_date)] = {
+            "home_team": home,
+            "away_team": away,
+            "sport": sport,
+            "commence_time": commence_str or default_commence_utc,
+            "commence_date": game_date,
+            "spread": entry.get("spread"),
+            "moneyline_home": entry.get("moneyline_home"),
+            "moneyline_away": entry.get("moneyline_away"),
+            "total": entry.get("total"),
+        }
+
+    sport_key_map = {"NCAAB": BASKETBALL_NCAAB, "NBA": "basketball_nba"}
+    rows: list[dict] = []
+    for (home, away, game_date), g in by_key.items():
+        if game_date != commence_on_date:
+            continue
+        league = g["sport"]
+        sport_key = sport_key_map.get(league, BASKETBALL_NCAAB)
+        event_name = f"{away} @ {home}"
+        # Stable event_id for aggregation
+        event_id = f"manual_{home}_{away}_{game_date!s}".replace(" ", "_").replace("/", "-")
+        commence_time = g["commence_time"]
+        if not commence_time:
+            commence_time = default_commence_utc
+
+        # Moneylines (h2h)
+        ml_h = g.get("moneyline_home")
+        ml_a = g.get("moneyline_away")
+        if ml_h is not None and ml_h != "":
+            try:
+                rows.append({
+                    "sport_key": sport_key, "league": league, "event_id": event_id, "commence_time": commence_time,
+                    "home_team": home, "away_team": away, "event_name": event_name,
+                    "market_type": "h2h", "selection": home, "point": None, "odds": int(float(ml_h)),
+                })
+            except (TypeError, ValueError):
+                pass
+        if ml_a is not None and ml_a != "":
+            try:
+                rows.append({
+                    "sport_key": sport_key, "league": league, "event_id": event_id, "commence_time": commence_time,
+                    "home_team": home, "away_team": away, "event_name": event_name,
+                    "market_type": "h2h", "selection": away, "point": None, "odds": int(float(ml_a)),
+                })
+            except (TypeError, ValueError):
+                pass
+
+        # Spread (home spread; away = -home)
+        spread = g.get("spread")
+        if spread is not None and spread != "":
+            try:
+                spread_f = float(spread)
+                rows.append({
+                    "sport_key": sport_key, "league": league, "event_id": event_id, "commence_time": commence_time,
+                    "home_team": home, "away_team": away, "event_name": event_name,
+                    "market_type": "spreads", "selection": home, "point": spread_f, "odds": _MANUAL_DEFAULT_SPREAD_OR_TOTAL_ODDS,
+                })
+                rows.append({
+                    "sport_key": sport_key, "league": league, "event_id": event_id, "commence_time": commence_time,
+                    "home_team": home, "away_team": away, "event_name": event_name,
+                    "market_type": "spreads", "selection": away, "point": -spread_f, "odds": _MANUAL_DEFAULT_SPREAD_OR_TOTAL_ODDS,
+                })
+            except (TypeError, ValueError):
+                pass
+
+        # Totals
+        total = g.get("total")
+        if total is not None and total != "":
+            try:
+                total_f = float(total)
+                rows.append({
+                    "sport_key": sport_key, "league": league, "event_id": event_id, "commence_time": commence_time,
+                    "home_team": home, "away_team": away, "event_name": event_name,
+                    "market_type": "totals", "selection": f"Over {total_f}", "point": total_f, "odds": _MANUAL_DEFAULT_SPREAD_OR_TOTAL_ODDS,
+                })
+                rows.append({
+                    "sport_key": sport_key, "league": league, "event_id": event_id, "commence_time": commence_time,
+                    "home_team": home, "away_team": away, "event_name": event_name,
+                    "market_type": "totals", "selection": f"Under {total_f}", "point": total_f, "odds": _MANUAL_DEFAULT_SPREAD_OR_TOTAL_ODDS,
+                })
+            except (TypeError, ValueError):
+                pass
+
+    if not rows:
+        return empty
+    return pd.DataFrame(rows)
 
 
 def _format_start_time(commence_time: str) -> str:
@@ -428,6 +572,9 @@ def _live_odds_to_value_plays(
             model_prob, consensus_ok = consensus_spread(
                 feature_row, market_spread, we_cover_favorite, in_house_spread, fallback, league=league_lookup
             )
+            # NCAAB spread: when we have pred_margin, use probability-from-margins (logistic) for edge so manual/live odds get same formula
+            if league_lookup == "ncaab" and _cur_pred_margin is not None:
+                model_prob = spread_cover_prob_from_margins(_cur_pred_margin, market_spread, we_cover_favorite)
             # NCAAB: only one spread model — skip consensus and pass on edge % alone
             if league_lookup == "ncaab":
                 consensus_ok = True
@@ -974,6 +1121,11 @@ def run_pipeline_to_cache(
             commence_on_date=as_of_date,
         )
         meta["used_ncaab_espn_primary"] = True
+        manual_df = _load_manual_odds_df(app_root, as_of_date)
+        if not manual_df.empty:
+            live_odds_df = pd.concat([live_odds_df, manual_df], ignore_index=True)
+            meta["ncaab_manual_games"] = int(manual_df["event_id"].nunique())
+            meta["ncaab_manual_rows"] = len(manual_df)
         n_ncaab_before_future = (
             live_odds_df.loc[live_odds_df["league"] == "NCAAB", "event_id"].nunique()
             if not live_odds_df.empty and "league" in live_odds_df.columns and "event_id" in live_odds_df.columns
@@ -1121,6 +1273,7 @@ def run_pipeline_to_cache(
             )
 
         # Moneylines: min edge 2%, no line error filter. Spreads: min edge 2% and 3 <= |line_error| <= 20
+        n_value_plays_before_line_filter = len(value_plays_df)
         if not value_plays_df.empty and "League" in value_plays_df.columns and "Market" in value_plays_df.columns:
             ncaab = value_plays_df["League"].astype(str).str.strip().str.upper() == "NCAAB"
             spread = value_plays_df["Market"].astype(str).str.strip().str.lower() == "spreads"
@@ -1130,9 +1283,10 @@ def run_pipeline_to_cache(
             le = value_plays_df.get("line_error")
             if le is not None:
                 abs_le = le.abs()
-                spread_ok_line = le.notna() & (abs_le >= SPREAD_LINE_ERROR_MIN_PTS) & (abs_le <= SPREAD_LINE_ERROR_MAX_PTS)
+                # When line_error is NaN (e.g. no model pred), allow play; otherwise require 3–20 pts
+                spread_ok_line = le.isna() | ((abs_le >= SPREAD_LINE_ERROR_MIN_PTS) & (abs_le <= SPREAD_LINE_ERROR_MAX_PTS))
             else:
-                spread_ok_line = pd.Series(False, index=value_plays_df.index)
+                spread_ok_line = pd.Series(True, index=value_plays_df.index)
             if verbose:
                 alabama = value_plays_df.loc[
                     ncaab_spread
@@ -1149,6 +1303,30 @@ def run_pipeline_to_cache(
             keep = other | (ncaab_spread & spread_ok_edge & spread_ok_line)
             value_plays_df = value_plays_df.loc[keep].copy()
         value_plays_df = value_plays_df.sort_values("Value (%)", ascending=False).head(MAX_VALUE_PLAYS_CACHE).reset_index(drop=True)
+
+        # #region agent log
+        _plog = cache_path.parent.parent / ".cursor" / "debug-874db2.log"
+        try:
+            import time as _t
+            _payload = {
+                "sessionId": "874db2",
+                "hypothesisId": "H5",
+                "location": "value_plays_pipeline.py:run_pipeline_to_cache",
+                "message": "pipeline funnel",
+                "data": {
+                    "n_ncaab_before_12h": int(n_ncaab_before_future),
+                    "n_ncaab_after_12h": int(n_ncaab_after_future),
+                    "n_vp_frames": len(vp_frames),
+                    "value_plays_before_line_filter": n_value_plays_before_line_filter,
+                    "value_plays_after_all": int(len(value_plays_df)),
+                },
+                "timestamp": int(_t.time() * 1000),
+            }
+            with open(_plog, "a") as _f:
+                _f.write(json.dumps(_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
 
         if verbose:
             print(f"Plays passed all filters: {len(value_plays_df)}.")

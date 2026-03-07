@@ -48,6 +48,7 @@ from strategies.strategies import (
     model_prob_from_in_house_total,
     model_prob_from_in_house_spread,
     model_prob_from_ratings_moneyline,
+    spread_cover_prob_from_margins,
     HALF_UNIT_PCT,
     MAX_KELLY_PCT_WALTERS,
 )
@@ -888,7 +889,7 @@ def _is_top_seed_play(row: pd.Series, top_seed_max: int = 6) -> bool:
 
 
 def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0, march_madness_mode: bool = False) -> str:
-    """One All Value Plays card: matchup, bet type, edge %, odds, confidence bar, reasoning."""
+    """One All Value Plays card: matchup, bet type, edge %, odds, confidence bar, reasoning. Pick = Home/Away [Team]; edge green (Home) or blue (Away)."""
     league = str(row.get("League", ""))
     league_class = "nba" if league == "NBA" else "ncaab"
     matchup = _html_escape(str(row.get("Event", "")))
@@ -901,6 +902,15 @@ def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0, mar
     tournament_context_badge = ""
     if march_madness_mode and league == "NCAAB" and _is_top_seed_play(row):
         tournament_context_badge = '<span class="vp-tournament-context">Tournament Context</span>'
+    # Pick label: "Home [Team]" or "Away [Team]"
+    sel = str(row.get("Selection", "")).strip()
+    h, a = str(row.get("home_team", "")).strip(), str(row.get("away_team", "")).strip()
+    if sel and h and (sel.lower() == h.lower() or sel.lower() in h.lower() or h.lower() in sel.lower()):
+        pick_label = _html_escape(f"Home {h}")
+        edge_color = "#22c55e"
+    else:
+        pick_label = _html_escape(f"Away {a}") if a else _html_escape(sel or "—")
+        edge_color = "#3b82f6"
     march_line = ""
     if league == "NCAAB":
         march_badges = _march_context_badges(row)
@@ -912,7 +922,8 @@ def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0, mar
         <div class="vp-matchup">{matchup}</div>
         <div class="vp-meta">
             <span class="vp-bet-type">{bet_type}</span>
-            <span class="vp-edge">{edge_pct:.1f}% edge</span>
+            <span class="vp-pick">Pick: {pick_label}</span>
+            <span class="vp-edge" style="color:{edge_color}">{edge_pct:.1f}% edge</span>
             <span class="vp-odds">{odds_str}</span>
             {underdog_badge}
             {tournament_context_badge}
@@ -963,7 +974,8 @@ def _render_potd_card_html(
     matchup_html += f' <span class="potd-vs">@</span> {_html_escape(home)}'
     if home_abbrev:
         matchup_html += f' <span class="potd-abbrev">({home_abbrev})</span>'
-    tipoff = format_start_time(str(r.get("commence_time", "") or ""))
+    commence = str(r.get("commence_time", "") or "").strip()
+    tipoff = format_start_time(commence) if commence else (str(r.get("Start Time", "") or "").strip() or "—")
     badge_text = _potd_badge_text(r)
     reason = r.get("reason")
     if not reason and (feature_matrix is not None or (b2b_teams and len(b2b_teams) > 0)):
@@ -1791,18 +1803,32 @@ def _vp_log(msg: str, data: dict):
 # Value plays and POTD: always load from cache (written by scripts/run_pipeline_to_cache.py). No pipeline in-app.
 def _load_value_plays_cache() -> tuple[pd.DataFrame, dict, pd.DataFrame, int, dict, Optional[str]]:
     """Load from data/cache/value_plays_cache.json. Returns (value_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, odds_source_meta, error_message or None)."""
+    # #region agent log
+    import time
+    _log_path = Path(__file__).resolve().parent / ".cursor" / "debug-874db2.log"
+    def _dbg(msg: str, data: dict, hypothesis_id: str = "H0"):
+        try:
+            with open(_log_path, "a") as _f:
+                _f.write(json.dumps({"sessionId": "874db2", "hypothesisId": hypothesis_id, "location": "app.py:_load_value_plays_cache", "message": msg, "data": data, "timestamp": int(time.time() * 1000)}) + "\n")
+        except Exception:
+            pass
+    # #endregion
     empty_df = pd.DataFrame(columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"])
     empty_live = pd.DataFrame(columns=["sport_key", "league", "event_id", "commence_time", "home_team", "away_team", "event_name", "market_type", "selection", "point", "odds"])
     cache_path = Path(__file__).resolve().parent / "data" / "cache" / "value_plays_cache.json"
     if not cache_path.exists():
+        _dbg("cache file missing", {"cache_path": str(cache_path), "exists": False}, "H1")
         return empty_df, {"NCAAB Pick 1": None, "NCAAB Pick 2": None}, empty_live, 0, {}, None
+    _dbg("cache file exists", {"cache_path": str(cache_path), "exists": True}, "H1")
     try:
         with open(cache_path) as f:
             data = json.load(f)
-    except Exception:
+    except Exception as e:
+        _dbg("cache read exception", {"error": str(e), "type": type(e).__name__}, "H4")
         return empty_df, {"NCAAB Pick 1": None, "NCAAB Pick 2": None}, empty_live, 0, {}, None
     value_plays_list = data.get("value_plays") or []
     value_plays_df = pd.DataFrame(value_plays_list) if value_plays_list else empty_df
+    _dbg("cache parsed", {"top_level_keys": list(data.keys()), "value_plays_len": len(value_plays_list), "df_empty": value_plays_df.empty, "df_columns": list(value_plays_df.columns) if not value_plays_df.empty else [], "cache_error": data.get("error")}, "H2")
     potd_picks = data.get("potd_picks") or {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
     value_plays_flagged_count = int(data.get("value_plays_flagged_count", 0))
     odds_source_meta = data.get("odds_source_meta") or {}
@@ -1812,6 +1838,140 @@ def _load_value_plays_cache() -> tuple[pd.DataFrame, dict, pd.DataFrame, int, di
 value_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, _odds_meta, _cache_err = _load_value_plays_cache()
 st.session_state["odds_source_meta"] = _odds_meta
 st.session_state["value_plays_pipeline_error"] = (_cache_err, "") if _cache_err else None
+
+# Pathlib: project root for all data paths (works regardless of where Streamlit is launched)
+_APP_ROOT = Path(__file__).resolve().parent
+HISTORICAL_BETTING_CSV_PATH = _APP_ROOT / "data" / "historical_betting_performance.csv"
+# Match prediction script: use 2026 for "today" when filtering CSV
+HISTORICAL_PICKS_YEAR = 2026
+
+
+def _normalize_date_to_iso(raw: str) -> Optional[str]:
+    """Parse date from YYYY-MM-DD or MM-DD-YYYY into YYYY-MM-DD; return None if unparseable."""
+    s = str(raw).strip()
+    if not s or s.lower() in ("nan", "nat", "none"):
+        return None
+    for fmt in ("%Y-%m-%d", "%m-%d-%Y", "%m/%d/%Y", "%Y/%m/%d"):
+        try:
+            d = datetime.strptime(s, fmt)
+            return d.strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            continue
+    try:
+        parsed = pd.to_datetime(s, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return None
+
+
+def _load_historical_betting_performance() -> pd.DataFrame:
+    """Load data/historical_betting_performance.csv. Returns rows for today's date, accepting YYYY-MM-DD or MM-DD-YYYY in the CSV."""
+    if not HISTORICAL_BETTING_CSV_PATH.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(HISTORICAL_BETTING_CSV_PATH)
+    except Exception:
+        return pd.DataFrame()
+    if df.empty or "Date" not in df.columns:
+        return df
+    today_iso = f"{HISTORICAL_PICKS_YEAR}-{date.today().strftime('%m-%d')}"
+    normalized = df["Date"].astype(str).apply(_normalize_date_to_iso)
+    return df[normalized == today_iso].copy()
+
+
+def _potd_from_historical_csv(df_today: pd.DataFrame) -> dict:
+    """Build potd_picks from historical_betting_performance.csv: top 2 different games by Edge_Points desc. Prefer High confidence, then Medium fallback."""
+    result = {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
+    if df_today.empty or "Edge_Points" not in df_today.columns:
+        return result
+    has_conf = "Confidence_Level" in df_today.columns
+    # Dedupe: one row per game (keep best Edge_Points per Home/Away pair)
+    df_today = df_today.copy()
+    df_today["_game_key"] = df_today.apply(lambda r: (str(r.get("Home", "")).strip(), str(r.get("Away", "")).strip()), axis=1)
+    best_per_game = df_today.loc[df_today.groupby("_game_key")["Edge_Points"].idxmax()].copy()
+    best_per_game = best_per_game.sort_values("Edge_Points", ascending=False).reset_index(drop=True)
+
+    def _eligible(level: str) -> pd.DataFrame:
+        if not has_conf:
+            return best_per_game
+        return best_per_game[best_per_game["Confidence_Level"].astype(str).str.strip().str.upper() == level.upper()]
+
+    # Confidence filter: try High first, then High+Medium, then all
+    candidates = _eligible("High")
+    if len(candidates) < 2:
+        candidates = best_per_game[best_per_game["Confidence_Level"].astype(str).str.strip().str.upper().isin(("HIGH", "MEDIUM"))] if has_conf else best_per_game
+        candidates = candidates.sort_values("Edge_Points", ascending=False).reset_index(drop=True)
+    if len(candidates) < 2:
+        candidates = best_per_game
+    if candidates.empty:
+        return result
+
+    # Pick 1: top by Edge_Points
+    row1 = candidates.iloc[0]
+    game_key_1 = (str(row1.get("Home", "")).strip(), str(row1.get("Away", "")).strip())
+    result["NCAAB Pick 1"] = _historical_row_to_potd(row1, "NCAAB Pick 1")
+
+    # Pick 2: next best *different* game
+    other = candidates[candidates["_game_key"].apply(lambda k: k != game_key_1)]
+    if not other.empty:
+        result["NCAAB Pick 2"] = _historical_row_to_potd(other.iloc[0], "NCAAB Pick 2")
+    return result
+
+
+def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
+    """Convert one historical_betting_performance.csv row to POTD card dict.
+    Edge = Edge_Points / 3 (capped at 15%), since Pred_Margin and Market_Spread come from incompatible models."""
+    home = str(row.get("Home", "")).strip()
+    away = str(row.get("Away", "")).strip()
+    pick_side = str(row.get("Pick_Spread", "Home")).strip()
+    selection = home if pick_side == "Home" else away
+    edge_pts = row.get("Edge_Points")
+    try:
+        edge_pct = float(edge_pts) / 3.0 if edge_pts is not None and pd.notna(edge_pts) else 0.0
+    except (TypeError, ValueError):
+        edge_pct = 0.0
+    edge_pct = max(0.0, min(15.0, edge_pct))
+    # Human-readable reason: team name, spread from pick's perspective, no raw model numbers
+    try:
+        ms = float(row.get("Market_Spread")) if row.get("Market_Spread") is not None and pd.notna(row.get("Market_Spread")) else None
+    except (TypeError, ValueError):
+        ms = None
+    if ms is not None and pick_side == "Away":
+        spread_from_pick = -ms  # away spread = opposite of home spread
+    else:
+        spread_from_pick = ms
+    spread_str = f"{spread_from_pick:+.1f}" if spread_from_pick is not None else None
+    if spread_str:
+        reason = f"Model favors {selection} to cover the {spread_str} spread. Strong edge detected based on scoring margin and rebounding advantage."
+    else:
+        reason = f"Model favors {selection}. Strong edge detected based on scoring margin and rebounding advantage."
+    return {
+        "League": label,
+        "Event": f"{away} @ {home}",
+        "Selection": selection,
+        "Market": "Spread",
+        "Odds": None,
+        "Value (%)": edge_pct,
+        "point": row.get("Market_Spread"),
+        "Recommended Stake": 0,
+        "Start Time": "Today",
+        "commence_time": "",
+        "Injury Alert": "—",
+        "high_variance": False,
+        "home_team": home,
+        "away_team": away,
+        "model_prob": 0.5,
+        "confidence_tier": str(row.get("Confidence_Level", "Medium")).strip() or "Medium",
+        "reason": reason,
+    }
+
+
+# Load historical picks for fallback
+_historical_picks_df = _load_historical_betting_performance()
+if potd_picks.get("NCAAB Pick 1") is None and potd_picks.get("NCAAB Pick 2") is None and not _historical_picks_df.empty:
+    potd_picks = _potd_from_historical_csv(_historical_picks_df)
 
 # -----------------------------------------------------------------------------
 # Main layout — tabbed (Overview = daily picks sheet, NCAAB, NBA)
@@ -1826,8 +1986,21 @@ def _today_str() -> str:
 def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
     """From value_plays_df (today's data), compute: date_str, total_plays, n_nba, n_ncaab, top_edge_label.
     Uses correlated-play filter: at most 10 plays and no team appears twice."""
+    # #region agent log
+    import time
+    _log_path = Path(__file__).resolve().parent / ".cursor" / "debug-874db2.log"
+    def _dbg(msg: str, data: dict, hypothesis_id: str = "H0"):
+        try:
+            with open(_log_path, "a") as _f:
+                _f.write(json.dumps({"sessionId": "874db2", "hypothesisId": hypothesis_id, "location": "app.py:_summary_bar_values", "message": msg, "data": data, "timestamp": int(time.time() * 1000)}) + "\n")
+        except Exception:
+            pass
+    # #endregion
     date_str = _today_str()
-    if value_plays_df.empty or "League" not in value_plays_df.columns or "Value (%)" not in value_plays_df.columns:
+    has_league = "League" in value_plays_df.columns
+    has_value_pct = "Value (%)" in value_plays_df.columns
+    if value_plays_df.empty or not has_league or not has_value_pct:
+        _dbg("summary early return", {"df_empty": value_plays_df.empty, "has_League": has_league, "has_Value_pct": has_value_pct, "columns": list(value_plays_df.columns)}, "H3")
         return {
             "date_str": date_str,
             "total_plays": 0,
@@ -1845,6 +2018,7 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
     total_plays = len(diversified)
     n_nba = int((diversified["League"] == "NBA").sum()) if not diversified.empty else 0
     n_ncaab = int((diversified["League"] == "NCAAB").sum()) if not diversified.empty else 0
+    _dbg("summary computed", {"best_per_game_len": len(best_per_game), "total_plays": total_plays, "n_nba": n_nba, "n_ncaab": n_ncaab}, "H3")
     if diversified.empty:
         top_edge_label = "—"
     else:
@@ -1880,8 +2054,22 @@ def _today_str() -> str:
 st.title("Bobby Bottle's Betting Model")
 st.caption("NCAAB — college basketball value plays and Play of the Day")
 
-# Stat bar: date | plays found | NCAAB | top edge (one row, dividers)
+# Stat bar: date | plays found | NCAAB | top edge (one row, dividers). Include POTD from historical when cache is empty.
 _summary = _summary_bar_values(value_plays_df)
+if _summary["total_plays"] == 0 and (potd_picks.get("NCAAB Pick 1") or potd_picks.get("NCAAB Pick 2")):
+    _n_potd = (1 if potd_picks.get("NCAAB Pick 1") else 0) + (1 if potd_picks.get("NCAAB Pick 2") else 0)
+    _potd_edges = []
+    for _k in ("NCAAB Pick 1", "NCAAB Pick 2"):
+        _c = potd_picks.get(_k)
+        if _c and isinstance(_c, dict):
+            _v = _c.get("Value (%)")
+            if _v is not None:
+                try:
+                    _potd_edges.append(float(_v))
+                except (TypeError, ValueError):
+                    pass
+    _top_edge = f"{max(_potd_edges):.1f}%" if _potd_edges else "—"
+    _summary = {**_summary, "total_plays": _n_potd, "n_ncaab": _n_potd, "top_edge_label": _top_edge}
 _plays_text = f"{_summary['total_plays']} play{'s' if _summary['total_plays'] != 1 else ''} found"
 _nba_ncaab = f"{_summary['n_ncaab']} NCAAB"
 _stat_bar_html = f"""
@@ -1987,7 +2175,7 @@ if _unresolved_stale > 0:
     )
     st.markdown(_slim_alert_html, unsafe_allow_html=True)
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
-tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history = st.tabs(["Overview", "NCAAB", "NBA (Coming Soon)", "Mark Results", "Play of the Day History"])
+tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds = st.tabs(["Overview", "NCAAB", "NBA (Coming Soon)", "Mark Results", "Play of the Day History", "Manual Odds"])
 
 with tab_overview:
     st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
@@ -2017,7 +2205,7 @@ with tab_overview:
             _render_potd_card_html("NCAAB Pick 2", pod_2, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
             unsafe_allow_html=True,
         )
-    if value_plays_df.empty:
+    if value_plays_df.empty and pod_1 is None and pod_2 is None:
         if (odds_api_key or "").strip():
             st.caption("No Play of the Day: no games or value plays loaded for today. Click **Refresh** below to run the pipeline, or check back later.")
         else:
@@ -2029,23 +2217,30 @@ with tab_overview:
     st.subheader("All Value Plays")
     st.caption("Every game today where the model found edge. One best play per game. Sorted by edge %.")
     if (odds_api_key or "").strip():
-        if st.button("Refresh", key="overview_refresh", help="Run the value-plays pipeline (scripts/run_pipeline_to_cache.py) and reload cache"):
-            _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
-            env = os.environ.copy()
-            env["ODDS_API_KEY"] = (odds_api_key or "").strip()
-            try:
-                subprocess.run(
-                    [sys.executable, str(_script)],
-                    cwd=str(Path(__file__).resolve().parent),
-                    env=env,
-                    timeout=300,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired:
-                st.error("Pipeline timed out after 5 minutes.")
-            except Exception as e:
-                st.error(f"Pipeline error: {e}")
-            st.rerun()
+        _ref_col, _clear_col, _ = st.columns([1, 1, 3])
+        with _ref_col:
+            if st.button("Refresh", key="overview_refresh", help="Run the value-plays pipeline and reload cache; page will rerun so new data is visible"):
+                _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
+                env = os.environ.copy()
+                env["ODDS_API_KEY"] = (odds_api_key or "").strip()
+                try:
+                    subprocess.run(
+                        [sys.executable, str(_script)],
+                        cwd=str(Path(__file__).resolve().parent),
+                        env=env,
+                        timeout=300,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    st.error("Pipeline timed out after 5 minutes.")
+                except Exception as e:
+                    st.error(f"Pipeline error: {e}")
+                # Force full rerun so cache and historical CSV are re-read and UI updates
+                st.rerun()
+        with _clear_col:
+            if st.button("Clear cache", key="overview_clear_cache", help="Purge all cached data (odds, features, play history) so the next load uses fresh data. Use after fixing signage or pipeline."):
+                st.cache_data.clear()
+                st.rerun()
     if value_plays_flagged_count > 0:
         st.warning(f"**Potential Data Error:** {value_plays_flagged_count} play(s) had Value % ≥ 15% and were excluded.")
 
@@ -2158,6 +2353,32 @@ with tab_ncaab:
             _vp["Market"] = _vp["Market"].map(lambda x: MARKET_LABELS.get(x, x) if pd.notna(x) else x)
         if "Recommended Stake" in _vp.columns:
             _vp = _vp.drop(columns=["Recommended Stake"])
+        # Pick: "Home [Team]" or "Away [Team]" for clarity
+        if "Selection" in _vp.columns and "home_team" in _vp.columns and "away_team" in _vp.columns:
+            def _pick_label_vp(r):
+                sel = str(r.get("Selection", "")).strip()
+                h, a = str(r.get("home_team", "")).strip(), str(r.get("away_team", "")).strip()
+                if sel and (sel.lower() == h.lower() or h and sel.lower() in h.lower() or h and h.lower() in sel.lower()):
+                    return f"Home {h}"
+                return f"Away {a}" if a else sel or "—"
+            _vp["Pick"] = _vp.apply(_pick_label_vp, axis=1)
+        # Market (home): spread line from home perspective with explicit +/-
+        if "point" in _vp.columns and "Selection" in _vp.columns and "home_team" in _vp.columns:
+            def _market_home_signed(r):
+                pt = r.get("point")
+                if pt is None or pd.isna(pt):
+                    return "—"
+                try:
+                    p = float(pt)
+                except (TypeError, ValueError):
+                    return "—"
+                sel = str(r.get("Selection", "")).strip()
+                h = str(r.get("home_team", "")).strip()
+                # Home spread: negative = home favored. If Selection is home, point is often home line; else away line = -home
+                is_home_sel = sel and h and (sel.lower() == h.lower() or sel.lower() in h.lower() or h.lower() in sel.lower())
+                home_spread = p if is_home_sel else (-p if p != 0 else 0)
+                return f"{home_spread:+.1f}"
+            _vp["Market (home)"] = _vp.apply(_market_home_signed, axis=1)
         _vp["March context"] = _vp.apply(_march_context_badges, axis=1)
         if march_madness_mode:
             _vp["Tournament Context"] = _vp.apply(lambda r: "Yes" if _is_top_seed_play(r) else "", axis=1)
@@ -2468,6 +2689,70 @@ with tab_play_history:
                                 st.rerun()
     else:
         st.info("No archived plays yet. Plays are saved when you load the dashboard (and at 9am ET). Open the app before games to capture today's top picks.")
+
+with tab_manual_odds:
+    st.subheader("Manual Odds")
+    st.caption("Paste lines from any sportsbook (DraftKings, FanDuel, etc.) when free APIs don't have the game. Entries are saved to the cache and the pipeline picks them up as an extra odds source alongside ESPN and Rundown.")
+    _app_root = Path(__file__).resolve().parent
+    _manual_cache_dir = _app_root / "data" / "cache"
+    _manual_odds_path = _manual_cache_dir / "manual_odds.json"
+
+    with st.form("manual_odds_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            _home = st.text_input("Home team", placeholder="e.g. Alabama")
+        with c2:
+            _away = st.text_input("Away team", placeholder="e.g. Tennessee")
+        _sport = st.selectbox("Sport", options=["NCAAB", "NBA"], index=0)
+        c3, c4, c5 = st.columns(3)
+        with c3:
+            _spread = st.number_input("Spread (home)", value=None, placeholder="-7.5", step=0.5, format="%.1f")
+        with c4:
+            _ml_home = st.number_input("Moneyline (home)", value=None, placeholder="-300", step=1, format="%d")
+        with c5:
+            _ml_away = st.number_input("Moneyline (away)", value=None, placeholder="250", step=1, format="%d")
+        _total = st.number_input("Total", value=None, placeholder="145.5", step=0.5, format="%.1f")
+        submitted = st.form_submit_button("Save to cache")
+        if submitted:
+            if not (_home and _away):
+                st.error("Home and away team are required.")
+            else:
+                _manual_cache_dir.mkdir(parents=True, exist_ok=True)
+                existing = []
+                if _manual_odds_path.exists():
+                    try:
+                        existing = json.loads(_manual_odds_path.read_text())
+                        if not isinstance(existing, list):
+                            existing = []
+                    except (json.JSONDecodeError, OSError):
+                        existing = []
+                def _num_or_none(x, cast=int):
+                    if x is None:
+                        return None
+                    try:
+                        return cast(x)
+                    except (TypeError, ValueError):
+                        return None
+                entry = {
+                    "home_team": _home.strip(),
+                    "away_team": _away.strip(),
+                    "sport": _sport,
+                    "spread": _num_or_none(_spread, float),
+                    "moneyline_home": _num_or_none(_ml_home, int),
+                    "moneyline_away": _num_or_none(_ml_away, int),
+                    "total": _num_or_none(_total, float),
+                }
+                existing.append(entry)
+                _manual_odds_path.write_text(json.dumps(existing, indent=2))
+                st.success(f"Saved **{_away} @ {_home}** ({_sport}). Run **Refresh** on the Overview tab to include this game in value plays.")
+
+    if _manual_odds_path.exists():
+        try:
+            _list = json.loads(_manual_odds_path.read_text())
+            if isinstance(_list, list) and _list:
+                st.caption(f"**{len(_list)}** manual game(s) in cache (pipeline uses today's date; duplicate matchups overwrite by last entry).")
+        except (json.JSONDecodeError, OSError):
+            pass
 
 with tab_nba:
     st.subheader("NBA — Coming Soon")
