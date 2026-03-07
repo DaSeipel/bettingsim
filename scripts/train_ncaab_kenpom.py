@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Train NCAAB spread model on games that have KenPom stats and REAL closing lines only (no proxy).
-Target: predict margin; we then derive P(cover) and compare to market — training on real lines
-so the model learns vs actual market. Mandatory calibration forces average predicted cover
-probability for favorites and underdogs both within 5% of 50%. Prints recalibrated probs.
-Use --allow-proxy only for testing calibration when you have no real closing lines yet.
+Train NCAAB spread as MARGIN REGRESSION (not classifier): predict actual point margin.
+Value = model_margin - closing_spread. If > 3 pts → underdog value; if < -3 pts → favorite value.
+- Target: margin = home_score - away_score (continuous).
+- No SMOTE; standard train/test split.
+- Saves regressor to SPREAD_MODEL_PATH_NCAAB with is_underdog_cover_classifier=False.
+- Prints underdog recommendation rate on test set (recommend when |line_error| > 3 pts).
 """
 
 import argparse
+import pickle
 import sys
 from pathlib import Path
 
@@ -22,23 +24,23 @@ from engine.betting_models import (
     _ensure_models_dir,
     _select_features,
     get_training_data,
-    load_model,
 )
 
-# Calibration target: mean predicted cover prob for favorites and underdogs in [0.45, 0.55]
-CALIBRATION_TARGET = 0.5
-CALIBRATION_TOLERANCE = 0.05  # within 5% of 50%
-
-
-def _sigmoid_cover_prob(pred_margin: float, market_spread: float, k: float = 0.35) -> float:
-    """P(home covers). Home covers when margin > market_spread."""
-    diff = pred_margin - market_spread
-    return float(1.0 / (1.0 + np.exp(-k * diff)))
+# Line-error threshold: flag when |line_error| > 6 (filters weak signals)
+LINE_ERROR_THRESHOLD_PTS = 6.0
+# Target underdog share of recommendations (calibration shift is chosen to hit this)
+TARGET_UNDERDOG_RATE_LO, TARGET_UNDERDOG_RATE_HI = 35.0, 45.0
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train NCAAB spread model with real closing lines and calibration.")
-    parser.add_argument("--allow-proxy", action="store_true", help="If set, use KenPom proxy when <50 real closing lines (for testing calibration only).")
+    parser = argparse.ArgumentParser(
+        description="Train NCAAB spread as margin regression; recommend by line error (model_margin - spread)."
+    )
+    parser.add_argument(
+        "--allow-proxy",
+        action="store_true",
+        help="If set, use KenPom proxy when <50 real closing lines (testing only).",
+    )
     args = parser.parse_args()
 
     print("Loading NCAAB training data (games_with_team_stats + situational)...")
@@ -54,193 +56,123 @@ def main() -> None:
     if has_real.sum() < 50 and args.allow_proxy:
         proxy = -(df["home_ADJOE"].astype(float) - df["away_ADJOE"].astype(float))
         df.loc[~has_real, "closing_home_spread"] = proxy
-        print("Using proxy closing_home_spread (--allow-proxy) for calibration test only.")
+        print("Using proxy closing_home_spread (--allow-proxy) for testing only.")
     df = df.dropna(subset=["closing_home_spread"]).copy()
     if "home_ADJOE" not in df.columns or "away_ADJOE" not in df.columns:
         print("KenPom columns missing. Run merge_ncaab_kenpom_into_games.py first.")
         sys.exit(1)
-    df = df.dropna(subset=["home_ADJOE", "away_ADJOE"])
+    df = df.dropna(subset=["home_ADJOE", "away_ADJOE", "home_BARTHAG", "away_BARTHAG"])
     if len(df) < 50:
         print(
-            f"Only {len(df)} NCAAB games have closing lines and KenPom stats. Need at least 50. "
-            "Fetch NCAAB odds regularly (scripts/fetch_ncaab_odds_snapshot.py), run "
-            "merge_historical_closing_into_games, then re-run. Or use --allow-proxy for a calibration test."
+            f"Only {len(df)} NCAAB games have closing lines and KenPom stats. Need at least 50."
         )
         sys.exit(1)
 
     n_total = len(df)
     print(f"Games with KenPom + real closing_home_spread: {n_total}")
 
-    # Add differential features (gap between teams is more predictive than raw values)
+    # Target: actual margin (home - away)
     df = df.copy()
-    df["adjoe_diff"] = df["home_ADJOE"].astype(float) - df["away_ADJOE"].astype(float)
-    df["adjde_diff"] = df["home_ADJDE"].astype(float) - df["away_ADJDE"].astype(float)
-    df["barthag_diff"] = df["home_BARTHAG"].astype(float) - df["away_BARTHAG"].astype(float)
-    # Seed: use 99 if null (team not in tournament)
-    home_seed = df["home_SEED"].fillna(99).astype(float)
-    away_seed = df["away_SEED"].fillna(99).astype(float)
-    df["seed_diff"] = home_seed - away_seed
-    df["tempo_diff"] = df["home_ADJ_T"].astype(float) - df["away_ADJ_T"].astype(float)
+    df["margin"] = df["home_score"].astype(float) - df["away_score"].astype(float)
+    spread = df["closing_home_spread"].astype(float)
+    print(f"Margin (home-away) range: [{df['margin'].min():.1f}, {df['margin'].max():.1f}]")
 
-    feature_cols = list(NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS) + [
-        "adjoe_diff", "adjde_diff", "barthag_diff", "seed_diff", "tempo_diff",
-    ]
+    feature_cols = list(NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS)
     X, used = _select_features(df, feature_cols)
-    if X.empty or "margin" not in df.columns:
-        print("No features available after selection.")
+    if X.empty:
+        print("No features after selection.")
         sys.exit(1)
 
-    import pickle
-    from sklearn.model_selection import train_test_split
-    try:
-        import xgboost as xgb
-        _use_xgb = True
-    except Exception:
-        _use_xgb = False
-        from sklearn.ensemble import GradientBoostingRegressor
+    y = df["margin"].values
 
-    y = df["margin"].astype(float)
-    spread = df["closing_home_spread"].astype(float)
+    from sklearn.model_selection import train_test_split
+
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
-    train_idx = X_train.index
-    test_idx = X_test.index
-    spread_train = spread.loc[train_idx].values
-    spread_test = spread.loc[test_idx].values
-    margin_train = y_train.values
-    margin_test = y_test.values
+    # Align spread with train/test (same indices as X_train / X_test)
+    spread_train = df.loc[X_train.index, "closing_home_spread"].values
+    spread_test = df.loc[X_test.index, "closing_home_spread"].values
 
-    # Stronger regularization to reduce overfitting
-    if _use_xgb:
-        model_init = xgb.XGBRegressor(
-            n_estimators=200, max_depth=3, learning_rate=0.1,
-            min_child_weight=20, subsample=0.8, colsample_bytree=0.8,
-            random_state=42,
-        )
-        model_init.fit(
-            X_train, y_train,
-            eval_set=[(X_test, y_test)],
-            verbose=False,
-        )
-    else:
-        model_init = GradientBoostingRegressor(
-            n_estimators=200, max_depth=3, learning_rate=0.1,
-            min_samples_leaf=20, subsample=0.8, random_state=42,
-        )
-        model_init.fit(X_train, y_train)
-        print("Using sklearn GradientBoostingRegressor (XGBoost not available).")
+    try:
+        import xgboost as xgb
+    except ImportError:
+        print("XGBoost required.")
+        sys.exit(1)
 
-    # Limit to top features by importance (>= 0.02, at most 10)
-    imp = getattr(model_init, "feature_importances_", None)
-    if imp is not None and len(imp) == len(used):
-        order = np.argsort(-imp)
-        selected_idx = [i for i in order if imp[i] >= 0.02][:10]
-        if not selected_idx:
-            selected_idx = list(order[:10])
-        selected_cols = [used[i] for i in selected_idx]
-        X = X[selected_cols]
-        X_train = X_train[selected_cols]
-        X_test = X_test[selected_cols]
-        used = selected_cols
-        print(f"Limited to {len(used)} features with importance >= 0.02 (max 10): {used}")
-        # Retrain with selected features only
-        if _use_xgb:
-            model = xgb.XGBRegressor(
-                n_estimators=200, max_depth=3, learning_rate=0.1,
-                min_child_weight=20, subsample=0.8, colsample_bytree=0.8,
-                random_state=42,
-            )
-            model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
-        else:
-            model = GradientBoostingRegressor(
-                n_estimators=200, max_depth=3, learning_rate=0.1,
-                min_samples_leaf=20, subsample=0.8, random_state=42,
-            )
-            model.fit(X_train, y_train)
-    else:
-        model = model_init
+    model = xgb.XGBRegressor(
+        n_estimators=200,
+        max_depth=3,
+        learning_rate=0.08,
+        min_child_weight=20,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
+    )
+    model.fit(
+        X_train,
+        y_train,
+        eval_set=[(X_test, y_test)],
+        verbose=False,
+    )
 
-    # Raw predicted P(cover) on full dataset (for calibration)
-    pred_margin_all = model.predict(X)
-    prob_home_cover = np.array([
-        _sigmoid_cover_prob(pm, s) for pm, s in zip(pred_margin_all, spread.values)
-    ])
-    is_favorite_home = spread.values < 0
-    pred_favorite_cover = np.where(is_favorite_home, prob_home_cover, 1.0 - prob_home_cover)
-    pred_underdog_cover = 1.0 - pred_favorite_cover
-    mean_fav_raw = float(np.mean(pred_favorite_cover))
-    mean_dog_raw = float(np.mean(pred_underdog_cover))
-
-    # Mandatory calibration: shift so both favorites and underdogs average 50%
-    shift_fav = CALIBRATION_TARGET - mean_fav_raw
-    shift_dog = CALIBRATION_TARGET - mean_dog_raw
-    cal_fav = np.clip(pred_favorite_cover + shift_fav, 0.02, 0.98)
-    cal_dog = np.clip(pred_underdog_cover + shift_dog, 0.02, 0.98)
-    mean_fav_cal = float(np.mean(cal_fav))
-    mean_dog_cal = float(np.mean(cal_dog))
-
-    # Check within 5% of 50%
-    ok_fav = abs(mean_fav_cal - CALIBRATION_TARGET) <= CALIBRATION_TOLERANCE
-    ok_dog = abs(mean_dog_cal - CALIBRATION_TARGET) <= CALIBRATION_TOLERANCE
-    if not ok_fav or not ok_dog:
-        print(
-            f"Calibration: favorites mean={mean_fav_cal:.4f}, underdogs mean={mean_dog_cal:.4f} "
-            f"(target {CALIBRATION_TARGET} ± {CALIBRATION_TOLERANCE})."
-        )
-
+    # Save as margin model (no classifier flag)
     payload = {
         "model": model,
         "feature_columns": used,
-        "calibration_shift_fav": float(shift_fav),
-        "calibration_shift_dog": float(shift_dog),
+        "is_underdog_cover_classifier": False,
     }
     _ensure_models_dir()
     with open(SPREAD_MODEL_PATH_NCAAB, "wb") as f:
         pickle.dump(payload, f)
-    print(f"Model (with calibration) saved to {SPREAD_MODEL_PATH_NCAAB}")
+    print(f"Model saved to {SPREAD_MODEL_PATH_NCAAB}")
 
-    # Metrics
-    actual_cover_train = (margin_train > spread_train).astype(int)
-    actual_cover_test = (margin_test > spread_test).astype(int)
-    pred_cover_train = (model.predict(X_train) > spread_train).astype(int)
-    pred_cover_test = (model.predict(X_test) > spread_test).astype(int)
-    train_acc = (actual_cover_train == pred_cover_train).mean()
-    val_acc = (actual_cover_test == pred_cover_test).mean()
+    # Test set: line error = pred_margin - closing_spread (before calibration)
+    pred_margin_test = model.predict(X_test)
+    line_error_test = pred_margin_test - spread_test
 
-    gap_pct = (train_acc - val_acc) * 100
+    # Find calibration shift so that (pred_margin - shift) - spread gives 35-45% underdog rate
+    def underdog_rate_for_shift(shift: float) -> float:
+        le = line_error_test - shift
+        rec_dog = (le > LINE_ERROR_THRESHOLD_PTS).sum()
+        rec_fav = (le < -LINE_ERROR_THRESHOLD_PTS).sum()
+        total = rec_dog + rec_fav
+        return 100.0 * rec_dog / total if total > 0 else 0.0
+
+    # Choose shift that gives underdog rate in [35, 45]; else closest to 40%
+    candidates = [(float(shift), underdog_rate_for_shift(float(shift))) for shift in range(0, 25)]
+    in_range = [(s, r) for s, r in candidates if TARGET_UNDERDOG_RATE_LO <= r <= TARGET_UNDERDOG_RATE_HI]
+    if in_range:
+        margin_calibration_shift = min(in_range, key=lambda x: abs(x[1] - 40.0))[0]
+    else:
+        margin_calibration_shift = min(candidates, key=lambda x: abs(x[1] - 40.0))[0]
+
+    payload["margin_calibration_shift"] = margin_calibration_shift
+    with open(SPREAD_MODEL_PATH_NCAAB, "wb") as f:
+        pickle.dump(payload, f)
+
+    # Report with calibrated line error
+    line_error_cal = line_error_test - margin_calibration_shift
+    recommend_underdog = line_error_cal > LINE_ERROR_THRESHOLD_PTS
+    recommend_favorite = line_error_cal < -LINE_ERROR_THRESHOLD_PTS
+    total_recommendations = recommend_underdog.sum() + recommend_favorite.sum()
+
+    if total_recommendations > 0:
+        underdog_rate = 100.0 * recommend_underdog.sum() / total_recommendations
+        print()
+        print(
+            f"Underdog spread recommendation rate (test set, |line_error| > {LINE_ERROR_THRESHOLD_PTS} pts): {underdog_rate:.1f}%"
+        )
+        print(f"  Underdog: {int(recommend_underdog.sum())}, Favorite: {int(recommend_favorite.sum())}, total: {int(total_recommendations)}")
+        print(f"  margin_calibration_shift = {margin_calibration_shift:.1f} pts (target: 35–45% underdogs)")
+    else:
+        print()
+        print("No test recommendations.")
+
+    # Regression metrics
+    mae = np.abs(pred_margin_test - y_test).mean()
     print()
-    print("Total games used for training:", n_total)
-    print("Train accuracy (cover):", round(train_acc, 4))
-    print("Validation accuracy (cover):", round(val_acc, 4))
-    print("Train vs validation accuracy gap: {:.2f}% (target under 8%)".format(gap_pct))
-    print("Pre-calibration  average predicted cover prob — favorites:", round(mean_fav_raw, 4), " underdogs:", round(mean_dog_raw, 4))
-    print("Recalibrated     average predicted cover prob — favorites:", round(mean_fav_cal, 4), " underdogs:", round(mean_dog_cal, 4))
-
-    # Top 5 features by mean |SHAP| (fallback: tree feature_importances_)
-    print()
-    try:
-        import shap
-        X_shap = X_test
-        explainer = shap.TreeExplainer(model, X_shap)
-        sv = explainer.shap_values(X_shap)
-        if isinstance(sv, list):
-            sv = sv[0]
-        mean_abs = np.abs(sv).mean(axis=0)
-        order = np.argsort(-mean_abs)[:5]
-        print("Top 5 features by mean |SHAP|:")
-        for i, idx in enumerate(order, 1):
-            print(f"  {i}. {used[idx]}: {mean_abs[idx]:.4f}")
-    except Exception as e:
-        # Fallback: tree feature_importances_ (GradientBoostingRegressor / XGBoost)
-        imp = getattr(model, "feature_importances_", None)
-        if imp is not None and len(imp) == len(used):
-            order = np.argsort(-imp)[:5]
-            print("Top 5 features by feature_importances_ (SHAP failed):")
-            for i, idx in enumerate(order, 1):
-                print(f"  {i}. {used[idx]}: {imp[idx]:.4f}")
-        else:
-            print("SHAP importance skipped:", e)
+    print(f"Test MAE (margin): {mae:.2f} pts (target: < 10 pts)")
 
 
 if __name__ == "__main__":

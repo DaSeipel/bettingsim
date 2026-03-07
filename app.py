@@ -306,10 +306,12 @@ def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = "")
         payload = {"sessionId": "a60dbe", "location": location, "message": message, "data": data, "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)}
         if hypothesis_id:
             payload["hypothesisId"] = hypothesis_id
-        with open("/Users/robertseipel/Desktop/bettingsim/.cursor/debug-a60dbe.log", "a") as f:
+        with open("/Users/robertseipel/Desktop/bettingsim/bettingsim/.cursor/debug-a60dbe.log", "a") as f:
             f.write(json.dumps(payload, default=str) + "\n")
     except Exception:
         pass
+
+
 # #endregion
 
 
@@ -935,7 +937,7 @@ def _render_potd_card_html(
     march_madness_mode: bool = False,
 ) -> str:
     """Return HTML for one Play of the Day card. accent: 'blue' | 'orange' | 'grey'. Grey when no play."""
-    if row is None or (isinstance(row, pd.Series) and (row.empty or len(row) == 0)):
+    if row is None or (isinstance(row, pd.Series) and (row.empty or len(row) == 0)) or (isinstance(row, dict) and len(row) == 0):
         html = f"""
         <div class="potd-card potd-card--grey">
             <div class="potd-league">{_html_escape(league)}</div>
@@ -963,7 +965,11 @@ def _render_potd_card_html(
         matchup_html += f' <span class="potd-abbrev">({home_abbrev})</span>'
     tipoff = format_start_time(str(r.get("commence_time", "") or ""))
     badge_text = _potd_badge_text(r)
-    reason = _potd_reason(r, feature_matrix=feature_matrix, b2b_teams=b2b_teams)
+    reason = r.get("reason")
+    if not reason and (feature_matrix is not None or (b2b_teams and len(b2b_teams) > 0)):
+        reason = _potd_reason(r, feature_matrix=feature_matrix, b2b_teams=b2b_teams)
+    if not reason:
+        reason = "Our model sees value on this play."
     odds_str = format_american(r.get("Odds", 0))
     market = str(r.get("Market", "")).strip().lower()
     point_val = r.get("point_x") or r.get("point")
@@ -1781,207 +1787,31 @@ def _vp_log(msg: str, data: dict):
     except Exception:
         pass
 # #endregion
-if not STRIP_DOWN_MODE and (odds_api_key or "").strip():
-    # #region agent log
-    _vp_log("gate_entered", {"key_len":len(odds_api_key)})
-    # #endregion
+
+# Value plays and POTD: always load from cache (written by scripts/run_pipeline_to_cache.py). No pipeline in-app.
+def _load_value_plays_cache() -> tuple[pd.DataFrame, dict, pd.DataFrame, int, dict, Optional[str]]:
+    """Load from data/cache/value_plays_cache.json. Returns (value_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, odds_source_meta, error_message or None)."""
+    empty_df = pd.DataFrame(columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"])
+    empty_live = pd.DataFrame(columns=["sport_key", "league", "event_id", "commence_time", "home_team", "away_team", "event_name", "market_type", "selection", "point", "odds"])
+    cache_path = Path(__file__).resolve().parent / "data" / "cache" / "value_plays_cache.json"
+    if not cache_path.exists():
+        return empty_df, {"NCAAB Pick 1": None, "NCAAB Pick 2": None}, empty_live, 0, {}, None
     try:
-        st.session_state["value_plays_pipeline_error"] = None
-        today_et = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
-        live_odds_df, odds_meta = _fetch_live_odds_cached(
-            today_et,
-            refresh_key=st.session_state["odds_refresh_key"],
-            api_key_available=bool((odds_api_key or "").strip()),
-        )
-        _log_df_mb("live_odds_df", live_odds_df)
-        gc.collect()
-        st.session_state["odds_source_meta"] = odds_meta  # used_espn_fallback, espn_games, espn_odds_rows
-        # #region agent log
-        _vp_log("after_fetch_odds", {"live_rows":len(live_odds_df),"aggregated_empty":live_odds_df.empty})
-        # #endregion
-        b2b_teams = _get_b2b_teams_cached(
-            datetime.now(ZoneInfo("America/New_York")).date().isoformat(),
-            refresh_key=st.session_state.get("odds_refresh_key", 0),
-        )
-        gc.collect()
-        feature_matrix_inference = _load_feature_matrix_cached(league=None)
-        _log_df_mb("feature_matrix_inference", feature_matrix_inference)
-        gc.collect()
-        _debug_value_plays = os.environ.get("DEBUG_VALUE_PLAYS", "") == "1"
-        if _debug_value_plays:
-            try:
-                Path("/tmp/debug_value_plays_entered.flag").write_text("1")
-            except Exception:
-                pass
-        _use_espn_fallback = bool(st.session_state.get("odds_source_meta", {}).get("used_espn_fallback"))
-        _min_ev = 1.5 if _use_espn_fallback else EV_EPSILON_MIN_PCT
-        _min_books_override = 1 if _use_espn_fallback else None
-        # NCAAB only for now (NBA code kept in backend for re-enable later)
-        _vp_frames: list[pd.DataFrame] = []
-        value_plays_flagged_count = 0
-        for _league_name in ("NCAAB",):
-            _sub = live_odds_df[live_odds_df["league"] == _league_name].copy() if "league" in live_odds_df.columns and not live_odds_df.empty else pd.DataFrame()
-            if _sub.empty:
-                continue
-            _agg = _aggregate_odds_best_line_avg_implied(_sub)
-            _log_df_mb("aggregated_odds", _agg)
-            gc.collect()
-            _vp, _flagged = _live_odds_to_value_plays(
-                _agg if not _agg.empty else _sub,
-                bankroll=BANKROLL_FOR_STAKES,
-                kelly_frac=kelly_frac_val,
-                min_ev_pct=_min_ev,
-                max_ev_pct=EV_EPSILON_MAX_PCT,
-                include_high_risk=include_high_risk_odds,
-                pace_stats=get_nba_team_pace_stats(),
-                b2b_teams=b2b_teams,
-                as_of_date=date.today(),
-                feature_matrix=feature_matrix_inference,
-                debug=_debug_value_plays,
-                min_bookmakers_override=_min_books_override,
-            )
-            if not _vp.empty:
-                _vp_frames.append(_vp)
-            value_plays_flagged_count += _flagged
-            _log_df_mb("value_plays_league", _vp)
-            del _sub, _agg
-            gc.collect()
-        value_plays_df = pd.concat(_vp_frames, ignore_index=True) if _vp_frames else pd.DataFrame(
-            columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"]
-        )
-        _log_df_mb("value_plays_df", value_plays_df)
-        gc.collect()
-        if _use_espn_fallback:
-            print(f"ESPN fallback thresholds (min edge 1.5%, min bookmakers 1): {len(value_plays_df)} plays generated.")
-        # #region agent log
-        _vp_log("after_value_plays", {"value_plays_count":len(value_plays_df)})
-        # #endregion
-        value_plays_df = add_injury_alerts_to_value_plays(value_plays_df, "Basketball")
-        _log_df_mb("value_plays_df_after_injury_alerts", value_plays_df)
-        gc.collect()
-        # Add confidence_tier and reasoning_summary for play_history archive
-        if not value_plays_df.empty:
-            def _confidence_tier(row: pd.Series) -> str:
-                edge = float(row.get("Value (%)", 0))
-                return "High" if edge >= POTD_HIGH_CONFIDENCE_EDGE_PCT else "Medium"
-            value_plays_df = value_plays_df.copy()
-            value_plays_df["confidence_tier"] = value_plays_df.apply(_confidence_tier, axis=1)
-            value_plays_df["reasoning_summary"] = value_plays_df.apply(
-                lambda r: _potd_reason(r, feature_matrix=feature_matrix_inference, b2b_teams=b2b_teams), axis=1
-            )
-        _log_df_mb("value_plays_df_after_confidence", value_plays_df)
-        gc.collect()
-        # Archive today's plays to play_history (stricter: min 6% edge, max 10 per day by edge)
-        try:
-            to_archive = value_plays_df[value_plays_df["Value (%)"] >= ARCHIVE_MIN_EDGE_PCT].copy()
-            to_archive = to_archive.sort_values("Value (%)", ascending=False).head(ARCHIVE_MAX_PLAYS_PER_DAY)
-            archive_value_plays(to_archive, as_of_date=date.today())
-            # Archive the 2 POTD picks with sport "NCAAB Pick 1" / "NCAAB Pick 2" for separate tracking
-            potd_picks = select_play_of_the_day(value_plays_df, live_odds_df, min_edge_pct=POTD_MIN_EDGE_PCT)
-            potd_rows = []
-            for label in ("NCAAB Pick 1", "NCAAB Pick 2"):
-                p = potd_picks.get(label)
-                if not p:
-                    continue
-                potd_rows.append({
-                    "League": label,
-                    "Event": p.get("Event", ""),
-                    "Selection": p.get("Selection", ""),
-                    "Market": p.get("Market", ""),
-                    "Odds": p.get("Odds", 0) or 0,
-                    "Value (%)": p.get("Value (%)", 0),
-                    "point": p.get("point"),
-                    "Recommended Stake": p.get("Recommended Stake"),
-                    "home_team": p.get("home_team", "—"),
-                    "away_team": p.get("away_team", "—"),
-                    "model_prob": p.get("model_prob", 0),
-                    "confidence_tier": p.get("confidence_tier", "Medium"),
-                    "reasoning_summary": p.get("reasoning_summary"),
-                })
-            if potd_rows:
-                potd_archive_df = pd.DataFrame(potd_rows)
-                archive_value_plays(potd_archive_df, as_of_date=date.today())
-        except Exception:
-            pass
-        # Record each recommended play for CLV (odds at recommendation; closing filled later)
-        try:
-            clv_record_recommendations(value_plays_df)
-            clv_update_closing_odds()
-        except Exception:
-            pass
-        gc.collect()
-        # Add injury_impact_score and top5-out flags for NBA (feature matrix)
-        if not live_odds_df.empty and "league" in live_odds_df.columns:
-            nba_games = (
-                live_odds_df[live_odds_df["league"] == "NBA"][["event_name", "home_team", "away_team"]]
-                .drop_duplicates()
-                .rename(columns={"home_team": "home_team_name", "away_team": "away_team_name"})
-            )
-            if not nba_games.empty:
-                try:
-                    injury_enriched = add_injury_features(nba_games, league="nba")
-                    inj_cols = ["injury_impact_score", "top5_out_or_doubtful_home", "top5_out_or_doubtful_away"]
-                    if all(c in injury_enriched.columns for c in inj_cols):
-                        value_plays_df = value_plays_df.merge(
-                            injury_enriched[["event_name"] + inj_cols],
-                            left_on="Event",
-                            right_on="event_name",
-                            how="left",
-                        ).drop(columns=["event_name"], errors="ignore")
-                        value_plays_df["injury_impact_score"] = value_plays_df["injury_impact_score"].fillna(0.0)
-                        value_plays_df["top5_out_or_doubtful_home"] = value_plays_df["top5_out_or_doubtful_home"].fillna(False)
-                        value_plays_df["top5_out_or_doubtful_away"] = value_plays_df["top5_out_or_doubtful_away"].fillna(False)
-                except Exception:
-                    pass
-        _log_df_mb("value_plays_df_after_injury_merge", value_plays_df)
-        gc.collect()
-        value_plays_df = add_ncaab_march_context_to_df(value_plays_df)
-        _log_df_mb("value_plays_df_final", value_plays_df)
-        gc.collect()
-        # March Madness mode: keep only NCAAB plays where both teams are tournament-eligible (in ncaab_seeds.csv)
-        if march_madness_mode and not value_plays_df.empty and "League" in value_plays_df.columns:
-            tournament_eligible = _load_tournament_eligible_teams()
-            if tournament_eligible:
-                ncaab_mask = value_plays_df["League"].astype(str).str.strip().str.upper() == "NCAAB"
-                home_ok = value_plays_df["home_team"].astype(str).str.strip().str.lower().isin(tournament_eligible)
-                away_ok = value_plays_df["away_team"].astype(str).str.strip().str.lower().isin(tournament_eligible)
-                keep = ~ncaab_mask | (ncaab_mask & home_ok & away_ok)
-                value_plays_df = value_plays_df.loc[keep].copy()
-        # #region agent log
-        _vp_log("after_march_filter", {"value_plays_count":len(value_plays_df),"march_madness_mode":march_madness_mode})
-        # #endregion
-    except Exception as e:
-        import traceback
-        st.session_state["value_plays_pipeline_error"] = (str(e), traceback.format_exc())
-        st.session_state["odds_source_meta"] = {}
-        # #region agent log
-        _vp_log("pipeline_exception", {"error":str(e),"tb":traceback.format_exc()})
-        # #endregion
-        value_plays_flagged_count = 0
-        live_odds_df = pd.DataFrame(
-            columns=[
-                "sport_key", "league", "event_id", "commence_time", "home_team", "away_team",
-                "event_name", "market_type", "selection", "point", "odds",
-            ]
-        )
-        value_plays_df = pd.DataFrame(
-            columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"]
-        )
-else:
-    # #region agent log
-    _vp_log("gate_else_no_key", {"reason":"odds_api_key_empty"})
-    # #endregion
-    st.session_state["odds_source_meta"] = {}
-    value_plays_flagged_count = 0
-    live_odds_df = pd.DataFrame(
-        columns=[
-            "sport_key", "league", "event_id", "commence_time", "home_team", "away_team",
-            "event_name", "market_type", "selection", "point", "odds",
-        ]
-    )
-    value_plays_df = pd.DataFrame(
-        columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"]
-    )
+        with open(cache_path) as f:
+            data = json.load(f)
+    except Exception:
+        return empty_df, {"NCAAB Pick 1": None, "NCAAB Pick 2": None}, empty_live, 0, {}, None
+    value_plays_list = data.get("value_plays") or []
+    value_plays_df = pd.DataFrame(value_plays_list) if value_plays_list else empty_df
+    potd_picks = data.get("potd_picks") or {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
+    value_plays_flagged_count = int(data.get("value_plays_flagged_count", 0))
+    odds_source_meta = data.get("odds_source_meta") or {}
+    cache_error = data.get("error")
+    return value_plays_df, potd_picks, empty_live, value_plays_flagged_count, odds_source_meta, cache_error
+
+value_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, _odds_meta, _cache_err = _load_value_plays_cache()
+st.session_state["odds_source_meta"] = _odds_meta
+st.session_state["value_plays_pipeline_error"] = (_cache_err, "") if _cache_err else None
 
 # -----------------------------------------------------------------------------
 # Main layout — tabbed (Overview = daily picks sheet, NCAAB, NBA)
@@ -2169,12 +1999,13 @@ with tab_overview:
     streak_pick1, streak_pick2 = _get_last_10_potd_results()
     if streak_pick1 or streak_pick2:
         st.markdown(_render_streak_html(streak_pick1, streak_pick2), unsafe_allow_html=True)
-    # ——— Play of the Day (backend selection: edge > 4%, tie-break bookmakers / model gap / no injury) ———
+    # ——— Play of the Day (from cache; pipeline runs in scripts/run_pipeline_to_cache.py) ———
     st.subheader("Play of the Day")
-    potd_picks = select_play_of_the_day(value_plays_df, live_odds_df, min_edge_pct=POTD_MIN_EDGE_PCT)
     pod_1 = potd_picks.get("NCAAB Pick 1")
     pod_2 = potd_picks.get("NCAAB Pick 2")
-    feature_matrix_potd = _load_feature_matrix_cached(league=None) if (pod_1 or pod_2) else None
+    need_reason_fallback = (pod_1 and not pod_1.get("reason")) or (pod_2 and not pod_2.get("reason"))
+    feature_matrix_potd = _load_feature_matrix_cached(league=None) if need_reason_fallback else None
+    b2b_teams = _get_b2b_teams_cached(datetime.now(ZoneInfo("America/New_York")).date().isoformat(), st.session_state.get("odds_refresh_key", 0)) if need_reason_fallback else frozenset()
     col_p1, col_p2 = st.columns(2)
     with col_p1:
         st.markdown(
@@ -2188,9 +2019,9 @@ with tab_overview:
         )
     if value_plays_df.empty:
         if (odds_api_key or "").strip():
-            st.caption("No Play of the Day: no games or value plays loaded for today. Try **Refresh odds** below or check back later.")
+            st.caption("No Play of the Day: no games or value plays loaded for today. Click **Refresh** below to run the pipeline, or check back later.")
         else:
-            st.caption("No Play of the Day: set your **Odds API key** in the sidebar to load today's NCAAB games and value plays.")
+            st.caption("No Play of the Day: set your **Odds API key** in the sidebar and click **Refresh** to run the pipeline.")
 
     st.divider()
 
@@ -2198,8 +2029,22 @@ with tab_overview:
     st.subheader("All Value Plays")
     st.caption("Every game today where the model found edge. One best play per game. Sorted by edge %.")
     if (odds_api_key or "").strip():
-        if st.button("Refresh odds", key="overview_refresh", help="Pull latest odds from The Odds API"):
-            st.session_state["odds_refresh_key"] = st.session_state.get("odds_refresh_key", 0) + 1
+        if st.button("Refresh", key="overview_refresh", help="Run the value-plays pipeline (scripts/run_pipeline_to_cache.py) and reload cache"):
+            _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
+            env = os.environ.copy()
+            env["ODDS_API_KEY"] = (odds_api_key or "").strip()
+            try:
+                subprocess.run(
+                    [sys.executable, str(_script)],
+                    cwd=str(Path(__file__).resolve().parent),
+                    env=env,
+                    timeout=300,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                st.error("Pipeline timed out after 5 minutes.")
+            except Exception as e:
+                st.error(f"Pipeline error: {e}")
             st.rerun()
     if value_plays_flagged_count > 0:
         st.warning(f"**Potential Data Error:** {value_plays_flagged_count} play(s) had Value % ≥ 15% and were excluded.")
@@ -2284,8 +2129,22 @@ with tab_ncaab:
     st.subheader("NCAAB")
     st.caption("College basketball value plays from the same model: in-house line (power ratings), key numbers, fractional Kelly half-units.")
     if (odds_api_key or "").strip():
-        if st.button("Refresh", key="ncaab_refresh", help="Pull latest NCAAB odds from The Odds API (also refreshes every 15 min automatically)"):
-            st.session_state["odds_refresh_key"] = st.session_state.get("odds_refresh_key", 0) + 1
+        if st.button("Refresh", key="ncaab_refresh", help="Run the value-plays pipeline and reload cache"):
+            _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
+            env = os.environ.copy()
+            env["ODDS_API_KEY"] = (odds_api_key or "").strip()
+            try:
+                subprocess.run(
+                    [sys.executable, str(_script)],
+                    cwd=str(Path(__file__).resolve().parent),
+                    env=env,
+                    timeout=300,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                st.error("Pipeline timed out after 5 minutes.")
+            except Exception as e:
+                st.error(f"Pipeline error: {e}")
             st.rerun()
     ncaab_value = value_plays_df[value_plays_df["League"] == "NCAAB"] if not value_plays_df.empty and "League" in value_plays_df.columns else pd.DataFrame()
     if not ncaab_value.empty:
@@ -2411,16 +2270,19 @@ with tab_mark_results:
                     if st.button("✅ Win", key=f"mr_w_{row.get('play_id')}", help="Mark win"):
                         for _pid in pids_in_group:
                             update_play_result(_pid, "W")
+                        _load_play_history_cached.clear()
                         st.rerun()
                 with c2:
                     if st.button("❌ Loss", key=f"mr_l_{row.get('play_id')}", help="Mark loss"):
                         for _pid in pids_in_group:
                             update_play_result(_pid, "L")
+                        _load_play_history_cached.clear()
                         st.rerun()
                 with c3:
                     if st.button("➖ Push", key=f"mr_p_{row.get('play_id')}", help="Mark push"):
                         for _pid in pids_in_group:
                             update_play_result(_pid, "P")
+                        _load_play_history_cached.clear()
                         st.rerun()
     else:
         st.info("No past plays in the last 90 days to mark. Plays from yesterday and earlier appear here once they are archived.")

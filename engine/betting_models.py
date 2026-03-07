@@ -7,6 +7,7 @@ route predictions. Falls back to heuristics when models are not trained or featu
 from __future__ import annotations
 
 import json
+import logging
 import pickle
 from pathlib import Path
 from typing import Any, Optional
@@ -354,6 +355,102 @@ def _spread_model_path_for_league(league: Optional[str]) -> Path:
     return SPREAD_MODEL_PATH
 
 
+# Map Live Odds (Odds API) team names to feature-matrix (ESPN/KenPom) names for NCAAB lookup.
+# Keys: normalized (lower, stripped); values: name to use when matching feature_matrix.
+NCAAB_ODDS_TO_FEATURE_TEAM: dict[str, str] = {
+    "north carolina tar heels": "North Carolina",
+    "unc": "North Carolina",
+    "duke blue devils": "Duke",
+    "kentucky wildcats": "Kentucky",
+    "florida gators": "Florida",
+    "louisville cardinals": "Louisville",
+    "miami hurricanes": "Miami (FL)",
+    "miami (fl) hurricanes": "Miami (FL)",
+    "byu cougars": "BYU",
+    "brigham young cougars": "BYU",
+    "texas tech red raiders": "Texas Tech",
+    "alabama crimson tide": "Alabama",
+    "auburn tigers": "Auburn",
+    "arizona wildcats": "Arizona",
+    "colorado buffaloes": "Colorado",
+    "wisconsin badgers": "Wisconsin",
+    "purdue boilermakers": "Purdue",
+    "saint louis billikens": "Saint Louis",
+    "st louis billikens": "Saint Louis",
+    "george mason patriots": "George Mason",
+    "iowa state cyclones": "Iowa State",
+    "arizona state sun devils": "Arizona State",
+    "kansas jayhawks": "Kansas",
+    "kansas state wildcats": "Kansas State",
+    "vanderbilt commodores": "Vanderbilt",
+    "tennessee volunteers": "Tennessee",
+    "connecticut huskies": "UConn",
+    "uconn huskies": "UConn",
+    "marquette golden eagles": "Marquette",
+}
+
+
+def _normalize_team_for_lookup(name: str) -> str:
+    """Normalize team name for lookup (strip, lower)."""
+    if not name or not isinstance(name, str):
+        return ""
+    return name.strip().lower()
+
+
+def _team_names_match(live_name: str, fm_name: str) -> bool:
+    """True if live (Odds API) name matches feature-matrix name (exact, contains, or mapped)."""
+    live = _normalize_team_for_lookup(live_name)
+    fm = _normalize_team_for_lookup(fm_name)
+    if not live or not fm:
+        return False
+    if live == fm:
+        return True
+    if live in fm or fm in live:
+        return True
+    mapped = NCAAB_ODDS_TO_FEATURE_TEAM.get(live)
+    if mapped and _normalize_team_for_lookup(mapped) == fm:
+        return True
+    return False
+
+
+def get_spread_predicted_margin(
+    row: Optional[pd.Series],
+    market_spread: float,
+    league: Optional[str] = None,
+    home_team: Optional[str] = None,
+    away_team: Optional[str] = None,
+) -> Optional[float]:
+    """
+    Return the model's predicted margin (home - away) for the spread, or None.
+    Only works for margin (regressor) models; returns None for classifier.
+    Used for debug (e.g. line_error = pred_margin - market_spread).
+    Optional home_team/away_team used for "Missing features for ..." logging when row is None or X.empty.
+    """
+    def _team_label() -> str:
+        h = home_team if home_team is not None else (row.get("home_team_name") if row is not None else None)
+        a = away_team if away_team is not None else (row.get("away_team_name") if row is not None else None)
+        if h or a:
+            return f"{h or '?'} / {a or '?'}"
+        return "(unknown teams)"
+
+    if row is None:
+        logging.getLogger(__name__).warning("Missing features for %s", _team_label())
+        return None
+    path = _spread_model_path_for_league(league)
+    payload = load_model(path)
+    if payload is None or payload.get("is_underdog_cover_classifier", False):
+        return None
+    model = payload["model"]
+    cols = payload.get("feature_columns", [])
+    X, _ = _select_features(pd.DataFrame([row]), cols)
+    if X.empty:
+        logging.getLogger(__name__).warning("Missing features for %s", _team_label())
+        return None
+    pred = float(model.predict(X)[0])
+    pred -= payload.get("margin_calibration_shift", 0.0)
+    return pred
+
+
 def _totals_model_path_for_league(league: Optional[str]) -> Path:
     if str(league or "").strip().lower() == "ncaab" and TOTALS_MODEL_PATH_NCAAB.exists():
         return TOTALS_MODEL_PATH_NCAAB
@@ -364,6 +461,26 @@ def _moneyline_model_path_for_league(league: Optional[str]) -> Path:
     if str(league or "").strip().lower() == "ncaab" and MONEYLINE_MODEL_PATH_NCAAB.exists():
         return MONEYLINE_MODEL_PATH_NCAAB
     return MONEYLINE_MODEL_PATH
+
+
+def _spread_row_with_line_features(row, market_spread: float):
+    """Add line_value and public_fade_spot to row for NCAAB underdog-cover classifier. Returns a copy (Series or dict)."""
+    if isinstance(row, pd.Series):
+        r = row.copy()
+    else:
+        r = dict(row) if row is not None else {}
+    try:
+        h = float(r.get("home_BARTHAG") or 0)
+        a = float(r.get("away_BARTHAG") or 0)
+        barthag_diff_pts = (h - a) * 100.0
+    except (TypeError, ValueError):
+        barthag_diff_pts = 0.0
+    if abs(barthag_diff_pts) >= 0.5:
+        r["line_value"] = float(np.clip(market_spread / barthag_diff_pts, -10, 10))
+    else:
+        r["line_value"] = 0.0
+    r["public_fade_spot"] = 1 if abs(barthag_diff_pts) > 8.0 else 0
+    return r
 
 
 def predict_spread_prob(
@@ -377,7 +494,7 @@ def predict_spread_prob(
     Predict P(cover) for the spread. market_spread is home spread (e.g. -3.5).
     we_cover_favorite True = we're on the favorite (home/away favored).
     Uses loaded XGBoost spread model if available; when league is ncaab, uses NCAAB model if present.
-    NCAAB model may include calibration_shift_fav/calibration_shift_dog; applied so favorites and underdogs average ~50%.
+    NCAAB model may be binary classifier (underdog covered) or margin regressor; classifier uses line_value/public_fade_spot.
     """
     path = _spread_model_path_for_league(league)
     payload = load_model(path)
@@ -385,15 +502,26 @@ def predict_spread_prob(
         return fallback_prob if fallback_prob is not None else 0.5
     model = payload["model"]
     cols = payload.get("feature_columns", [])
+    is_classifier = payload.get("is_underdog_cover_classifier", False)
+    if is_classifier and row is not None:
+        row = _spread_row_with_line_features(row, market_spread)
     X, _ = _select_features(pd.DataFrame([row]), cols)
     if X.empty:
         return fallback_prob if fallback_prob is not None else 0.5
+    if is_classifier:
+        prob_underdog_cover = float(model.predict_proba(X)[0, 1])
+        home_underdog = market_spread > 0
+        prob_home_cover = prob_underdog_cover if home_underdog else (1.0 - prob_underdog_cover)
+        if we_cover_favorite:
+            raw = (1.0 - prob_home_cover) if home_underdog else prob_home_cover
+        else:
+            raw = prob_home_cover if home_underdog else (1.0 - prob_home_cover)
+        return float(np.clip(raw, 0.02, 0.98))
     pred_margin = float(model.predict(X)[0])
-    # P(home covers market_spread) = P(margin > market_spread). Approximate with sigmoid.
+    pred_margin -= payload.get("margin_calibration_shift", 0.0)
     diff = pred_margin - market_spread
     k = 0.35
     prob_home_cover = 1.0 / (1.0 + np.exp(-k * diff))
-    # Which side we're on: favorite vs underdog (for NCAAB calibration)
     home_favored = market_spread <= 0
     if we_cover_favorite:
         raw = prob_home_cover if home_favored else (1.0 - prob_home_cover)
@@ -401,7 +529,6 @@ def predict_spread_prob(
     else:
         raw = (1.0 - prob_home_cover) if home_favored else prob_home_cover
         is_favorite = False
-    # Apply NCAAB calibration if present (shifts so avg fav and avg dog are 50%)
     shift_fav = payload.get("calibration_shift_fav")
     shift_dog = payload.get("calibration_shift_dog")
     if shift_fav is not None and shift_dog is not None:
@@ -474,10 +601,19 @@ def _spread_direction_home_cover(
         return None
     model = payload["model"]
     cols = payload.get("feature_columns", [])
+    is_classifier = payload.get("is_underdog_cover_classifier", False)
+    if is_classifier:
+        row = _spread_row_with_line_features(row, market_spread)
     X, _ = _select_features(pd.DataFrame([row]), cols)
     if X.empty:
         return None
+    if is_classifier:
+        prob_underdog_cover = float(model.predict_proba(X)[0, 1])
+        home_underdog = market_spread > 0
+        prob_home_cover = prob_underdog_cover if home_underdog else (1.0 - prob_underdog_cover)
+        return prob_home_cover > 0.5
     pred_margin = float(model.predict(X)[0])
+    pred_margin -= payload.get("margin_calibration_shift", 0.0)
     diff = pred_margin - market_spread
     prob_home_cover = 1.0 / (1.0 + np.exp(-0.35 * diff))
     return prob_home_cover > 0.5
@@ -621,15 +757,18 @@ def get_feature_row_for_game(
         if col not in feature_matrix.columns:
             _dbg("return_none", {"reason":"missing_col", "col":col})
             return None
+    league_norm = str(league).strip().lower()
+    home_strip = str(home_team).strip()
+    away_strip = str(away_team).strip()
+
     mask = (
-        (feature_matrix["league"].astype(str).str.strip().str.lower() == str(league).strip().lower())
-        & (feature_matrix["home_team_name"].astype(str).str.strip() == str(home_team).strip())
-        & (feature_matrix["away_team_name"].astype(str).str.strip() == str(away_team).strip())
+        (feature_matrix["league"].astype(str).str.strip().str.lower() == league_norm)
+        & (feature_matrix["home_team_name"].astype(str).str.strip() == home_strip)
+        & (feature_matrix["away_team_name"].astype(str).str.strip() == away_strip)
     )
     if game_date is not None and "game_date" in feature_matrix.columns:
         try:
             fd = pd.to_datetime(game_date).normalize()
-            # Normalize to naive UTC for comparison (avoid tz-aware vs tz-naive comparison)
             fm_dates_norm = pd.to_datetime(feature_matrix["game_date"], errors="coerce", utc=True)
             if hasattr(fm_dates_norm.dtype, "tz") and fm_dates_norm.dtype.tz is not None:
                 fm_dates_norm = fm_dates_norm.dt.tz_localize(None)
@@ -638,12 +777,145 @@ def get_feature_row_for_game(
         except Exception:
             pass
     subset = feature_matrix.loc[mask]
-    if subset.empty:
-        sample_home = feature_matrix["home_team_name"].astype(str).str.strip().iloc[:5].tolist() if len(feature_matrix) > 0 else []
-        sample_away = feature_matrix["away_team_name"].astype(str).str.strip().iloc[:5].tolist() if len(feature_matrix) > 0 else []
-        _dbg("return_none", {"reason":"no_match","sample_home":sample_home,"sample_away":sample_away,"league_sample":feature_matrix["league"].astype(str).iloc[:5].tolist() if "league" in feature_matrix.columns else []})
+    if not subset.empty:
+        return subset.iloc[0]
+
+    # Flexible match: Live Odds names (e.g. "Kentucky Wildcats") vs feature-matrix names (e.g. "Kentucky")
+    fm_league = feature_matrix["league"].astype(str).str.strip().str.lower() == league_norm
+    candidates = feature_matrix.loc[fm_league]
+    best = None
+    best_ts = None
+    for idx in candidates.index:
+        row = candidates.loc[idx]
+        r_h = str(row.get("home_team_name", "")).strip()
+        r_a = str(row.get("away_team_name", "")).strip()
+        if _team_names_match(home_team, r_h) and _team_names_match(away_team, r_a):
+            try:
+                ts = pd.to_datetime(row.get("game_date"), errors="coerce")
+                if pd.notna(ts) and (best_ts is None or ts > best_ts):
+                    best_ts = ts
+                    best = row
+            except Exception:
+                if best is None:
+                    best = row
+    if best is not None:
+        return best
+
+    sample_home = feature_matrix["home_team_name"].astype(str).str.strip().iloc[:5].tolist() if len(feature_matrix) > 0 else []
+    sample_away = feature_matrix["away_team_name"].astype(str).str.strip().iloc[:5].tolist() if len(feature_matrix) > 0 else []
+    _dbg("return_none", {"reason":"no_match","sample_home":sample_home,"sample_away":sample_away,"league_sample":feature_matrix["league"].astype(str).iloc[:5].tolist() if "league" in feature_matrix.columns else []})
+    return None
+
+
+def _game_season_from_date(game_date: Optional[str]) -> Optional[int]:
+    """Derive season (end year) from game_date. Oct+ -> next year; else current year."""
+    if not game_date or not isinstance(game_date, str):
         return None
-    return subset.iloc[0]
+    s = str(game_date).strip()
+    if len(s) < 4:
+        return None
+    try:
+        year = int(s[:4])
+        if len(s) >= 7:
+            month = int(s[5:7])
+            if month >= 10:
+                return year + 1
+        return year
+    except (ValueError, TypeError):
+        return None
+
+
+# KenPom CSV often uses "Miami FL" / "Saint Louis" vs ESPN "Miami (FL)" / "Saint Louis Billikens"
+NCAAB_FEATURE_TO_KENPOM_TEAM: dict[str, str] = {
+    "Miami (FL)": "Miami FL",
+    "Saint Louis": "Saint Louis",
+}
+
+
+def _resolve_team_for_kenpom_lookup(team_name: str, stats_teams: list[str]) -> Optional[str]:
+    """Map live/odds team name to a TEAM value that appears in ncaab_team_season_stats."""
+    if not team_name or not stats_teams:
+        return None
+    name = str(team_name).strip()
+    norm = _normalize_team_for_lookup(name)
+    mapped = NCAAB_ODDS_TO_FEATURE_TEAM.get(norm)
+    if mapped:
+        if mapped in stats_teams:
+            return mapped
+        kenpom = NCAAB_FEATURE_TO_KENPOM_TEAM.get(mapped)
+        if kenpom and kenpom in stats_teams:
+            return kenpom
+    if name in stats_teams:
+        return name
+    norm_list = [t.strip().lower() for t in stats_teams]
+    if norm in norm_list:
+        return stats_teams[norm_list.index(norm)]
+    for st in stats_teams:
+        if norm == _normalize_team_for_lookup(st) or (norm in st.lower()) or (st.lower() in norm):
+            return st
+    return None
+
+
+def build_ncaab_feature_row_from_team_stats(
+    home_team: str,
+    away_team: str,
+    game_date: Optional[str] = None,
+    db_path: Optional[Path] = None,
+) -> Optional[pd.Series]:
+    """
+    Build a synthetic NCAAB feature row from ncaab_team_season_stats when no game row exists.
+    Returns a Series with NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS + home_team_name, away_team_name, league;
+    days_rest/b2b default to 0. Returns None if table missing or either team not found.
+    """
+    import sqlite3
+    path = db_path or (Path(__file__).resolve().parent.parent / "data" / "espn.db")
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(path)
+    try:
+        try:
+            stats = pd.read_sql_query("SELECT * FROM ncaab_team_season_stats", conn)
+        except Exception:
+            return None
+    finally:
+        conn.close()
+    if stats.empty or "TEAM" not in stats.columns or "season" not in stats.columns:
+        return None
+    season = _game_season_from_date(game_date)
+    if season is None:
+        season = _game_season_from_date(pd.Timestamp.now().strftime("%Y-%m-%d"))
+    if season is None:
+        season = 2025
+    stats_teams = stats["TEAM"].astype(str).str.strip().dropna().unique().tolist()
+    home_key = _resolve_team_for_kenpom_lookup(home_team, stats_teams)
+    away_key = _resolve_team_for_kenpom_lookup(away_team, stats_teams)
+    if not home_key or not away_key:
+        return None
+    season_stats = stats[stats["season"].astype(int) == season]
+    if season_stats.empty and season == 2026:
+        season_stats = stats[stats["season"].astype(int) == 2025]
+    home_row = season_stats[season_stats["TEAM"].astype(str).str.strip() == home_key]
+    away_row = season_stats[season_stats["TEAM"].astype(str).str.strip() == away_key]
+    if home_row.empty or away_row.empty:
+        return None
+    home_row = home_row.iloc[0]
+    away_row = away_row.iloc[0]
+    # Base KenPom stat names that may exist in ncaab_team_season_stats
+    base_stats = ["ADJOE", "ADJDE", "BARTHAG", "EFG_O", "EFG_D", "TOR", "TORD", "ORB", "DRB", "FTR", "FTRD", "ADJ_T", "SEED"]
+    row = {"league": "ncaab", "home_team_name": home_team, "away_team_name": away_team}
+    for c in base_stats:
+        if c in home_row.index:
+            row[f"home_{c}"] = float(home_row[c]) if pd.notna(home_row[c]) else 0.0
+        if c in away_row.index:
+            row[f"away_{c}"] = float(away_row[c]) if pd.notna(away_row[c]) else 0.0
+    for col in NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS:
+        if col not in row:
+            row[col] = 0.0
+    row["home_days_rest"] = 0.0
+    row["away_days_rest"] = 0.0
+    row["home_is_b2b"] = 0
+    row["away_is_b2b"] = 0
+    return pd.Series(row)
 
 
 def load_metrics() -> dict[str, float]:

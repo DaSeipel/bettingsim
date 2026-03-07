@@ -15,7 +15,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-MIN_REMAINING_BEFORE_SKIP = 10
+MIN_REMAINING_BEFORE_SKIP = 3
 QUOTA_HEADER_REMAINING = "x-requests-remaining"
 QUOTA_HEADER_USED = "x-requests-used"
 QUOTA_HEADER_LAST = "x-requests-last"
