@@ -12,6 +12,8 @@ from typing import Any
 
 import pandas as pd
 
+from .utils import game_season_from_date
+
 # Last 5 seasons (year = season end, e.g. 2024 = 2023-24)
 def _default_seasons() -> list[int]:
     from datetime import datetime
@@ -219,7 +221,7 @@ def _team_stats_from_games(games_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     g = games_df.copy()
     if "season" not in g.columns and "game_date" in g.columns:
-        g["season"] = g["game_date"].apply(_game_season_from_date)
+        g["season"] = g["game_date"].apply(game_season_from_date)
     if "season" not in g.columns:
         return pd.DataFrame()
     rows = []
@@ -292,7 +294,7 @@ def _opponent_averages_from_games(
     name_mapping = name_mapping or TEAM_NAME_MAPPING
     g = games_df.copy()
     if "season" not in g.columns and "game_date" in g.columns:
-        g["season"] = g["game_date"].apply(_game_season_from_date)
+        g["season"] = g["game_date"].apply(game_season_from_date)
     if "season" not in g.columns or "league" not in g.columns:
         return pd.DataFrame()
     g["league"] = g["league"].astype(str).str.strip().str.lower()
@@ -435,24 +437,6 @@ def apply_opponent_adjustments(
     return out
 
 
-def _game_season_from_date(game_date: Any) -> int | None:
-    """Derive season (end year) from game_date. Oct+ -> next year; else current year."""
-    if game_date is None or pd.isna(game_date):
-        return None
-    s = str(game_date).strip()
-    if not s or len(s) < 4:
-        return None
-    try:
-        year = int(s[:4])
-        if len(s) >= 7:
-            month = int(s[5:7])
-            if month >= 10:
-                return year + 1
-        return year
-    except (ValueError, TypeError):
-        return None
-
-
 def load_games_with_season(db_path: Path | None = None, league: str | None = None) -> pd.DataFrame:
     """Load games from ESPN SQLite and add a 'season' column derived from game_date."""
     path = db_path or _espn_db_path()
@@ -468,7 +452,7 @@ def load_games_with_season(db_path: Path | None = None, league: str | None = Non
             return df
         if "game_date" in df.columns:
             df = df.copy()
-            df["season"] = df["game_date"].apply(_game_season_from_date)
+            df["season"] = df["game_date"].apply(game_season_from_date)
         return df
     finally:
         conn.close()
@@ -521,7 +505,7 @@ def merge_games_with_team_stats(
     name_mapping = name_mapping or TEAM_NAME_MAPPING
     g = games_df.copy()
     if "season" not in g.columns and "game_date" in g.columns:
-        g["season"] = g["game_date"].apply(_game_season_from_date)
+        g["season"] = g["game_date"].apply(game_season_from_date)
     if "season" not in g.columns:
         return g
     g["_home_name"] = g["home_team_name"].apply(lambda x: _apply_name_mapping(x, name_mapping))

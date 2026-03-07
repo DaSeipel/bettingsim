@@ -173,7 +173,7 @@ def main() -> int:
         key_cols = [c for c in cols if c in (
             "league", "game_id", "game_date", "home_team_name", "away_team_name",
             "home_score", "away_score", "home_offensive_rating", "away_offensive_rating",
-            "home_days_rest", "away_days_rest", "home_is_b2b", "away_is_b2b",
+            "home_days_rest", "away_days_rest", "home_games_in_last_5_days", "away_games_in_last_5_days",
             "closing_home_spread", "closing_total", "closing_ml_home", "closing_ml_away",
         )][:14]
         if not key_cols:

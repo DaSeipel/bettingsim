@@ -9,34 +9,15 @@ All features merged into the existing feature matrix (games_with_team_stats). No
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
 
+from .utils import parse_date
+
 # Default possessions per game for NCAAB when not available (approx)
 NCAAB_EST_POSS_PER_GAME = 70.0
-
-
-def _parse_date(s: Any) -> Optional[datetime]:
-    if s is None or pd.isna(s):
-        return None
-    s = str(s).strip()
-    if len(s) >= 10:
-        try:
-            return datetime.strptime(s[:10], "%Y-%m-%d")
-        except ValueError:
-            try:
-                return datetime.strptime(s[:10], "%Y/%m/%d")
-            except ValueError:
-                pass
-    # nba_api sometimes returns "JAN 15, 2024"
-    try:
-        return datetime.strptime(s, "%b %d, %Y")
-    except ValueError:
-        pass
-    return None
 
 
 def _possessions(fga: float, orb: float, to: float, fta: float) -> float:
@@ -166,7 +147,7 @@ def _rolling_10_nba(game_logs: pd.DataFrame, team_name_col: str = "team_name") -
     if game_logs.empty:
         return pd.DataFrame()
     gl = game_logs.copy()
-    gl["_dt"] = gl["game_date"].apply(_parse_date)
+    gl["_dt"] = gl["game_date"].apply(parse_date)
     gl = gl.dropna(subset=["_dt"]).sort_values([team_name_col, "_dt"])
     metric_cols = ["off_eff", "def_eff", "pace", "ts_pct", "tov_rate", "orb_rate", "ftr"]
     out = []
@@ -221,7 +202,7 @@ def build_nba_rolling_features(
     merge_cols = [c for c in rolling.columns if c.endswith("_roll10")]
     home_roll = rolling.rename(columns={c: f"home_{c}" for c in merge_cols})
     away_roll = rolling.rename(columns={c: f"away_{c}" for c in merge_cols})
-    nba["_dt"] = nba["game_date"].apply(_parse_date)
+    nba["_dt"] = nba["game_date"].apply(parse_date)
     nba = nba.merge(
         home_roll[["team_name", "_dt"] + [f"home_{c}" for c in merge_cols]],
         left_on=["home_team_name", "_dt"],
@@ -254,7 +235,7 @@ def build_ncaab_rolling_features(games_df: pd.DataFrame) -> pd.DataFrame:
     ncaab = games_df[games_df["league"].astype(str).str.lower() == "ncaab"].copy()
     if ncaab.empty or "game_date" not in ncaab.columns:
         return pd.DataFrame()
-    ncaab["_dt"] = ncaab["game_date"].apply(_parse_date)
+    ncaab["_dt"] = ncaab["game_date"].apply(parse_date)
     ncaab = ncaab.dropna(subset=["_dt"]).sort_values("_dt")
     # Build team-game rows from games: each game gives home (pts=home_score, opp=away_score) and away (pts=away_score, opp=home_score)
     rows = []
@@ -315,6 +296,16 @@ def build_ncaab_rolling_features(games_df: pd.DataFrame) -> pd.DataFrame:
     ncaab = ncaab.drop(columns=["team_name"], errors="ignore")
     ncaab = ncaab.merge(away_roll, left_on=["away_team_name", "game_id"], right_on=["team_name", "game_id"], how="left")
     ncaab = ncaab.drop(columns=["team_name"], errors="ignore")
+    # Alias NCAAB adj_* to standard names so SPREAD_FEATURE_COLUMNS / TOTALS_FEATURE_COLUMNS pick them up
+    if "home_adj_off_eff_roll10" in ncaab.columns:
+        ncaab["home_off_eff_roll10"] = ncaab["home_adj_off_eff_roll10"]
+        ncaab["away_off_eff_roll10"] = ncaab["away_adj_off_eff_roll10"]
+    if "home_adj_def_eff_roll10" in ncaab.columns:
+        ncaab["home_def_eff_roll10"] = ncaab["home_adj_def_eff_roll10"]
+        ncaab["away_def_eff_roll10"] = ncaab["away_adj_def_eff_roll10"]
+    if "home_adj_tempo_roll10" in ncaab.columns:
+        ncaab["home_pace_roll10"] = ncaab["home_adj_tempo_roll10"]
+        ncaab["away_pace_roll10"] = ncaab["away_adj_tempo_roll10"]
     roll_cols = [c for c in ncaab.columns if "roll10" in c]
     return ncaab[["league", "game_id"] + roll_cols].drop_duplicates(subset=["league", "game_id"])
 

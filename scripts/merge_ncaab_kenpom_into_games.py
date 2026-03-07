@@ -10,9 +10,15 @@ Prints how many NCAAB games got stats merged vs no match.
 from __future__ import annotations
 
 import sqlite3
+import sys
 from pathlib import Path
 
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from engine.utils import game_season_from_date, effective_kenpom_season
 
 try:
     from thefuzz import fuzz
@@ -21,7 +27,6 @@ except ImportError:
     fuzz = None
     fuzz_process = None
 
-ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 ESPN_DB = DATA_DIR / "espn.db"
 NCAAB_CSV = ROOT / "data" / "ncaab" / "team_stats_combined.csv"
@@ -34,22 +39,11 @@ KENPOM_STAT_COLUMNS = [
 ]
 
 
-def _game_season_from_date(game_date) -> int | None:
-    """Derive season (end year) from game_date. Oct+ -> next year; else current year."""
-    if game_date is None or pd.isna(game_date):
-        return None
-    s = str(game_date).strip()
-    if not s or len(s) < 4:
-        return None
-    try:
-        year = int(s[:4])
-        if len(s) >= 7:
-            month = int(s[5:7])
-            if month >= 10:
-                return year + 1
-        return year
-    except (ValueError, TypeError):
-        return None
+def _kenpom_column_name(prefix: str, stat: str) -> str:
+    """Standardized column name: SEED -> seed, others unchanged (e.g. home_seed, home_ADJOE)."""
+    if stat == "SEED":
+        return f"{prefix}seed"
+    return f"{prefix}{stat}"
 
 
 def load_csv_into_ncaab_team_season_stats(csv_path: Path, db_path: Path) -> pd.DataFrame:
@@ -96,20 +90,35 @@ def build_team_name_mapping(
     return mapping
 
 
+# Games before this date (in season year) use prior season's KenPom (preseason proxy); avoids end-of-season leakage.
+KENPOM_AS_OF_CUTOFF_MONTH = 1
+KENPOM_AS_OF_CUTOFF_DAY = 1
+
+
 def merge_ncaab_kenpom_into_games(
     games_df: pd.DataFrame,
     stats_df: pd.DataFrame,
     name_mapping: dict[str, str],
+    cutoff_month: int = KENPOM_AS_OF_CUTOFF_MONTH,
+    cutoff_day: int = KENPOM_AS_OF_CUTOFF_DAY,
 ) -> pd.DataFrame:
-    """Add home_* and away_* KenPom columns to games_df for NCAAB rows. Non-NCAAB get NaN."""
+    """Add home_* and away_* KenPom columns to games_df for NCAAB rows. Non-NCAAB get NaN.
+    Early-season games (before cutoff date in season year) use prior season's KenPom to avoid leakage."""
     g = games_df.copy()
     # Drop existing KenPom columns so merge does not create duplicates (e.g. when rebuild already attached 2025 stats)
     for c in KENPOM_STAT_COLUMNS:
         g = g.drop(columns=[f"home_{c}", f"away_{c}"], errors="ignore")
+    g = g.drop(columns=["home_seed", "away_seed"], errors="ignore")
     if "season" not in g.columns and "game_date" in g.columns:
-        g["season"] = g["game_date"].apply(_game_season_from_date)
+        g["season"] = g["game_date"].apply(game_season_from_date)
     if "season" not in g.columns or "league" not in g.columns:
         return g
+
+    # Lag: games before cutoff (e.g. Jan 1) use prior season's ratings (preseason / earliest available proxy)
+    g["_effective_season"] = g.apply(
+        lambda row: effective_kenpom_season(row["game_date"], row["season"], cutoff_month, cutoff_day),
+        axis=1,
+    )
 
     stat_cols = [c for c in KENPOM_STAT_COLUMNS if c in stats_df.columns]
     g["_home_team"] = g["home_team_name"].apply(
@@ -119,19 +128,25 @@ def merge_ncaab_kenpom_into_games(
         lambda x: name_mapping.get(str(x or "").strip(), str(x or "").strip())
     )
 
-    # Home merge: (season, _home_team) -> stats
+    # Home merge: (_effective_season, _home_team) -> stats. Standardized naming: SEED -> home_seed/away_seed.
     home_stats = stats_df[["season", "TEAM"] + stat_cols].copy()
-    home_stats = home_stats.rename(columns={"TEAM": "_home_team", **{c: f"home_{c}" for c in stat_cols}})
-    home_stats = home_stats[["season", "_home_team"] + [f"home_{c}" for c in stat_cols]]
-    g = g.merge(home_stats, on=["season", "_home_team"], how="left")
+    home_rename = {"TEAM": "_home_team", **{c: _kenpom_column_name("home_", c) for c in stat_cols}}
+    home_stats = home_stats.rename(columns=home_rename)
+    home_out_cols = [home_rename[c] for c in stat_cols]
+    home_stats = home_stats[["season", "_home_team"] + home_out_cols]
+    g = g.merge(home_stats, left_on=["_effective_season", "_home_team"], right_on=["season", "_home_team"], how="left", suffixes=("", "_kenpom"))
+    g = g.drop(columns=[c for c in g.columns if c.endswith("_kenpom")], errors="ignore")
 
     # Away merge
     away_stats = stats_df[["season", "TEAM"] + stat_cols].copy()
-    away_stats = away_stats.rename(columns={"TEAM": "_away_team", **{c: f"away_{c}" for c in stat_cols}})
-    away_stats = away_stats[["season", "_away_team"] + [f"away_{c}" for c in stat_cols]]
-    g = g.merge(away_stats, on=["season", "_away_team"], how="left")
+    away_rename = {"TEAM": "_away_team", **{c: _kenpom_column_name("away_", c) for c in stat_cols}}
+    away_stats = away_stats.rename(columns=away_rename)
+    away_out_cols = [away_rename[c] for c in stat_cols]
+    away_stats = away_stats[["season", "_away_team"] + away_out_cols]
+    g = g.merge(away_stats, left_on=["_effective_season", "_away_team"], right_on=["season", "_away_team"], how="left", suffixes=("", "_kenpom"))
+    g = g.drop(columns=[c for c in g.columns if c.endswith("_kenpom")], errors="ignore")
 
-    g = g.drop(columns=["_home_team", "_away_team"], errors="ignore")
+    g = g.drop(columns=["_effective_season", "_home_team", "_away_team"], errors="ignore")
     return g
 
 
@@ -168,7 +183,7 @@ def main() -> None:
             games_df = pd.read_sql_query("SELECT * FROM games", conn)
             if "season" not in games_df.columns and "game_date" in games_df.columns:
                 games_df = games_df.copy()
-                games_df["season"] = games_df["game_date"].apply(_game_season_from_date)
+                games_df["season"] = games_df["game_date"].apply(game_season_from_date)
     finally:
         conn.close()
 

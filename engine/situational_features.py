@@ -8,11 +8,13 @@ All features use only data before game_date (no lookahead). Stored in game_situa
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
+
+from .utils import parse_date
 
 # NBA team display name (ESPN) -> city string for geopy
 NBA_TEAM_CITY: dict[str, str] = {
@@ -57,23 +59,7 @@ def _db_path() -> Path:
     return _data_dir() / "espn.db"
 
 
-def _parse_date(s: Any) -> Optional[datetime]:
-    """Parse game_date string to date. Returns None if invalid."""
-    if s is None or pd.isna(s):
-        return None
-    s = str(s).strip()
-    if not s or len(s) < 10:
-        return None
-    try:
-        return datetime.strptime(s[:10], "%Y-%m-%d")
-    except ValueError:
-        try:
-            return datetime.strptime(s[:10], "%Y/%m/%d")
-        except ValueError:
-            return None
-
-
-def _days_rest(team: str, game_date: datetime, games_before: pd.DataFrame) -> tuple[int, bool]:
+def _days_rest(team: str, game_date, games_before: pd.DataFrame) -> tuple[int, bool]:
     """
     Days of rest (0,1,2,3+) and is_b2b for team before game_date.
     games_before: rows with game_date < game_date where team played. Uses only past data (no lookahead).
@@ -88,7 +74,7 @@ def _days_rest(team: str, game_date: datetime, games_before: pd.DataFrame) -> tu
     ]
     if team_games.empty:
         return (3, False)
-    dates = team_games["game_date"].apply(_parse_date).dropna()
+    dates = team_games["game_date"].apply(parse_date).dropna()
     if dates.empty:
         return (3, False)
     last_dt = dates.max()
@@ -114,7 +100,7 @@ def _games_in_last_n_days(team: str, game_date: datetime, games_before: pd.DataF
     if team_games.empty:
         return 0
     team_games = team_games.copy()
-    team_games["_dt"] = team_games["game_date"].apply(_parse_date)
+    team_games["_dt"] = team_games["game_date"].apply(parse_date)
     team_games = team_games.dropna(subset=["_dt"])
     return int(((team_games["_dt"] > start) & (team_games["_dt"] < game_date)).sum())
 
@@ -135,7 +121,7 @@ def _win_pct_last30_home_away(
             | (games_before["away_team_name"].astype(str).str.strip() == team)
         )
     ].copy()
-    team_games["_dt"] = team_games["game_date"].apply(_parse_date)
+    team_games["_dt"] = team_games["game_date"].apply(parse_date)
     team_games = team_games.dropna(subset=["_dt"])
     team_games = team_games[(team_games["_dt"] >= start) & (team_games["_dt"] < game_date)]
     if team_games.empty:
@@ -169,7 +155,7 @@ def _last_game_result(team: str, game_date: datetime, games_before: pd.DataFrame
         (games_before["home_team_name"].astype(str).str.strip() == team)
         | (games_before["away_team_name"].astype(str).str.strip() == team)
     ].copy()
-    team_games["_dt"] = team_games["game_date"].apply(_parse_date)
+    team_games["_dt"] = team_games["game_date"].apply(parse_date)
     team_games = team_games.dropna(subset=["_dt"])
     if team_games.empty:
         return None
@@ -205,7 +191,7 @@ def _travel_miles(
         (games_before["home_team_name"].astype(str).str.strip() == team)
         | (games_before["away_team_name"].astype(str).str.strip() == team)
     ].copy()
-    team_games["_dt"] = team_games["game_date"].apply(_parse_date)
+    team_games["_dt"] = team_games["game_date"].apply(parse_date)
     team_games = team_games.dropna(subset=["_dt"])
     if team_games.empty:
         return None
@@ -248,7 +234,7 @@ def build_situational_features(
     rows = []
     for i, row in g.iterrows():
         game_id = row["game_id"]
-        game_date = _parse_date(row["game_date"])
+        game_date = parse_date(row["game_date"])
         if game_date is None:
             continue
         home = str(row["home_team_name"]).strip()
@@ -259,6 +245,8 @@ def build_situational_features(
         away_days, away_b2b = _days_rest(away, game_date, before)
         home_3in4 = 1 if _games_in_last_n_days(home, game_date, before, 4) >= 3 else 0
         away_3in4 = 1 if _games_in_last_n_days(away, game_date, before, 4) >= 3 else 0
+        home_games_in_last_5_days = _games_in_last_n_days(home, game_date, before, 5)
+        away_games_in_last_5_days = _games_in_last_n_days(away, game_date, before, 5)
         home_home_wp, home_away_wp, home_overall_wp = _win_pct_last30_home_away(home, game_date, before)
         away_home_wp, away_away_wp, away_overall_wp = _win_pct_last30_home_away(away, game_date, before)
         home_last_w = _last_game_result(home, game_date, before)
@@ -284,6 +272,8 @@ def build_situational_features(
             "away_days_rest": away_days,
             "home_is_b2b": 1 if home_b2b else 0,
             "away_is_b2b": 1 if away_b2b else 0,
+            "home_games_in_last_5_days": home_games_in_last_5_days,
+            "away_games_in_last_5_days": away_games_in_last_5_days,
             "home_travel_miles": home_travel,
             "away_travel_miles": away_travel,
             "home_3_in_4": home_3in4,
@@ -300,6 +290,22 @@ def build_situational_features(
             "away_after_loss": away_after_loss,
         })
     return pd.DataFrame(rows)
+
+
+def _ensure_games_in_last_5_days_columns(conn: sqlite3.Connection) -> None:
+    """Add home_games_in_last_5_days, away_games_in_last_5_days if table exists but columns missing (e.g. existing DBs)."""
+    try:
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='game_situational_features'")
+        if cur.fetchone() is None:
+            return
+        cur = conn.execute("PRAGMA table_info(game_situational_features)")
+        names = [row[1] for row in cur.fetchall()]
+        if "home_games_in_last_5_days" not in names:
+            conn.execute("ALTER TABLE game_situational_features ADD COLUMN home_games_in_last_5_days INTEGER")
+        if "away_games_in_last_5_days" not in names:
+            conn.execute("ALTER TABLE game_situational_features ADD COLUMN away_games_in_last_5_days INTEGER")
+    except (sqlite3.OperationalError, Exception):
+        pass
 
 
 def _create_feature_table_if_not_exists(conn: sqlite3.Connection) -> None:
@@ -326,13 +332,17 @@ def _create_feature_table_if_not_exists(conn: sqlite3.Connection) -> None:
             home_after_loss INTEGER NOT NULL,
             away_after_win INTEGER NOT NULL,
             away_after_loss INTEGER NOT NULL,
+            home_games_in_last_5_days INTEGER,
+            away_games_in_last_5_days INTEGER,
             PRIMARY KEY (league, game_id)
         )
     """)
+    _ensure_games_in_last_5_days_columns(conn)
 
 
 SITUATIONAL_FEATURE_COLUMNS = [
     "league", "game_id", "home_days_rest", "away_days_rest", "home_is_b2b", "away_is_b2b",
+    "home_games_in_last_5_days", "away_games_in_last_5_days",
     "home_travel_miles", "away_travel_miles", "home_3_in_4", "away_3_in_4",
     "home_win_pct_last30", "away_win_pct_last30",
     "home_home_win_pct_last30", "home_away_win_pct_last30", "away_home_win_pct_last30", "away_away_win_pct_last30",
@@ -352,6 +362,7 @@ def save_situational_features_to_sqlite(df: pd.DataFrame, db_path: Optional[Path
     conn = sqlite3.connect(path)
     try:
         _create_feature_table_if_not_exists(conn)
+        _ensure_games_in_last_5_days_columns(conn)
         leagues_in_df = out["league"].unique().tolist()
         placeholders = ",".join("?" * len(leagues_in_df))
         conn.execute(f"DELETE FROM game_situational_features WHERE league IN ({placeholders})", leagues_in_df)

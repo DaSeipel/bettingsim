@@ -115,7 +115,10 @@ def _home_spread_per_snapshot(snap: pd.DataFrame) -> pd.DataFrame:
 def _open_current_6h(spread_df: pd.DataFrame) -> pd.DataFrame:
     """
     For each (sport_key, game_id, commence_time), compute open_spread, current_spread, spread_6h_ago.
-    Open = home_spread at earliest snapshot_at; current = latest; 6h ago = latest snapshot_at <= commence_time - 6h.
+    No lookahead: only snapshots at or before commence_time are used (avoids using closing line for historical games).
+    - open_spread = earliest snapshot_at <= commence_time
+    - current_spread = latest snapshot_at <= commence_time (pre-game only)
+    - spread_6h_ago = latest snapshot_at <= commence_time - 6h
     """
     if spread_df.empty:
         return pd.DataFrame()
@@ -125,22 +128,23 @@ def _open_current_6h(spread_df: pd.DataFrame) -> pd.DataFrame:
     spread_df = spread_df.dropna(subset=["_commence_utc", "_snap_utc"])
     if spread_df.empty:
         return pd.DataFrame()
-    spread_df["_cut_6h"] = spread_df["_commence_utc"] - timedelta(hours=6)
     out = []
     for key, grp in spread_df.groupby(["sport_key", "game_id", "commence_time", "home_team", "away_team"]):
         sport_key, game_id, commence_time, home_team, away_team = key
         grp = grp.sort_values("_snap_utc")
-        snap_times = grp["_snap_utc"]
-        open_spread = grp.iloc[0]["home_spread"]
-        current_spread = grp.iloc[-1]["home_spread"]
         commence_utc = grp["_commence_utc"].iloc[0]
-        cut_6h = commence_utc - timedelta(hours=6)
-        # Latest snapshot at or before 6h before commence
-        past = grp[grp["_snap_utc"] <= cut_6h]
-        if past.empty:
+        # Only snapshots at or before game start (no post-game/closing line)
+        pre_commence = grp[grp["_snap_utc"] <= commence_utc]
+        if pre_commence.empty:
+            open_spread = None
+            current_spread = None
             spread_6h_ago = None
         else:
-            spread_6h_ago = past.iloc[-1]["home_spread"]
+            open_spread = pre_commence.iloc[0]["home_spread"]
+            current_spread = pre_commence.iloc[-1]["home_spread"]
+            cut_6h = commence_utc - timedelta(hours=6)
+            past = pre_commence[pre_commence["_snap_utc"] <= cut_6h]
+            spread_6h_ago = past.iloc[-1]["home_spread"] if not past.empty else None
         out.append({
             "sport_key": sport_key,
             "game_id": game_id,
@@ -180,14 +184,17 @@ def compute_line_movement_features(
     moves = _open_current_6h(spread_per_snap)
     if moves.empty:
         return pd.DataFrame(columns=["league", "game_id", "line_move_direction", "line_move_magnitude", "line_move_velocity_6h", "sharp_money_indicator"])
-    # Line move from open to current
+    # Line move from open to current (both must be pre-game; missing -> no move)
+    missing = moves["open_spread"].isna() | moves["current_spread"].isna()
     moves["line_move_magnitude"] = (moves["current_spread"] - moves["open_spread"]).abs()
+    moves.loc[missing, "line_move_magnitude"] = 0.0
     delta = moves["current_spread"] - moves["open_spread"]
     moves["line_move_direction"] = 0
     moves.loc[delta > 0, "line_move_direction"] = 1   # toward home
     moves.loc[delta < 0, "line_move_direction"] = -1  # toward away
+    moves.loc[missing, "line_move_direction"] = 0
     moves["line_move_velocity_6h"] = None
-    mask_6h = moves["spread_6h_ago"].notna()
+    mask_6h = moves["spread_6h_ago"].notna() & moves["current_spread"].notna()
     moves.loc[mask_6h, "line_move_velocity_6h"] = moves.loc[mask_6h, "current_spread"] - moves.loc[mask_6h, "spread_6h_ago"]
     # Sharp: line moved opposite to public. Public on home (public_pct_home > 0.5) and line moved toward away (direction -1) => sharp. Public on away and line moved toward home (direction 1) => sharp.
     moves["sharp_money_indicator"] = False

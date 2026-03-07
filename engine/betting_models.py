@@ -15,6 +15,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+from .utils import game_season_from_date, effective_kenpom_season
+
 # Feature column sets per bet type (only columns that may exist in games_with_team_stats or merged situational).
 # Totals: pace and scoring efficiency matter most.
 TOTALS_FEATURE_COLUMNS = [
@@ -28,12 +30,11 @@ TOTALS_FEATURE_COLUMNS = [
     "home_ts_pct_roll10", "away_ts_pct_roll10",
 ]
 # Spreads: defensive ratings, situational spots, and momentum (heavily weighted by sharp bettors).
-# home_is_favorite included for SHAP bias audit; remove and retrain if it has disproportionate importance.
 SPREAD_FEATURE_COLUMNS = [
     "home_defensive_rating", "away_defensive_rating",
     "home_offensive_rating", "away_offensive_rating",
     "home_days_rest", "away_days_rest",
-    "home_is_b2b", "away_is_b2b",
+    "home_games_in_last_5_days", "away_games_in_last_5_days",
     "home_travel_miles", "away_travel_miles",
     "home_win_pct_last30", "away_win_pct_last30",
     "home_def_eff_roll10", "away_def_eff_roll10",
@@ -45,19 +46,19 @@ SPREAD_FEATURE_COLUMNS = [
     "home_ats_pct_home_season", "home_ats_pct_road_season",
     "away_ats_pct_home_season", "away_ats_pct_road_season",
     "line_move_direction", "line_move_magnitude", "sharp_money_indicator",
-    "home_is_favorite",
 ]
 # NCAAB spread: same as SPREAD_FEATURE_COLUMNS plus seed columns when available (March context).
 NCAAB_SPREAD_FEATURE_COLUMNS = SPREAD_FEATURE_COLUMNS + ["home_seed", "away_seed"]
 
 # NCAAB spread trained only on games with KenPom stats + closing line: KenPom + situational.
+# Seed naming standardized to home_seed / away_seed across pipelines.
 NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS = [
     "home_ADJOE", "away_ADJOE", "home_ADJDE", "away_ADJDE",
     "home_BARTHAG", "away_BARTHAG",
     "home_EFG_O", "away_EFG_O", "home_EFG_D", "away_EFG_D",
     "home_TOR", "away_TOR", "home_ORB", "away_ORB",
-    "home_ADJ_T", "away_ADJ_T", "home_SEED", "away_SEED",
-    "home_days_rest", "away_days_rest", "home_is_b2b", "away_is_b2b",
+    "home_ADJ_T", "away_ADJ_T", "home_seed", "away_seed",
+    "home_days_rest", "away_days_rest", "home_games_in_last_5_days", "away_games_in_last_5_days",
 ]
 
 # Moneylines: power-style and situational.
@@ -65,7 +66,7 @@ MONEYLINE_FEATURE_COLUMNS = [
     "home_offensive_rating", "away_offensive_rating",
     "home_defensive_rating", "away_defensive_rating",
     "home_days_rest", "away_days_rest",
-    "home_is_b2b", "away_is_b2b",
+    "home_games_in_last_5_days", "away_games_in_last_5_days",
     "home_win_pct_last30", "away_win_pct_last30",
     "home_off_eff_roll10", "away_off_eff_roll10",
     "home_def_eff_roll10", "away_def_eff_roll10",
@@ -816,24 +817,6 @@ def get_feature_row_for_game(
     return None
 
 
-def _game_season_from_date(game_date: Optional[str]) -> Optional[int]:
-    """Derive season (end year) from game_date. Oct+ -> next year; else current year."""
-    if not game_date or not isinstance(game_date, str):
-        return None
-    s = str(game_date).strip()
-    if len(s) < 4:
-        return None
-    try:
-        year = int(s[:4])
-        if len(s) >= 7:
-            month = int(s[5:7])
-            if month >= 10:
-                return year + 1
-        return year
-    except (ValueError, TypeError):
-        return None
-
-
 # KenPom CSV often uses "Miami FL" / "Saint Louis" vs ESPN "Miami (FL)" / "Saint Louis Billikens"
 NCAAB_FEATURE_TO_KENPOM_TEAM: dict[str, str] = {
     "Miami (FL)": "Miami FL",
@@ -890,18 +873,22 @@ def build_ncaab_feature_row_from_team_stats(
         conn.close()
     if stats.empty or "TEAM" not in stats.columns or "season" not in stats.columns:
         return None
-    season = _game_season_from_date(game_date)
+    season = game_season_from_date(game_date)
     if season is None:
-        season = _game_season_from_date(pd.Timestamp.now().strftime("%Y-%m-%d"))
+        season = game_season_from_date(pd.Timestamp.now().strftime("%Y-%m-%d"))
     if season is None:
         season = 2025
+    # Lag: early-season games use prior season KenPom (consistent with training, no leakage)
+    effective = effective_kenpom_season(game_date, season)
+    if effective is None:
+        effective = season
     stats_teams = stats["TEAM"].astype(str).str.strip().dropna().unique().tolist()
     home_key = _resolve_team_for_kenpom_lookup(home_team, stats_teams)
     away_key = _resolve_team_for_kenpom_lookup(away_team, stats_teams)
     if not home_key or not away_key:
         return None
-    season_stats = stats[stats["season"].astype(int) == season]
-    if season_stats.empty and season == 2026:
+    season_stats = stats[stats["season"].astype(int) == effective]
+    if season_stats.empty and effective == 2026:
         season_stats = stats[stats["season"].astype(int) == 2025]
     home_row = season_stats[season_stats["TEAM"].astype(str).str.strip() == home_key]
     away_row = season_stats[season_stats["TEAM"].astype(str).str.strip() == away_key]
@@ -909,19 +896,27 @@ def build_ncaab_feature_row_from_team_stats(
         return None
     home_row = home_row.iloc[0]
     away_row = away_row.iloc[0]
-    # Base KenPom stat names that may exist in ncaab_team_season_stats
+    # Base KenPom stat names that may exist in ncaab_team_season_stats. SEED -> home_seed/away_seed (standardized naming).
     base_stats = ["ADJOE", "ADJDE", "BARTHAG", "EFG_O", "EFG_D", "TOR", "TORD", "ORB", "DRB", "FTR", "FTRD", "ADJ_T", "SEED"]
     row = {"league": "ncaab", "home_team_name": home_team, "away_team_name": away_team}
     for c in base_stats:
-        if c in home_row.index:
-            row[f"home_{c}"] = float(home_row[c]) if pd.notna(home_row[c]) else 0.0
-        if c in away_row.index:
-            row[f"away_{c}"] = float(away_row[c]) if pd.notna(away_row[c]) else 0.0
+        if c == "SEED":
+            if c in home_row.index:
+                row["home_seed"] = float(home_row[c]) if pd.notna(home_row[c]) else 0.0
+            if c in away_row.index:
+                row["away_seed"] = float(away_row[c]) if pd.notna(away_row[c]) else 0.0
+        else:
+            if c in home_row.index:
+                row[f"home_{c}"] = float(home_row[c]) if pd.notna(home_row[c]) else 0.0
+            if c in away_row.index:
+                row[f"away_{c}"] = float(away_row[c]) if pd.notna(away_row[c]) else 0.0
     for col in NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS:
         if col not in row:
             row[col] = 0.0
     row["home_days_rest"] = 0.0
     row["away_days_rest"] = 0.0
+    row["home_games_in_last_5_days"] = 0
+    row["away_games_in_last_5_days"] = 0
     row["home_is_b2b"] = 0
     row["away_is_b2b"] = 0
     return pd.Series(row)
@@ -977,6 +972,10 @@ def _shap_feature_to_sentence(
         return f"{home_team} are on a back-to-back"
     if name == "away_is_b2b" and val >= 0.5:
         return f"{away_team} are on a back-to-back"
+    if name == "home_games_in_last_5_days" and val >= 2:
+        return f"{home_team} have {int(val)} games in the last 5 days"
+    if name == "away_games_in_last_5_days" and val >= 2:
+        return f"{away_team} have {int(val)} games in the last 5 days"
 
     # Travel — exact miles
     if name == "home_travel_miles" and val > 0:
@@ -1122,6 +1121,10 @@ def _feature_value_to_sentence(
         return f"{home_team} are on a back-to-back"
     if name == "away_is_b2b" and val >= 0.5:
         return f"{away_team} are on a back-to-back"
+    if name == "home_games_in_last_5_days" and val >= 2:
+        return f"{home_team} have {int(val)} games in the last 5 days"
+    if name == "away_games_in_last_5_days" and val >= 2:
+        return f"{away_team} have {int(val)} games in the last 5 days"
     if name == "home_travel_miles" and val > 0:
         return f"{home_team} traveled {int(val)} miles"
     if name == "away_travel_miles" and val > 0:
@@ -1193,7 +1196,7 @@ def _feature_value_to_sentence(
 # Priority order for feature-based reasoning (when SHAP unavailable)
 # Include NCAAB KenPom so fallback uses ADJOE/ADJDE/SEED when SHAP unavailable
 _FEATURE_REASON_PRIORITY = [
-    "home_days_rest", "away_days_rest", "home_is_b2b", "away_is_b2b",
+    "home_days_rest", "away_days_rest", "home_games_in_last_5_days", "away_games_in_last_5_days",
     "home_travel_miles", "away_travel_miles",
     "home_win_pct_last30", "away_win_pct_last30",
     "home_defensive_rating", "away_defensive_rating",
@@ -1204,7 +1207,7 @@ _FEATURE_REASON_PRIORITY = [
     "home_ats_pct_last10", "away_ats_pct_last10",
     "home_streak", "away_streak",
     "home_ADJOE", "away_ADJOE", "home_ADJDE", "away_ADJDE",
-    "home_BARTHAG", "away_BARTHAG", "home_SEED", "away_SEED",
+    "home_BARTHAG", "away_BARTHAG", "home_seed", "away_seed",
     "home_EFG_O", "away_EFG_O", "home_EFG_D", "away_EFG_D",
     "home_ADJ_T", "away_ADJ_T",
 ]
@@ -1223,12 +1226,21 @@ def _rest_differential_phrase(
     away_days = feature_row.get("away_days_rest")
     home_b2b = float(feature_row.get("home_is_b2b") or 0) >= 0.5
     away_b2b = float(feature_row.get("away_is_b2b") or 0) >= 0.5
+    home_g5 = feature_row.get("home_games_in_last_5_days")
+    away_g5 = feature_row.get("away_games_in_last_5_days")
     home_known = home_days is not None and pd.notna(home_days)
     away_known = away_days is not None and pd.notna(away_days)
     if not home_known and not away_known:
         return None
     if home_b2b and away_b2b:
         return None  # Both on B2B = no edge
+    # Schedule density: e.g. 3 games in 5 days (CBB tournament) vs 0–1
+    if home_g5 is not None and pd.notna(home_g5) and away_g5 is not None and pd.notna(away_g5):
+        hg, ag = int(home_g5), int(away_g5)
+        if hg >= 3 and ag <= 1:
+            return f"{away_team} have a schedule advantage ({ag} game(s) in last 5 days vs {home_team}'s {hg})"
+        if ag >= 3 and hg <= 1:
+            return f"{home_team} have a schedule advantage ({hg} game(s) in last 5 days vs {away_team}'s {ag})"
     def _rest_str(d: float) -> str:
         if d >= 3:
             return f"{int(d)}+ days rest"
@@ -1283,8 +1295,8 @@ def get_feature_based_reasoning(
     rest_phrase = _rest_differential_phrase(feature_row, home_team, away_team)
     if rest_phrase:
         phrases.append(rest_phrase)
-    # Skip rest/B2B in main loop (already handled)
-    skip_for_rest = {"home_days_rest", "away_days_rest", "home_is_b2b", "away_is_b2b"}
+    # Skip rest / B2B / games-in-last-5-days in main loop (already handled)
+    skip_for_rest = {"home_days_rest", "away_days_rest", "home_is_b2b", "away_is_b2b", "home_games_in_last_5_days", "away_games_in_last_5_days"}
     for name in _FEATURE_REASON_PRIORITY:
         if name in skip_for_rest or name not in feature_row.index:
             continue
@@ -1457,12 +1469,15 @@ def build_feature_row_for_upcoming_game(
     # Days rest: only use when we have games data; otherwise leave as NaN (unknown)
     has_games_data = not games_before.empty and "game_date" in games_before.columns
     if has_games_data:
-        from .situational_features import _days_rest
+        from .situational_features import _days_rest, _games_in_last_n_days
         home_days, home_b2b = _days_rest(home_team.strip(), game_dt, games_before)
         away_days, away_b2b = _days_rest(away_team.strip(), game_dt, games_before)
+        home_games_in_last_5_days = _games_in_last_n_days(home_team.strip(), game_dt, games_before, 5)
+        away_games_in_last_5_days = _games_in_last_n_days(away_team.strip(), game_dt, games_before, 5)
     else:
         home_days, away_days = np.nan, np.nan
         home_b2b, away_b2b = False, False
+        home_games_in_last_5_days, away_games_in_last_5_days = 0, 0
     b2b_set = b2b_teams or set()
     if home_team.strip() in b2b_set:
         home_b2b = True
@@ -1477,6 +1492,8 @@ def build_feature_row_for_upcoming_game(
     row["league"] = league_key
     row["home_days_rest"] = float(home_days) if pd.notna(home_days) else np.nan
     row["away_days_rest"] = float(away_days) if pd.notna(away_days) else np.nan
+    row["home_games_in_last_5_days"] = int(home_games_in_last_5_days) if has_games_data else 0
+    row["away_games_in_last_5_days"] = int(away_games_in_last_5_days) if has_games_data else 0
     row["home_is_b2b"] = 1.0 if home_b2b else 0.0
     row["away_is_b2b"] = 1.0 if away_b2b else 0.0
     row["home_defensive_rating"] = _get_team_stat(home_team, "defensive_rating")

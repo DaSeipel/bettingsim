@@ -16,6 +16,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from engine.utils import game_season_from_date, effective_kenpom_season
 
 DATA_DIR = ROOT / "data"
 ESPN_DB = DATA_DIR / "espn.db"
@@ -34,21 +35,11 @@ except ImportError:
     fuzz_process = None
 
 
-def _game_season_from_date(game_date) -> int | None:
-    if game_date is None or pd.isna(game_date):
-        return None
-    s = str(game_date).strip()
-    if not s or len(s) < 4:
-        return None
-    try:
-        year = int(s[:4])
-        if len(s) >= 7:
-            month = int(s[5:7])
-            if month >= 10:
-                return year + 1
-        return year
-    except (ValueError, TypeError):
-        return None
+def _kenpom_column_name(prefix: str, stat: str) -> str:
+    """Standardized column name: SEED -> seed (e.g. home_seed, away_seed)."""
+    if stat == "SEED":
+        return f"{prefix}seed"
+    return f"{prefix}{stat}"
 
 
 def build_team_name_mapping(espn_names: list[str], csv_teams: list[str], min_score: int = 80) -> dict[str, str]:
@@ -70,19 +61,31 @@ def build_team_name_mapping(espn_names: list[str], csv_teams: list[str], min_sco
     return mapping
 
 
+# Games before this date (in season year) use prior season's KenPom (preseason proxy); avoids end-of-season leakage.
+KENPOM_AS_OF_CUTOFF_MONTH = 1
+KENPOM_AS_OF_CUTOFF_DAY = 1
+
+
 def merge_kenpom_into_games(
     games_df: pd.DataFrame,
     stats_df: pd.DataFrame,
     name_mapping: dict[str, str],
+    cutoff_month: int = KENPOM_AS_OF_CUTOFF_MONTH,
+    cutoff_day: int = KENPOM_AS_OF_CUTOFF_DAY,
 ) -> pd.DataFrame:
+    """Early-season games (before cutoff) use prior season's KenPom to avoid leakage."""
     g = games_df.copy()
     if "season" not in g.columns and "game_date" in g.columns:
-        g["season"] = g["game_date"].apply(_game_season_from_date)
+        g["season"] = g["game_date"].apply(game_season_from_date)
     if "season" not in g.columns or "league" not in g.columns:
         return g
     stat_cols = [c for c in KENPOM_STAT_COLUMNS if c in stats_df.columns]
     if not stat_cols:
         return g
+    g["_effective_season"] = g.apply(
+        lambda row: effective_kenpom_season(row["game_date"], row["season"], cutoff_month, cutoff_day),
+        axis=1,
+    )
     g["_home_team"] = g["home_team_name"].apply(
         lambda x: name_mapping.get(str(x or "").strip(), str(x or "").strip())
     )
@@ -90,14 +93,18 @@ def merge_kenpom_into_games(
         lambda x: name_mapping.get(str(x or "").strip(), str(x or "").strip())
     )
     home_stats = stats_df[["season", "TEAM"] + stat_cols].copy()
-    home_stats = home_stats.rename(columns={"TEAM": "_home_team", **{c: f"home_{c}" for c in stat_cols}})
-    home_stats = home_stats[["season", "_home_team"] + [f"home_{c}" for c in stat_cols]]
-    g = g.merge(home_stats, on=["season", "_home_team"], how="left")
+    home_rename = {"TEAM": "_home_team", **{c: _kenpom_column_name("home_", c) for c in stat_cols}}
+    home_stats = home_stats.rename(columns=home_rename)
+    home_stats = home_stats[["season", "_home_team"] + [home_rename[c] for c in stat_cols]]
+    g = g.merge(home_stats, left_on=["_effective_season", "_home_team"], right_on=["season", "_home_team"], how="left", suffixes=("", "_kenpom"))
+    g = g.drop(columns=[c for c in g.columns if c.endswith("_kenpom")], errors="ignore")
     away_stats = stats_df[["season", "TEAM"] + stat_cols].copy()
-    away_stats = away_stats.rename(columns={"TEAM": "_away_team", **{c: f"away_{c}" for c in stat_cols}})
-    away_stats = away_stats[["season", "_away_team"] + [f"away_{c}" for c in stat_cols]]
-    g = g.merge(away_stats, on=["season", "_away_team"], how="left")
-    g = g.drop(columns=["_home_team", "_away_team"], errors="ignore")
+    away_rename = {"TEAM": "_away_team", **{c: _kenpom_column_name("away_", c) for c in stat_cols}}
+    away_stats = away_stats.rename(columns=away_rename)
+    away_stats = away_stats[["season", "_away_team"] + [away_rename[c] for c in stat_cols]]
+    g = g.merge(away_stats, left_on=["_effective_season", "_away_team"], right_on=["season", "_away_team"], how="left", suffixes=("", "_kenpom"))
+    g = g.drop(columns=[c for c in g.columns if c.endswith("_kenpom")], errors="ignore")
+    g = g.drop(columns=["_effective_season", "_home_team", "_away_team"], errors="ignore")
     return g
 
 

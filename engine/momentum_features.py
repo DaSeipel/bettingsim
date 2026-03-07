@@ -9,23 +9,13 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from .utils import parse_date
+
 # League default totals when we don't have ratings/pace to estimate (for O/U record)
 NBA_DEFAULT_TOTAL = 220.0
 NCAAB_DEFAULT_TOTAL = 140.0
 # Scale offensive rating diff to approximate point spread: (home_off - away_off) * (pace/400)
 RATING_TO_SPREAD_SCALE = 1.0 / 400.0
-
-
-def _parse_date(s: Any) -> Optional[pd.Timestamp]:
-    if s is None or pd.isna(s):
-        return None
-    s = str(s).strip()
-    if not s or len(s) < 10:
-        return None
-    try:
-        return pd.to_datetime(s[:10])
-    except Exception:
-        return None
 
 
 def _estimated_home_spread(row: pd.Series, league: str) -> float:
@@ -76,7 +66,7 @@ def _streak(team: str, game_date: pd.Timestamp, games_before: pd.DataFrame) -> i
         (games_before["home_team_name"].astype(str).str.strip() == team)
         | (games_before["away_team_name"].astype(str).str.strip() == team)
     ].copy()
-    team_games["_dt"] = team_games["game_date"].apply(_parse_date)
+    team_games["_dt"] = team_games["game_date"].apply(parse_date)
     team_games = team_games.dropna(subset=["_dt"]).sort_values("_dt", ascending=False)
     if team_games.empty:
         return 0
@@ -113,7 +103,7 @@ def _ats_ou_last_n(
         (games_before["home_team_name"].astype(str).str.strip() == team)
         | (games_before["away_team_name"].astype(str).str.strip() == team)
     ].copy()
-    team_games["_dt"] = team_games["game_date"].apply(_parse_date)
+    team_games["_dt"] = team_games["game_date"].apply(parse_date)
     team_games = team_games.dropna(subset=["_dt"]).sort_values("_dt", ascending=False).head(n)
     if team_games.empty:
         return (None, None, None, None)
@@ -142,7 +132,7 @@ def _point_diff_trend_last5(team: str, game_date: pd.Timestamp, games_before: pd
         (games_before["home_team_name"].astype(str).str.strip() == team)
         | (games_before["away_team_name"].astype(str).str.strip() == team)
     ].copy()
-    team_games["_dt"] = team_games["game_date"].apply(_parse_date)
+    team_games["_dt"] = team_games["game_date"].apply(parse_date)
     team_games = team_games.dropna(subset=["_dt"]).sort_values("_dt", ascending=False).head(5)
     if len(team_games) < 3:
         return None
@@ -179,7 +169,7 @@ def _home_road_ats_season(
         (games_before["home_team_name"].astype(str).str.strip() == team)
         | (games_before["away_team_name"].astype(str).str.strip() == team)
     ].copy()
-    team_games["_dt"] = team_games["game_date"].apply(_parse_date)
+    team_games["_dt"] = team_games["game_date"].apply(parse_date)
     team_games = team_games.dropna(subset=["_dt"])
     if team_games.empty:
         return (None, None)
@@ -230,12 +220,12 @@ def build_momentum_features(
     rows = []
     for i, row in g.iterrows():
         game_id = row["game_id"]
-        game_date = _parse_date(row["game_date"])
+        game_date = parse_date(row["game_date"])
         if game_date is None:
             continue
         home = str(row["home_team_name"]).strip()
         away = str(row["away_team_name"]).strip()
-        before = g[g["game_date"].apply(lambda x: _parse_date(x) is not None and _parse_date(x) < game_date)]
+        before = g[g["game_date"].apply(lambda x: parse_date(x) is not None and parse_date(x) < game_date)]
 
         home_streak = _streak(home, game_date, before)
         away_streak = _streak(away, game_date, before)
