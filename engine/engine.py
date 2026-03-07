@@ -299,14 +299,45 @@ def get_live_odds(
         }
         try:
             resp = odds_api_get(url, params=params, headers=REQUEST_HEADERS, timeout=15, session=session)
+            # #region agent log
+            try:
+                import json, time
+                from pathlib import Path
+                p = Path(__file__).resolve().parent.parent / ".cursor" / "debug-874db2.log"
+                with open(p, "a") as f:
+                    f.write(json.dumps({"sessionId":"874db2","hypothesisId":"H2","location":"engine.py:get_live_odds","message":"after_odds_api_get","data":{"sport_key":sport_key,"resp_is_none":resp is None,"today_et":str(today)},"timestamp":int(time.time()*1000)}) + "\n")
+            except Exception:
+                pass
+            # #endregion
             if resp is None:
                 continue
             resp.raise_for_status()
             data = resp.json()
-        except Exception:
+        except Exception as e:
+            # #region agent log
+            try:
+                import json, time
+                from pathlib import Path
+                p = Path(__file__).resolve().parent.parent / ".cursor" / "debug-874db2.log"
+                with open(p, "a") as f:
+                    f.write(json.dumps({"sessionId":"874db2","hypothesisId":"H2","location":"engine.py:get_live_odds","message":"odds_api_exception","data":{"sport_key":sport_key,"error":str(e)},"timestamp":int(time.time()*1000)}) + "\n")
+            except Exception:
+                pass
+            # #endregion
             continue
         if not isinstance(data, list):
             continue
+        # #region agent log
+        try:
+            import json, time
+            from pathlib import Path
+            n_events = len(data) if isinstance(data, list) else 0
+            p = Path(__file__).resolve().parent.parent / ".cursor" / "debug-874db2.log"
+            with open(p, "a") as f:
+                f.write(json.dumps({"sessionId":"874db2","hypothesisId":"H2","location":"engine.py:get_live_odds","message":"api_returned_events","data":{"sport_key":sport_key,"n_events":n_events,"today_et":str(today)},"timestamp":int(time.time()*1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
         league = SPORT_KEY_TO_LEAGUE.get(sport_key, sport_key.replace("_", " ").title())
         for event in data:
             if not isinstance(event, dict):

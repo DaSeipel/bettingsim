@@ -122,6 +122,10 @@ from .historical_odds import (
     report_closing_join_rate_by_league,
     NCAAB_ESPN_TO_ODDS_API,
 )
+from .espn_odds import (
+    get_espn_live_odds,
+    get_espn_live_odds_with_stats,
+)
 
 __all__ = [
     "BettingEngine",
@@ -223,4 +227,6 @@ __all__ = [
     "merge_historical_closing_into_games",
     "report_closing_join_rate_by_league",
     "NCAAB_ESPN_TO_ODDS_API",
+    "get_espn_live_odds",
+    "get_espn_live_odds_with_stats",
 ]

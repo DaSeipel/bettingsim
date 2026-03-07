@@ -4,6 +4,7 @@ Daily picks sheet: Play of the Day (NBA + NCAAB) and All Value Plays. Dark theme
 Live odds from The Odds API; stakes from fractional Kelly.
 """
 
+import gc
 import json
 import os
 import re
@@ -29,6 +30,8 @@ from engine.engine import (
     NBA_LEAGUE_AVG_PACE,
     NBA_LEAGUE_AVG_OFF_RATING,
 )
+from engine import get_espn_live_odds_with_stats
+from engine.odds_quota import get_quota_status
 from strategies.strategies import (
     strategy_kelly,
     kelly_fraction,
@@ -91,6 +94,12 @@ def format_currency(val: float) -> str:
     except (TypeError, ValueError):
         return "—"
 
+
+# Strip-down mode: disable pipeline and DB loads so app loads stably. Set to False to enable value plays pipeline.
+STRIP_DOWN_MODE = False
+# Scheduler and startup thread: kept disabled for stability; set True to re-enable.
+ENABLE_SCHEDULER = False
+ENABLE_STARTUP_THREAD = False
 
 # Human-readable market labels (replaces h2h, spreads, totals in UI)
 MARKET_LABELS = {"h2h": "Winner", "spreads": "Spread", "totals": "Over/Under"}
@@ -308,8 +317,10 @@ def _get_yesterday_potd_results() -> list[dict]:
     Load yesterday's play history and return the two POTD picks (one per sport, max edge that day).
     Each item: {"sport": "NBA"|"NCAAB", "side": "Team Name", "result": "W"|"L"|"P"|None}.
     """
+    if STRIP_DOWN_MODE:
+        return []
     yesterday = date.today() - timedelta(days=1)
-    hist = load_play_history(from_date=yesterday, to_date=yesterday)
+    hist = _load_play_history_cached(from_date_iso=yesterday.isoformat(), to_date_iso=yesterday.isoformat())
     if hist.empty or "my_edge_pct" not in hist.columns:
         return []
     hist = hist.copy()
@@ -658,6 +669,13 @@ POTD_CARD_CSS = """
 .yesterday-badge--win { background: rgba(46,125,50,0.5); color: #a5d6a7; }
 .yesterday-badge--loss { background: rgba(198,40,40,0.5); color: #ef9a9a; }
 .yesterday-badge--pending { background: rgba(96,125,139,0.4); color: #b0bec5; }
+/* POTD streak tracker (dots below Yesterday's Results) */
+.streak-row { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 1rem; font-size: 0.8rem; color: rgba(255,255,255,0.7); }
+.streak-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.streak-dot--w { background: #66bb6a; }
+.streak-dot--l { background: #e57373; }
+.streak-dot--p { background: #90a4ae; }
+.streak-flame { margin-left: 0.25rem; }
 </style>
 """
 
@@ -681,6 +699,54 @@ def _render_yesterday_strip_html(rows: list[dict]) -> str:
             cls = "yesterday-badge yesterday-badge--pending"
             label = "P" if res == "P" else "—"
         parts.append(f'<span class="{cls}">{sport} · {side} · {label}</span>')
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
+def _get_last_10_potd_results() -> list[str]:
+    """
+    Return the last 10 Play of the Day results (W/L/P) in chronological order (oldest first).
+    Uses same POTD logic as yesterday strip: one top play per (date, sport) by edge.
+    """
+    if STRIP_DOWN_MODE:
+        return []
+    from_date = date.today() - timedelta(days=31)
+    to_date = date.today() - timedelta(days=1)
+    hist = _load_play_history_cached(from_date_iso=from_date.isoformat(), to_date_iso=to_date.isoformat())
+    if hist.empty or "my_edge_pct" not in hist.columns:
+        return []
+    hist = hist.copy()
+    hist["result_clean"] = hist["result"].apply(
+        lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
+    )
+    top = hist.loc[hist.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
+    top = top.sort_values(["date_generated", "sport"], ascending=[True, True])
+    codes: list[str] = []
+    for _, r in top.iterrows():
+        res = r.get("result_clean")
+        if res in ("W", "L", "P"):
+            codes.append(res)
+        else:
+            codes.append("P")  # grey for push/unresolved
+    return codes[-10:]
+
+
+def _render_streak_html(results: list[str]) -> str:
+    """Render POTD streak as a row of colored dots (green W, red L, grey P) and 🔥 if 3+ wins in a row."""
+    if not results:
+        return ""
+    current_streak = 0
+    for r in reversed(results):
+        if r == "W":
+            current_streak += 1
+        else:
+            break
+    parts = ['<div class="streak-row">']
+    for r in results:
+        cls = f"streak-dot streak-dot--{r.lower()}"
+        parts.append(f'<span class="{cls}" title="{r}"></span>')
+    if current_streak >= 3:
+        parts.append('<span class="streak-flame" title="Current win streak: {}">🔥</span>'.format(current_streak))
     parts.append("</div>")
     return "\n".join(parts)
 
@@ -1003,11 +1069,11 @@ def _start_scheduler_once() -> None:
         pass
 
 
-if "scheduler_started" not in st.session_state:
+if ENABLE_SCHEDULER and "scheduler_started" not in st.session_state:
     _start_scheduler_once()
     st.session_state["scheduler_started"] = True
 
-if "startup_snapshot_started" not in st.session_state:
+if ENABLE_STARTUP_THREAD and "startup_snapshot_started" not in st.session_state:
     st.session_state["startup_snapshot_started"] = True
     t = threading.Thread(target=_run_startup_snapshot_and_merge, daemon=True)
     t.start()
@@ -1184,18 +1250,20 @@ EV_EPSILON_MIN_PCT = 3.0
 EV_EPSILON_MAX_PCT = 15.0
 
 # Minimum number of bookmakers offering a line for an outcome to be eligible as a value play
+# Temporarily 1 when DEBUG_RELAX_FILTERS=1 (see _live_odds_to_value_plays)
 MIN_BOOKMAKERS_VALUE_PLAY = 3
 
 
 def _aggregate_odds_best_line_avg_implied(odds_df: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate odds across bookmakers: one row per (event, market, selection, point).
-    - best_odds: best available line (max American odds = best price for bettor).
-    - avg_implied_prob: mean of implied probability (no-vig) across all bookmakers.
-    - bookmaker_count: number of books offering this line (for min-threshold filter).
-    Drops rows with missing/NaN odds so we never surface moneyline when API returned spread but no moneyline.
+    Limited to NCAAB only to reduce memory; NBA rows are dropped before aggregation.
     """
     if odds_df.empty or "odds" not in odds_df.columns:
+        return odds_df
+    if "league" in odds_df.columns:
+        odds_df = odds_df[odds_df["league"].astype(str).str.strip().str.upper() == "NCAAB"].copy()
+    if odds_df.empty:
         return odds_df
     odds_df = odds_df.loc[odds_df["odds"].notna()].copy()
     if odds_df.empty:
@@ -1239,12 +1307,25 @@ def _live_odds_to_value_plays(
     as_of_date: Optional[date] = None,
     seed: int = 44,
     feature_matrix: Optional[pd.DataFrame] = None,
+    debug: bool = False,
+    min_bookmakers_override: Optional[int] = None,
 ) -> tuple[pd.DataFrame, int]:
     """
     In-house line (power ratings) vs market; key-number adjustment; fractional Kelly rounded to half-units (1–3%).
     Only includes Value % in [min_ev_pct, max_ev_pct). Excludes odds > +500 unless include_high_risk.
+    When min_bookmakers_override is set (e.g. 1 for ESPN fallback), that overrides MIN_BOOKMAKERS_VALUE_PLAY.
     """
     if odds_df.empty:
+        if debug:
+            _log_dir = Path(__file__).resolve().parent / "data" / "logs"
+            _log_path = _log_dir / "debug_value_plays.log"
+            _log_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                f = open(_log_path, "w")
+            except Exception:
+                f = open("/tmp/debug_value_plays.log", "w")
+            f.write("[DEBUG_VALUE_PLAYS] aggregated_rows=0 (empty odds_df)\n")
+            f.close()
         return (
             pd.DataFrame(
                 columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"]
@@ -1259,16 +1340,49 @@ def _live_odds_to_value_plays(
     default_rating = (NBA_LEAGUE_AVG_PACE * NBA_LEAGUE_AVG_OFF_RATING) / 100.0
     rows = []
     n_flagged = 0
+    _debug_relax = os.environ.get("DEBUG_RELAX_FILTERS", "") == "1"  # min_books=1, consensus disabled
+    if min_bookmakers_override is not None:
+        _min_books = min_bookmakers_override
+    else:
+        _min_books = 1 if (debug and _debug_relax) else MIN_BOOKMAKERS_VALUE_PLAY
+    if debug:
+        n_skip_bookmakers = n_skip_odds = n_skip_high_risk = n_skip_no_consensus = n_below_min = n_above_max = n_skip_stake = 0
+        _log_dir = Path(__file__).resolve().parent / "data" / "logs"
+        _log_path = _log_dir / "debug_value_plays.log"
+        _log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            _dbg_file = open(_log_path, "w")
+        except Exception:
+            _dbg_file = open("/tmp/debug_value_plays.log", "w")
+        _debug_log_path_used = getattr(_dbg_file, "name", str(_log_path))
+        def _dbg(s: str):
+            print(s)
+            _dbg_file.write(s + "\n")
+            _dbg_file.flush()
+        _dbg("\n[DEBUG_VALUE_PLAYS] Thresholds: min_ev_pct={}%, max_ev_pct={}%, MIN_BOOKMAKERS_VALUE_PLAY={} (effective={})".format(
+            min_ev_pct, max_ev_pct, MIN_BOOKMAKERS_VALUE_PLAY, _min_books))
+        _dbg("[DEBUG_VALUE_PLAYS] DEBUG_RELAX_FILTERS={} (consensus disabled={})".format(
+            os.environ.get("DEBUG_RELAX_FILTERS"), _debug_relax))
     for _, r in odds_df.iterrows():
-        # When using aggregated odds, require at least MIN_BOOKMAKERS_VALUE_PLAY books on this line
+        # When using aggregated odds, require at least _min_books books on this line
         if "bookmaker_count" in r.index and r.get("bookmaker_count") is not None and not pd.isna(r.get("bookmaker_count")):
-            if int(r.get("bookmaker_count", 0)) < MIN_BOOKMAKERS_VALUE_PLAY:
+            if int(r.get("bookmaker_count", 0)) < _min_books:
+                if debug:
+                    n_skip_bookmakers += 1
+                    _dbg("[DEBUG] SKIP bookmakers<{}: {} | {} | {} | {} (books={})".format(
+                        _min_books, r.get("league"), r.get("event_name"), r.get("market_type"), r.get("selection"), int(r.get("bookmaker_count", 0))))
                 continue
         odds_val = r.get("odds")
         if pd.isna(odds_val) or abs(float(odds_val)) < 100:
+            if debug:
+                n_skip_odds += 1
+                _dbg("[DEBUG] SKIP odds invalid: {} | {} | {} | {}".format(
+                    r.get("league"), r.get("event_name"), r.get("market_type"), r.get("selection")))
             continue
         odds_val = float(odds_val)
         if odds_val > HIGH_RISK_ODDS_AMERICAN and not include_high_risk:
+            if debug:
+                n_skip_high_risk += 1
             continue
         home_team = r.get("home_team", "")
         away_team = r.get("away_team", "")
@@ -1289,6 +1403,8 @@ def _live_odds_to_value_plays(
             feature_matrix, home_team, away_team, league_lookup, game_date=game_date_str
         ) if feature_matrix is not None and not feature_matrix.empty else None
 
+        model_prob = None
+        consensus_ok = True
         if market_type == "totals" and point is not None:
             market_total = float(point)
             in_house_total = predict_nba_total(home_team, away_team, pace_stats, b2b_teams=b2b_teams)
@@ -1297,7 +1413,13 @@ def _live_odds_to_value_plays(
             model_prob, consensus_ok = consensus_totals(
                 feature_row, market_total, prefer_over, in_house_total, league, fallback
             )
+            if _debug_relax:
+                consensus_ok = True
             if not consensus_ok:
+                if debug:
+                    n_skip_no_consensus += 1
+                    _dbg("[DEBUG] SKIP no_consensus: {} | {} | {} | {} (model_prob={:.3f})".format(
+                        league, r.get("event_name"), market_type, selection, model_prob))
                 continue
         elif market_type == "spreads" and point is not None:
             market_spread = -float(point)
@@ -1309,7 +1431,13 @@ def _live_odds_to_value_plays(
             model_prob, consensus_ok = consensus_spread(
                 feature_row, market_spread, we_cover_favorite, in_house_spread, fallback, league=league_lookup
             )
+            if _debug_relax:
+                consensus_ok = True
             if not consensus_ok:
+                if debug:
+                    n_skip_no_consensus += 1
+                    _dbg("[DEBUG] SKIP no_consensus: {} | {} | {} | {} (model_prob={:.3f})".format(
+                        league, r.get("event_name"), market_type, selection, model_prob))
                 continue
         elif market_type == "h2h":
             home_rating = power_ratings.get(home_team, default_rating) - get_schedule_fatigue_penalty(home_team, as_of_date)
@@ -1323,7 +1451,13 @@ def _live_odds_to_value_plays(
             model_prob, consensus_ok = consensus_moneyline(
                 feature_row, selection_is_home, home_rating, away_rating, fallback, league=league_lookup
             )
+            if _debug_relax:
+                consensus_ok = True
             if not consensus_ok:
+                if debug:
+                    n_skip_no_consensus += 1
+                    _dbg("[DEBUG] SKIP no_consensus: {} | {} | {} | {} (model_prob={:.3f})".format(
+                        league, r.get("event_name"), market_type, selection, model_prob))
                 continue
         else:
             implied = implied_probability_no_vig(odds_val)
@@ -1344,15 +1478,27 @@ def _live_odds_to_value_plays(
         ev_pct = ev_decimal * 100.0
         line_for_key = float(point) if point is not None else 0.0
         ev_pct += key_number_value_adjustment(line_for_key, league, market_type)
+        if debug:
+            _dbg("[DEBUG] RAW_EDGE: {} | {} | {} | {} | model_prob={:.3f} implied_prob={:.3f} raw_edge_pct={:.2f}%".format(
+                league, r.get("event_name"), market_type, selection, model_prob, implied_prob, ev_pct))
         if ev_pct < min_ev_pct:
+            if debug:
+                n_below_min += 1
             continue
         if ev_pct >= max_ev_pct:
             n_flagged += 1
+            if debug:
+                n_above_max += 1
             continue
         full_kelly = kelly_fraction(odds_val, model_prob, fraction=1.0)
         stake = fractional_kelly_half_units(bankroll, full_kelly, HALF_UNIT_PCT, MAX_KELLY_PCT_WALTERS)
         if stake <= 0:
+            if debug:
+                n_skip_stake += 1
             continue
+        if debug:
+            _dbg("[DEBUG] PASS: {} | {} | {} | {} | edge={:.2f}% stake={}".format(
+                league, r.get("event_name"), market_type, selection, ev_pct, stake))
         is_home_b2b = home_team in b2b_teams
         is_away_b2b = away_team in b2b_teams
         rows.append({
@@ -1375,6 +1521,10 @@ def _live_odds_to_value_plays(
             "is_away_b2b": is_away_b2b,
             "underdog_value": underdog_value,
         })
+    if debug:
+        _dbg("[DEBUG_VALUE_PLAYS] Summary: aggregated_rows={} | skip_bookmakers={} | skip_odds={} | skip_high_risk={} | skip_no_consensus={} | below_min_ev={} | above_max_ev={} | skip_stake={} | PASSED={}".format(
+            len(odds_df), n_skip_bookmakers, n_skip_odds, n_skip_high_risk, n_skip_no_consensus, n_below_min, n_above_max, n_skip_stake, len(rows)))
+        _dbg_file.close()
     return pd.DataFrame(rows), n_flagged
 
 
@@ -1396,6 +1546,7 @@ kelly_frac = 0.25
 strategy_fn = strategy_kelly(kelly_fraction_param=kelly_frac)
 
 # API key: .streamlit/secrets.toml ([the_odds_api] api_key = "...") → env ODDS_API_KEY → sidebar
+# Fallback: read .streamlit/secrets.toml from app dir (same as scripts/run_value_plays_debug.py) so dashboard finds key even if st.secrets not loaded
 def _get_odds_api_key() -> str:
     key = ""
     try:
@@ -1409,6 +1560,16 @@ def _get_odds_api_key() -> str:
         pass
     if not key:
         key = (os.environ.get("ODDS_API_KEY") or "").strip()
+    if not key:
+        try:
+            secrets_path = Path(__file__).resolve().parent / ".streamlit" / "secrets.toml"
+            if secrets_path.exists():
+                text = secrets_path.read_text()
+                m = re.search(r'api_key\s*=\s*["\']([^"\']+)["\']', text)
+                if m:
+                    key = m.group(1).strip()
+        except Exception:
+            pass
     return key
 
 
@@ -1440,6 +1601,8 @@ march_madness_mode = st.sidebar.checkbox(
 
 # Status: last NCAAB snapshot and last retrain (from log files)
 st.sidebar.caption("---")
+if STRIP_DOWN_MODE:
+    st.sidebar.warning("**Strip-down mode:** Pipeline, scheduler, and DB loads disabled. Set `STRIP_DOWN_MODE = False` in app.py to restore.")
 st.sidebar.caption("**Status**")
 last_snapshot = _read_last_snapshot_time()
 st.sidebar.caption(f"Last snapshot: {last_snapshot or '—'}")
@@ -1459,18 +1622,119 @@ kelly_frac_val = kelly_frac
 ODDS_CACHE_TTL_SECONDS = 900  # 15 minutes
 
 
+def _df_mb(df: pd.DataFrame) -> float:
+    """Return approximate memory size of DataFrame in MB (for pipeline memory logging)."""
+    if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+        return 0.0
+    try:
+        return float(df.memory_usage(deep=True).sum() / (1024 * 1024))
+    except Exception:
+        return 0.0
+
+
+def _log_df_mb(name: str, df: pd.DataFrame) -> None:
+    """Print DataFrame memory in MB to help find largest allocations."""
+    mb = _df_mb(df)
+    print(f"[pipeline memory] {name}: {mb:.2f} MB")
+
+
 @st.cache_data(ttl=ODDS_CACHE_TTL_SECONDS)
-def _fetch_live_odds_cached(commence_date_iso: str, refresh_key: int = 0) -> pd.DataFrame:
-    """Fetch live odds from The Odds API. Cached 15 min; refresh_key forces refetch when changed.
-    Pass today_et.isoformat() as commence_date_iso so cache key is ET date; engine uses ET for 'today' filter."""
+def _fetch_live_odds_cached(commence_date_iso: str, refresh_key: int = 0, api_key_available: bool = True) -> tuple[pd.DataFrame, dict]:
+    """Fetch live odds from The Odds API (or ESPN fallback when credits < 10). Cached 15 min.
+    Returns (live_odds_df, meta). meta may contain used_espn_fallback, espn_games, espn_odds_rows."""
+    empty_df = pd.DataFrame()
+    empty_meta: dict = {}
+    # #region agent log
+    try:
+        import json, time
+        p = Path(__file__).resolve().parent / ".cursor" / "debug-874db2.log"
+        with open(p, "a") as f:
+            f.write(json.dumps({"sessionId":"874db2","hypothesisId":"H2","location":"app.py:_fetch_live_odds_cached","message":"cache_fn_entered","data":{"api_key_available":api_key_available},"timestamp":int(time.time()*1000)}) + "\n")
+    except Exception:
+        pass
+    # #endregion
+    if not api_key_available:
+        return (empty_df, empty_meta)
     api_key = _get_odds_api_key()
+    # #region agent log
+    try:
+        import json, time
+        p = Path(__file__).resolve().parent / ".cursor" / "debug-874db2.log"
+        with open(p, "a") as f:
+            f.write(json.dumps({"sessionId":"874db2","hypothesisId":"H2","location":"app.py:_fetch_live_odds_cached","message":"after_get_key","data":{"key_len_inside":len((api_key or "").strip())},"timestamp":int(time.time()*1000)}) + "\n")
+    except Exception:
+        pass
+    # #endregion
     if not (api_key or "").strip():
-        return pd.DataFrame()
-    return get_live_odds(
+        return (empty_df, empty_meta)
+    df = get_live_odds(
         api_key=api_key.strip(),
         sport_keys=LIVE_ODDS_SPORT_KEYS,
         commence_on_date=None,
     )
+    meta: dict = {}
+    # If Odds API returned empty and we're low on credits, fall back to ESPN free odds
+    quota = get_quota_status()
+    remaining = quota.get("requests_remaining")
+    if df.empty and remaining is not None:
+        try:
+            r = int(remaining)
+        except (TypeError, ValueError):
+            r = 999
+        if r < 10:
+            df, n_games, n_odds_rows = get_espn_live_odds_with_stats(
+                sport_keys=LIVE_ODDS_SPORT_KEYS,
+                commence_on_date=None,
+            )
+            meta = {"used_espn_fallback": True, "espn_games": n_games, "espn_odds_rows": n_odds_rows}
+            print(f"ESPN odds fallback: {n_games} games, {n_odds_rows} odds rows.")
+    # Memory: keep only today's games with commence_time within next 24 hours to limit DataFrame size
+    if not df.empty and "commence_time" in df.columns:
+        try:
+            now_utc = datetime.now(timezone.utc)
+            cutoff_end = now_utc + timedelta(hours=24)
+            def _in_window(ct):
+                if pd.isna(ct) or ct is None:
+                    return False
+                try:
+                    dt = datetime.fromisoformat(str(ct).replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return now_utc <= dt <= cutoff_end
+                except (ValueError, TypeError):
+                    return False
+            mask = df["commence_time"].apply(_in_window)
+            df = df.loc[mask].copy()
+        except Exception:
+            pass
+    # #region agent log
+    try:
+        import json, time
+        p = Path(__file__).resolve().parent / ".cursor" / "debug-874db2.log"
+        with open(p, "a") as f:
+            f.write(json.dumps({"sessionId":"874db2","hypothesisId":"H2","location":"app.py:_fetch_live_odds_cached","message":"after_get_live_odds","data":{"rows":len(df)},"timestamp":int(time.time()*1000)}) + "\n")
+    except Exception:
+        pass
+    # #endregion
+    return (df, meta)
+
+
+@st.cache_data(ttl=1800)
+def _load_feature_matrix_cached(league=None) -> pd.DataFrame:
+    """Cached load of games_with_team_stats + situational for inference (30 min TTL)."""
+    return load_feature_matrix_for_inference(league=league)
+
+
+@st.cache_data(ttl=1800)
+def _load_play_history_cached(
+    league: Optional[str] = None,
+    from_date_iso: Optional[str] = None,
+    to_date_iso: Optional[str] = None,
+) -> pd.DataFrame:
+    """Cached load of play_history from SQLite (30 min TTL). Pass date as ISO string or None."""
+    from_date = date.fromisoformat(from_date_iso) if from_date_iso else None
+    to_date = date.fromisoformat(to_date_iso) if to_date_iso else None
+    return load_play_history(league=league, from_date=from_date, to_date=to_date)
 
 
 @st.cache_data(ttl=ODDS_CACHE_TTL_SECONDS)
@@ -1482,37 +1746,104 @@ def _get_b2b_teams_cached(as_of_date_iso: str, refresh_key: int = 0) -> frozense
     return frozenset(get_nba_teams_back_to_back(api_key.strip(), date.fromisoformat(as_of_date_iso)))
 
 
+# Value plays pipeline — SAME function as scripts/run_value_plays_debug.py (_live_odds_to_value_plays).
+# Call chain: (1) Gate (odds_api_key) → (2) _fetch_live_odds_cached → (3) b2b + feature_matrix →
+# (4) _aggregate_odds_best_line_avg_implied → (5) _live_odds_to_value_plays → (6) injury/march steps.
+# Breaks: (A) odds_api_key empty → else branch, empty df. (B) Any exception in try → except sets empty df + st.session_state["value_plays_pipeline_error"] (shown in UI).
 if "odds_refresh_key" not in st.session_state:
     st.session_state["odds_refresh_key"] = 0
+if "value_plays_pipeline_error" not in st.session_state:
+    st.session_state["value_plays_pipeline_error"] = None
 
 b2b_teams: set[str] = set()
-if (odds_api_key or "").strip():
+# #region agent log
+def _vp_log(msg: str, data: dict):
     try:
+        import json, time
+        p = Path(__file__).resolve().parent / ".cursor" / "debug-874db2.log"
+        with open(p, "a") as f:
+            f.write(json.dumps({"sessionId":"874db2","hypothesisId":"H1","location":"app.py:value_plays","message":msg,"data":data,"timestamp":int(time.time()*1000)}) + "\n")
+    except Exception:
+        pass
+# #endregion
+if not STRIP_DOWN_MODE and (odds_api_key or "").strip():
+    # #region agent log
+    _vp_log("gate_entered", {"key_len":len(odds_api_key)})
+    # #endregion
+    try:
+        st.session_state["value_plays_pipeline_error"] = None
         today_et = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
-        live_odds_df = _fetch_live_odds_cached(
+        live_odds_df, odds_meta = _fetch_live_odds_cached(
             today_et,
             refresh_key=st.session_state["odds_refresh_key"],
+            api_key_available=bool((odds_api_key or "").strip()),
         )
+        _log_df_mb("live_odds_df", live_odds_df)
+        gc.collect()
+        st.session_state["odds_source_meta"] = odds_meta  # used_espn_fallback, espn_games, espn_odds_rows
+        # #region agent log
+        _vp_log("after_fetch_odds", {"live_rows":len(live_odds_df),"aggregated_empty":live_odds_df.empty})
+        # #endregion
         b2b_teams = _get_b2b_teams_cached(
             datetime.now(ZoneInfo("America/New_York")).date().isoformat(),
             refresh_key=st.session_state.get("odds_refresh_key", 0),
         )
-        feature_matrix_inference = load_feature_matrix_for_inference(league=None)
-        # Aggregate: best line per outcome + average implied prob across bookmakers
-        aggregated_odds_df = _aggregate_odds_best_line_avg_implied(live_odds_df)
-        value_plays_df, value_plays_flagged_count = _live_odds_to_value_plays(
-            aggregated_odds_df if not aggregated_odds_df.empty else live_odds_df,
-            bankroll=BANKROLL_FOR_STAKES,
-            kelly_frac=kelly_frac_val,
-            min_ev_pct=EV_EPSILON_MIN_PCT,
-            max_ev_pct=EV_EPSILON_MAX_PCT,
-            include_high_risk=include_high_risk_odds,
-            pace_stats=get_nba_team_pace_stats(),
-            b2b_teams=b2b_teams,
-            as_of_date=date.today(),
-            feature_matrix=feature_matrix_inference,
+        gc.collect()
+        feature_matrix_inference = _load_feature_matrix_cached(league=None)
+        _log_df_mb("feature_matrix_inference", feature_matrix_inference)
+        gc.collect()
+        _debug_value_plays = os.environ.get("DEBUG_VALUE_PLAYS", "") == "1"
+        if _debug_value_plays:
+            try:
+                Path("/tmp/debug_value_plays_entered.flag").write_text("1")
+            except Exception:
+                pass
+        _use_espn_fallback = bool(st.session_state.get("odds_source_meta", {}).get("used_espn_fallback"))
+        _min_ev = 1.5 if _use_espn_fallback else EV_EPSILON_MIN_PCT
+        _min_books_override = 1 if _use_espn_fallback else None
+        # Process NBA and NCAAB separately to limit peak memory; del + gc after each league
+        _vp_frames: list[pd.DataFrame] = []
+        value_plays_flagged_count = 0
+        for _league_name in ("NBA", "NCAAB"):
+            _sub = live_odds_df[live_odds_df["league"] == _league_name].copy() if "league" in live_odds_df.columns and not live_odds_df.empty else pd.DataFrame()
+            if _sub.empty:
+                continue
+            _agg = _aggregate_odds_best_line_avg_implied(_sub)
+            _log_df_mb("aggregated_odds", _agg)
+            gc.collect()
+            _vp, _flagged = _live_odds_to_value_plays(
+                _agg if not _agg.empty else _sub,
+                bankroll=BANKROLL_FOR_STAKES,
+                kelly_frac=kelly_frac_val,
+                min_ev_pct=_min_ev,
+                max_ev_pct=EV_EPSILON_MAX_PCT,
+                include_high_risk=include_high_risk_odds,
+                pace_stats=get_nba_team_pace_stats(),
+                b2b_teams=b2b_teams,
+                as_of_date=date.today(),
+                feature_matrix=feature_matrix_inference,
+                debug=_debug_value_plays,
+                min_bookmakers_override=_min_books_override,
+            )
+            if not _vp.empty:
+                _vp_frames.append(_vp)
+            value_plays_flagged_count += _flagged
+            _log_df_mb("value_plays_league", _vp)
+            del _sub, _agg
+            gc.collect()
+        value_plays_df = pd.concat(_vp_frames, ignore_index=True) if _vp_frames else pd.DataFrame(
+            columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"]
         )
+        _log_df_mb("value_plays_df", value_plays_df)
+        gc.collect()
+        if _use_espn_fallback:
+            print(f"ESPN fallback thresholds (min edge 1.5%, min bookmakers 1): {len(value_plays_df)} plays generated.")
+        # #region agent log
+        _vp_log("after_value_plays", {"value_plays_count":len(value_plays_df)})
+        # #endregion
         value_plays_df = add_injury_alerts_to_value_plays(value_plays_df, "Basketball")
+        _log_df_mb("value_plays_df_after_injury_alerts", value_plays_df)
+        gc.collect()
         # Add confidence_tier and reasoning_summary for play_history archive
         if not value_plays_df.empty:
             def _confidence_tier(row: pd.Series) -> str:
@@ -1523,6 +1854,8 @@ if (odds_api_key or "").strip():
             value_plays_df["reasoning_summary"] = value_plays_df.apply(
                 lambda r: _potd_reason(r, feature_matrix=feature_matrix_inference, b2b_teams=b2b_teams), axis=1
             )
+        _log_df_mb("value_plays_df_after_confidence", value_plays_df)
+        gc.collect()
         # Archive today's plays to play_history (stricter: min 6% edge, max 10 per day by edge)
         try:
             to_archive = value_plays_df[value_plays_df["Value (%)"] >= ARCHIVE_MIN_EDGE_PCT].copy()
@@ -1536,6 +1869,7 @@ if (odds_api_key or "").strip():
             clv_update_closing_odds()
         except Exception:
             pass
+        gc.collect()
         # Add injury_impact_score and top5-out flags for NBA (feature matrix)
         if not live_odds_df.empty and "league" in live_odds_df.columns:
             nba_games = (
@@ -1559,7 +1893,11 @@ if (odds_api_key or "").strip():
                         value_plays_df["top5_out_or_doubtful_away"] = value_plays_df["top5_out_or_doubtful_away"].fillna(False)
                 except Exception:
                     pass
+        _log_df_mb("value_plays_df_after_injury_merge", value_plays_df)
+        gc.collect()
         value_plays_df = add_ncaab_march_context_to_df(value_plays_df)
+        _log_df_mb("value_plays_df_final", value_plays_df)
+        gc.collect()
         # March Madness mode: keep only NCAAB plays where both teams are tournament-eligible (in ncaab_seeds.csv)
         if march_madness_mode and not value_plays_df.empty and "League" in value_plays_df.columns:
             tournament_eligible = _load_tournament_eligible_teams()
@@ -1569,7 +1907,16 @@ if (odds_api_key or "").strip():
                 away_ok = value_plays_df["away_team"].astype(str).str.strip().str.lower().isin(tournament_eligible)
                 keep = ~ncaab_mask | (ncaab_mask & home_ok & away_ok)
                 value_plays_df = value_plays_df.loc[keep].copy()
-    except Exception:
+        # #region agent log
+        _vp_log("after_march_filter", {"value_plays_count":len(value_plays_df),"march_madness_mode":march_madness_mode})
+        # #endregion
+    except Exception as e:
+        import traceback
+        st.session_state["value_plays_pipeline_error"] = (str(e), traceback.format_exc())
+        st.session_state["odds_source_meta"] = {}
+        # #region agent log
+        _vp_log("pipeline_exception", {"error":str(e),"tb":traceback.format_exc()})
+        # #endregion
         value_plays_flagged_count = 0
         live_odds_df = pd.DataFrame(
             columns=[
@@ -1581,6 +1928,10 @@ if (odds_api_key or "").strip():
             columns=["League", "Event", "Selection", "Market", "Odds", "Value (%)", "Recommended Stake", "Injury Alert", "Start Time"]
         )
 else:
+    # #region agent log
+    _vp_log("gate_else_no_key", {"reason":"odds_api_key_empty"})
+    # #endregion
+    st.session_state["odds_source_meta"] = {}
     value_plays_flagged_count = 0
     live_odds_df = pd.DataFrame(
         columns=[
@@ -1657,18 +2008,46 @@ def _today_str() -> str:
 
 
 st.title("Bobby Bottle's Betting Model")
-st.caption("Daily picks • NBA & NCAAB • All odds American (+150, -110)")
 
-# Slim summary bar: date • total plays • NBA / NCAAB counts • top edge (from value_plays_df)
+# Stat bar: date | plays found | NBA • NCAAB | top edge (one row, dividers)
 _summary = _summary_bar_values(value_plays_df)
-_summary_line = (
-    f"{_summary['date_str']} • {_summary['total_plays']} play{'s' if _summary['total_plays'] != 1 else ''} found • "
-    f"{_summary['n_nba']} NBA • {_summary['n_ncaab']} NCAAB • Top edge: {_summary['top_edge_label']}"
-)
-st.markdown(
-    f'<div style="font-size:0.9rem; color:rgba(255,255,255,0.75); margin-top:-0.5rem; margin-bottom:0.75rem;">{_html_escape(_summary_line)}</div>',
-    unsafe_allow_html=True,
-)
+_plays_text = f"{_summary['total_plays']} play{'s' if _summary['total_plays'] != 1 else ''} found"
+_nba_ncaab = f"{_summary['n_nba']} NBA · {_summary['n_ncaab']} NCAAB"
+_stat_bar_html = f"""
+<style>
+.dashboard-stat-bar {{ display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  font-size: 0.875rem; color: rgba(255,255,255,0.8); margin-top: -0.4rem; margin-bottom: 0.5rem; }}
+.dashboard-stat-bar span {{ display: inline-flex; align-items: center; }}
+.dashboard-stat-bar .stat-divider {{ color: rgba(255,255,255,0.35); user-select: none; }}
+.dashboard-stat-bar .stat-label {{ color: rgba(255,255,255,0.55); margin-right: 0.25rem; }}
+.dashboard-slim-alert {{ font-size: 0.8rem; color: rgba(255,255,255,0.85); margin-bottom: 0.5rem;
+  display: flex; align-items: center; gap: 0.4rem; }}
+.dashboard-slim-alert a {{ color: #f0c14b; text-decoration: none; }}
+.dashboard-slim-alert a:hover {{ text-decoration: underline; }}
+</style>
+<div class="dashboard-stat-bar">
+  <span>{_html_escape(_summary['date_str'])}</span>
+  <span class="stat-divider">|</span>
+  <span><span class="stat-label">Plays</span>{_html_escape(_plays_text)}</span>
+  <span class="stat-divider">|</span>
+  <span>{_html_escape(_nba_ncaab)}</span>
+  <span class="stat-divider">|</span>
+  <span><span class="stat-label">Top edge</span>{_html_escape(_summary['top_edge_label'])}</span>
+</div>
+"""
+st.markdown(_stat_bar_html, unsafe_allow_html=True)
+_odds_meta = st.session_state.get("odds_source_meta") or {}
+if _odds_meta.get("used_espn_fallback"):
+    _n_plays = _summary.get("total_plays", 0)
+    st.caption(
+        f"Odds source: **ESPN (fallback)** — {_odds_meta.get('espn_games', 0)} games, {_odds_meta.get('espn_odds_rows', 0)} odds rows. "
+        f"**{_n_plays} play{'s' if _n_plays != 1 else ''}** generated (min edge 1.5%, min 1 book)."
+    )
+if st.session_state.get("value_plays_pipeline_error"):
+    err_msg, err_tb = st.session_state["value_plays_pipeline_error"]
+    st.error("**Value plays pipeline failed** (showing 0 plays). Error: " + str(err_msg))
+    with st.expander("Traceback"):
+        st.code(err_tb)
 
 def _bet_history_table(records: list) -> None:
     """Render bet history dataframe; records are dicts with step, event_name, odds, etc."""
@@ -1708,15 +2087,15 @@ def _bet_history_table(records: list) -> None:
     )
 
 # Score yesterday's plays from ESPN so Win/Loss show correctly when opening the next day
-if "auto_result_run" not in st.session_state:
+if not STRIP_DOWN_MODE and "auto_result_run" not in st.session_state:
     try:
         run_auto_result()
     except Exception:
         pass
     st.session_state["auto_result_run"] = True
 
-# Persistent banner: unresolved plays older than 24 hours
-_ph_all = load_play_history()
+# Persistent banner: unresolved plays older than 24 hours (skip DB load in strip-down mode)
+_ph_all = pd.DataFrame() if STRIP_DOWN_MODE else _load_play_history_cached()
 _cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24)
 _unresolved_stale = 0
 if not _ph_all.empty:
@@ -1727,12 +2106,15 @@ if not _ph_all.empty:
     _unresolved = _ph_all[_ph_all["result_clean"].isna()]
     _unresolved_stale = (_unresolved["date_parsed"] < _cutoff).sum()
 if _unresolved_stale > 0:
-    st.warning(
-        f"**{int(_unresolved_stale)} play{'s' if _unresolved_stale != 1 else ''} need results marked.** "
-        "Go to the Play of the Day History tab below to keep your record accurate.",
-        icon="⚠️",
+    _n_plays = int(_unresolved_stale)
+    _plays_word = "play" if _n_plays == 1 else "plays"
+    _slim_alert_html = (
+        f'<div class="dashboard-slim-alert">'
+        f'⚠️ {_n_plays} {_plays_word} need results marked. '
+        f'<a href="#play-history">Go to Play of the Day History</a>'
+        f'</div>'
     )
-    st.markdown("[→ Go to Play of the Day History](#play-history)")
+    st.markdown(_slim_alert_html, unsafe_allow_html=True)
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
 tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history = st.tabs(["Overview", "NCAAB", "NBA", "Mark Results", "Play of the Day History"])
 
@@ -1742,13 +2124,17 @@ with tab_overview:
     yesterday_rows = _get_yesterday_potd_results()
     if yesterday_rows:
         st.markdown(_render_yesterday_strip_html(yesterday_rows), unsafe_allow_html=True)
+    # ——— POTD streak (last 10 picks as dots; 🔥 if 3+ wins in a row) ———
+    streak_results = _get_last_10_potd_results()
+    if streak_results:
+        st.markdown(_render_streak_html(streak_results), unsafe_allow_html=True)
     # ——— Play of the Day (backend selection: edge > 4%, tie-break bookmakers / model gap / no injury) ———
     st.subheader("Play of the Day")
     potd_picks = select_play_of_the_day(value_plays_df, live_odds_df, min_edge_pct=POTD_MIN_EDGE_PCT)
     pod_nba = potd_picks["NBA"]
     pod_ncaab = potd_picks["NCAAB"]
     feature_matrix_potd = (
-        load_feature_matrix_for_inference(league=None) if (pod_nba or pod_ncaab) else None
+        _load_feature_matrix_cached(league=None) if (pod_nba or pod_ncaab) else None
     )
     col_nba, col_ncaab = st.columns(2)
     with col_nba:
@@ -1896,7 +2282,7 @@ with tab_mark_results:
     _today = date.today()
     _yesterday = _today - timedelta(days=1)
     _mr_from = _today - timedelta(days=90)  # show last 90 days of past plays
-    _mr_history = load_play_history(from_date=_mr_from, to_date=_yesterday)
+    _mr_history = _load_play_history_cached(from_date_iso=_mr_from.isoformat(), to_date_iso=_yesterday.isoformat())
     if not _mr_history.empty:
         _mr_history = _mr_history.copy()
         _mr_history["result_clean"] = _mr_history["result"].apply(
@@ -2009,7 +2395,7 @@ with tab_play_history:
     st.subheader("Play of the Day History")
     st.caption("One top NBA and one top NCAAB pick per day (last 30 days). Results auto-filled at 8am ET from ESPN.")
     _from = date.today() - timedelta(days=30)
-    _history = load_play_history(from_date=_from, to_date=date.today())
+    _history = _load_play_history_cached(from_date_iso=_from.isoformat(), to_date_iso=date.today().isoformat())
     if not _history.empty:
         _history = _history.copy()
         _history["result_clean"] = _history["result"].apply(

@@ -629,7 +629,12 @@ def get_feature_row_for_game(
     if game_date is not None and "game_date" in feature_matrix.columns:
         try:
             fd = pd.to_datetime(game_date).normalize()
-            mask = mask & (pd.to_datetime(feature_matrix["game_date"], errors="coerce").dt.normalize() == fd)
+            # Normalize to naive UTC for comparison (avoid tz-aware vs tz-naive comparison)
+            fm_dates_norm = pd.to_datetime(feature_matrix["game_date"], errors="coerce", utc=True)
+            if hasattr(fm_dates_norm.dtype, "tz") and fm_dates_norm.dtype.tz is not None:
+                fm_dates_norm = fm_dates_norm.dt.tz_localize(None)
+            fm_dates_norm = fm_dates_norm.dt.normalize()
+            mask = mask & (fm_dates_norm == fd)
         except Exception:
             pass
     subset = feature_matrix.loc[mask]
@@ -1107,7 +1112,10 @@ def build_feature_row_for_upcoming_game(
         game_dt = now
     games_before = games_df
     if "game_date" in games_df.columns:
-        games_before = games_df[pd.to_datetime(games_df["game_date"], errors="coerce") < pd.Timestamp(game_dt)]
+        gd_ser = pd.to_datetime(games_df["game_date"], errors="coerce", utc=True)
+        if hasattr(gd_ser.dtype, "tz") and gd_ser.dtype.tz is not None:
+            gd_ser = gd_ser.dt.tz_localize(None)
+        games_before = games_df[gd_ser < pd.Timestamp(game_dt)]
 
     # Days rest: only use when we have games data; otherwise leave as NaN (unknown)
     has_games_data = not games_before.empty and "game_date" in games_before.columns
@@ -1143,16 +1151,31 @@ def build_feature_row_for_upcoming_game(
     return row
 
 
+def _ncaab_inference_feature_columns() -> set[str]:
+    """Union of feature_columns from all three NCAAB model pkl files, plus required keys for lookup."""
+    required = {"league", "game_id", "game_date", "home_team_name", "away_team_name"}
+    out = set(required)
+    for model_path in (SPREAD_MODEL_PATH_NCAAB, TOTALS_MODEL_PATH_NCAAB, MONEYLINE_MODEL_PATH_NCAAB):
+        payload = load_model(model_path)
+        if payload and isinstance(payload.get("feature_columns"), list):
+            out.update(payload["feature_columns"])
+    if out == required:
+        out.update(NCAAB_SPREAD_FEATURE_COLUMNS + TOTALS_FEATURE_COLUMNS + MONEYLINE_FEATURE_COLUMNS)
+    return out
+
+
 def load_feature_matrix_for_inference(
     db_path: Optional[Path] = None,
     league: Optional[str] = None,
+    max_seasons: int = 2,
 ) -> pd.DataFrame:
-    """Load games_with_team_stats and merge situational features for prediction-time lookups."""
+    """Load games_with_team_stats and merge situational features for prediction-time lookups.
+    Caps to last max_seasons (default 2). Only keeps columns used by NCAAB model feature_columns (plus keys)."""
     from .sportsref_stats import load_merged_games_from_sqlite
     from .situational_features import load_situational_features_from_sqlite
 
     path = db_path or (Path(__file__).resolve().parent.parent / "data" / "espn.db")
-    fm = load_merged_games_from_sqlite(league=league, db_path=path)
+    fm = load_merged_games_from_sqlite(league=league, db_path=path, max_seasons_for_inference=max_seasons)
     if fm.empty:
         return fm
     try:
@@ -1164,4 +1187,8 @@ def load_feature_matrix_for_inference(
             fm = fm.loc[:, ~fm.columns.duplicated()]
     except Exception:
         pass
+    keep = _ncaab_inference_feature_columns()
+    cols_to_keep = [c for c in fm.columns if c in keep]
+    if cols_to_keep:
+        fm = fm[cols_to_keep].copy()
     return fm

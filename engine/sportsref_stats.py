@@ -628,15 +628,35 @@ def load_team_advanced_stats_from_sqlite(league: str | None = None, db_path: Pat
         conn.close()
 
 
-def load_merged_games_from_sqlite(league: str | None = None, db_path: Path | None = None) -> pd.DataFrame:
+def load_merged_games_from_sqlite(
+    league: str | None = None,
+    db_path: Path | None = None,
+    max_seasons_for_inference: int | None = None,
+) -> pd.DataFrame:
     """Load games_with_team_stats from SQLite (merged games + home/away advanced stats + line movement).
     Includes line_move_direction, line_move_magnitude, line_move_velocity_6h, sharp_money_indicator when present.
-    No existing columns are replaced; line movement is additive."""
+    When max_seasons_for_inference is set (e.g. 2), only rows with game_date within that many years are loaded to limit memory."""
     path = db_path or _espn_db_path()
     if not path.exists():
         return pd.DataFrame()
     conn = sqlite3.connect(path)
     try:
+        cutoff_date = None
+        if max_seasons_for_inference is not None and max_seasons_for_inference >= 1:
+            from datetime import date, timedelta
+            cutoff_date = (date.today() - timedelta(days=365 * max_seasons_for_inference)).isoformat()
+        if cutoff_date:
+            if league:
+                return pd.read_sql_query(
+                    "SELECT * FROM games_with_team_stats WHERE league = ? AND game_date >= ?",
+                    conn,
+                    params=(league, cutoff_date),
+                )
+            return pd.read_sql_query(
+                "SELECT * FROM games_with_team_stats WHERE game_date >= ?",
+                conn,
+                params=(cutoff_date,),
+            )
         if league:
             return pd.read_sql_query("SELECT * FROM games_with_team_stats WHERE league = ?", conn, params=(league,))
         return pd.read_sql_query("SELECT * FROM games_with_team_stats", conn)
