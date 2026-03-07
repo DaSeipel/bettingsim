@@ -956,7 +956,8 @@ _APP_ROOT = Path(__file__).resolve().parent
 
 
 def _run_startup_snapshot_and_merge() -> None:
-    """Background: fetch NCAAB odds snapshot, merge closing into games, write snapshot log timestamp."""
+    """Background: fetch NCAAB odds snapshot, merge closing into games, write snapshot log timestamp.
+    In March (on or after Selection Sunday), also fetch tournament seeds from ESPN for March Madness mode."""
     try:
         subprocess.run(
             [sys.executable, str(_APP_ROOT / "scripts" / "fetch_ncaab_odds_snapshot.py")],
@@ -973,6 +974,14 @@ def _run_startup_snapshot_and_merge() -> None:
         log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_dir / "snapshot_log.txt", "a", encoding="utf-8") as f:
             f.write(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
+        # March: after Selection Sunday, refresh tournament seeds for March Madness mode
+        if is_after_selection_sunday(date.today()):
+            subprocess.run(
+                [sys.executable, str(_APP_ROOT / "scripts" / "fetch_ncaab_tournament_seeds.py")],
+                cwd=str(_APP_ROOT),
+                capture_output=True,
+                timeout=30,
+            )
     except Exception:
         pass
 
