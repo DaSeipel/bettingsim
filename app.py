@@ -1973,6 +1973,41 @@ _historical_picks_df = _load_historical_betting_performance()
 if potd_picks.get("NCAAB Pick 1") is None and potd_picks.get("NCAAB Pick 2") is None and not _historical_picks_df.empty:
     potd_picks = _potd_from_historical_csv(_historical_picks_df)
 
+# Archive today's plays to play_history so Mark Results and Play of the Day History can show them tomorrow.
+# This covers: (1) all value plays from cache (e.g. Vanderbilt Moneyline), (2) POTD from cache or historical CSV (Iowa St, Alabama).
+if not STRIP_DOWN_MODE:
+    try:
+        _req = ["League", "Event", "Selection", "Market", "Odds", "Value (%)", "model_prob", "home_team", "away_team"]
+        if not value_plays_df.empty and all(c in value_plays_df.columns for c in _req):
+            _to_archive = value_plays_df[value_plays_df["Value (%)"].fillna(0) >= ARCHIVE_MIN_EDGE_PCT].copy()
+            _to_archive = _to_archive.sort_values("Value (%)", ascending=False).head(ARCHIVE_MAX_PLAYS_PER_DAY)
+            if not _to_archive.empty:
+                archive_value_plays(_to_archive, as_of_date=date.today())
+        _potd_rows = []
+        for _label in ("NCAAB Pick 1", "NCAAB Pick 2"):
+            _p = potd_picks.get(_label)
+            if not _p or not isinstance(_p, dict):
+                continue
+            _potd_rows.append({
+                "League": _label,
+                "Event": _p.get("Event", ""),
+                "Selection": _p.get("Selection", ""),
+                "Market": _p.get("Market", "Spread"),
+                "Odds": _p.get("Odds") if _p.get("Odds") is not None else -110,
+                "Value (%)": _p.get("Value (%)", 0),
+                "point": _p.get("point"),
+                "Recommended Stake": _p.get("Recommended Stake"),
+                "home_team": _p.get("home_team", "—"),
+                "away_team": _p.get("away_team", "—"),
+                "model_prob": _p.get("model_prob", 0.5),
+                "confidence_tier": _p.get("confidence_tier", "Medium"),
+                "reasoning_summary": _p.get("reason") or _p.get("reasoning_summary"),
+            })
+        if _potd_rows:
+            archive_value_plays(pd.DataFrame(_potd_rows), as_of_date=date.today())
+    except Exception:
+        pass
+
 # -----------------------------------------------------------------------------
 # Main layout — tabbed (Overview = daily picks sheet, NCAAB, NBA)
 # -----------------------------------------------------------------------------
