@@ -27,6 +27,11 @@ def _selection_sunday(year: int) -> date:
     third_sun_day = first_sun_day + 14
     return date(year, 3, third_sun_day)
 
+
+def is_after_selection_sunday(d: date) -> bool:
+    """True if d is on or after Selection Sunday (bracket revealed); used to auto-enable March Madness mode."""
+    return d >= _selection_sunday(d.year)
+
 # Event name patterns that suggest conference tournament
 CONF_TOURNEY_PATTERNS = [
     "tournament",

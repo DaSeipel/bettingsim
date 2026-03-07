@@ -111,21 +111,55 @@ def main() -> None:
     margin_train = y_train.values
     margin_test = y_test.values
 
+    # Stronger regularization to reduce overfitting
     if _use_xgb:
-        model = xgb.XGBRegressor(
-            n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42
+        model_init = xgb.XGBRegressor(
+            n_estimators=200, max_depth=3, learning_rate=0.1,
+            min_child_weight=20, subsample=0.8, colsample_bytree=0.8,
+            random_state=42,
         )
-        model.fit(
+        model_init.fit(
             X_train, y_train,
             eval_set=[(X_test, y_test)],
             verbose=False,
         )
     else:
-        model = GradientBoostingRegressor(
-            n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42
+        model_init = GradientBoostingRegressor(
+            n_estimators=200, max_depth=3, learning_rate=0.1,
+            min_samples_leaf=20, subsample=0.8, random_state=42,
         )
-        model.fit(X_train, y_train)
+        model_init.fit(X_train, y_train)
         print("Using sklearn GradientBoostingRegressor (XGBoost not available).")
+
+    # Limit to top features by importance (>= 0.02, at most 10)
+    imp = getattr(model_init, "feature_importances_", None)
+    if imp is not None and len(imp) == len(used):
+        order = np.argsort(-imp)
+        selected_idx = [i for i in order if imp[i] >= 0.02][:10]
+        if not selected_idx:
+            selected_idx = list(order[:10])
+        selected_cols = [used[i] for i in selected_idx]
+        X = X[selected_cols]
+        X_train = X_train[selected_cols]
+        X_test = X_test[selected_cols]
+        used = selected_cols
+        print(f"Limited to {len(used)} features with importance >= 0.02 (max 10): {used}")
+        # Retrain with selected features only
+        if _use_xgb:
+            model = xgb.XGBRegressor(
+                n_estimators=200, max_depth=3, learning_rate=0.1,
+                min_child_weight=20, subsample=0.8, colsample_bytree=0.8,
+                random_state=42,
+            )
+            model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+        else:
+            model = GradientBoostingRegressor(
+                n_estimators=200, max_depth=3, learning_rate=0.1,
+                min_samples_leaf=20, subsample=0.8, random_state=42,
+            )
+            model.fit(X_train, y_train)
+    else:
+        model = model_init
 
     # Raw predicted P(cover) on full dataset (for calibration)
     pred_margin_all = model.predict(X)
@@ -174,10 +208,12 @@ def main() -> None:
     train_acc = (actual_cover_train == pred_cover_train).mean()
     val_acc = (actual_cover_test == pred_cover_test).mean()
 
+    gap_pct = (train_acc - val_acc) * 100
     print()
     print("Total games used for training:", n_total)
     print("Train accuracy (cover):", round(train_acc, 4))
     print("Validation accuracy (cover):", round(val_acc, 4))
+    print("Train vs validation accuracy gap: {:.2f}% (target under 8%)".format(gap_pct))
     print("Pre-calibration  average predicted cover prob — favorites:", round(mean_fav_raw, 4), " underdogs:", round(mean_dog_raw, 4))
     print("Recalibrated     average predicted cover prob — favorites:", round(mean_fav_cal, 4), " underdogs:", round(mean_dog_cal, 4))
 

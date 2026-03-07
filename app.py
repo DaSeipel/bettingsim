@@ -5,11 +5,16 @@ Live odds from The Odds API; stakes from fractional Kelly.
 """
 
 import json
+import os
+import re
+import subprocess
+import sys
+import threading
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 from datetime import date, datetime, timezone, timedelta
+from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 from engine.engine import (
@@ -52,7 +57,7 @@ from engine.clv_tracker import (
 )
 from engine.play_history import archive_value_plays, load_play_history, update_play_result
 from engine.auto_result_job import run_auto_result
-from engine.ncaab_march_context import add_ncaab_march_context_to_df
+from engine.ncaab_march_context import add_ncaab_march_context_to_df, is_after_selection_sunday
 from engine.betting_models import (
     load_feature_matrix_for_inference,
     get_feature_row_for_game,
@@ -639,6 +644,8 @@ POTD_CARD_CSS = """
 .vp-edge { color: #66bb6a; font-weight: 700; }
 .vp-odds { color: rgba(255,255,255,0.9); font-weight: 600; }
 .vp-underdog-value { background: rgba(255, 193, 7, 0.3); color: #ffc107; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; }
+.vp-tournament-context { background: rgba(156, 39, 176, 0.35); color: #ce93d8; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; margin-left: 0.35rem; }
+.potd-tournament-context { background: rgba(156, 39, 176, 0.35); color: #ce93d8; padding: 0.2rem 0.4rem; border-radius: 6px; font-size: 0.7rem; font-weight: 600; margin-top: 0.25rem; }
 .vp-march-context { font-size: 0.75rem; color: #ffb74d; margin-top: 0.35rem; }
 .vp-confidence-wrap { margin-top: 0.5rem; }
 .vp-confidence-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
@@ -784,7 +791,20 @@ def _march_context_badges(row: pd.Series) -> str:
     return " · ".join(parts) if parts else "—"
 
 
-def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> str:
+def _is_top_seed_play(row: pd.Series, top_seed_max: int = 6) -> bool:
+    """True if play involves a top seed (e.g. 1–6 = top ~25 teams). Used for Tournament Context badge."""
+    try:
+        h, a = row.get("home_seed"), row.get("away_seed")
+        if pd.notna(h) and h is not None and int(h) <= top_seed_max:
+            return True
+        if pd.notna(a) and a is not None and int(a) <= top_seed_max:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0, march_madness_mode: bool = False) -> str:
     """One All Value Plays card: matchup, bet type, edge %, odds, confidence bar, reasoning."""
     league = str(row.get("League", ""))
     league_class = "nba" if league == "NBA" else "ncaab"
@@ -795,6 +815,9 @@ def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> 
     bar_pct = min(100.0, max(0.0, (edge_pct / edge_max_pct) * 100.0))
     reasoning = _html_escape(_value_play_reasoning(row))
     underdog_badge = '<span class="vp-underdog-value">Underdog value</span>' if row.get("underdog_value") else ""
+    tournament_context_badge = ""
+    if march_madness_mode and league == "NCAAB" and _is_top_seed_play(row):
+        tournament_context_badge = '<span class="vp-tournament-context">Tournament Context</span>'
     march_line = ""
     if league == "NCAAB":
         march_badges = _march_context_badges(row)
@@ -809,6 +832,7 @@ def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0) -> 
             <span class="vp-edge">{edge_pct:.1f}% edge</span>
             <span class="vp-odds">{odds_str}</span>
             {underdog_badge}
+            {tournament_context_badge}
         </div>
         {march_line}
         <div class="vp-confidence-wrap">
@@ -827,6 +851,7 @@ def _render_potd_card_html(
     feature_matrix: Optional[pd.DataFrame] = None,
     odds_as_of: Optional[datetime] = None,
     b2b_teams: Optional[set[str]] = None,
+    march_madness_mode: bool = False,
 ) -> str:
     """Return HTML for one Play of the Day card. accent: 'blue' | 'orange' | 'grey'. Grey when no play."""
     if row is None or (isinstance(row, pd.Series) and (row.empty or len(row) == 0)):
@@ -883,6 +908,9 @@ def _render_potd_card_html(
         march_badges = _march_context_badges(r)
         if march_badges and march_badges != "—":
             potd_march = f'<div class="potd-march-context">{_html_escape(march_badges)}</div>'
+    potd_tournament_badge = ""
+    if march_madness_mode and league == "NCAAB" and _is_top_seed_play(r):
+        potd_tournament_badge = '<div class="potd-tournament-context">Tournament Context</div>'
     html = f"""
     <div class="potd-card potd-card--{accent}">
         <div class="potd-league">{_html_escape(league)}</div>
@@ -891,6 +919,7 @@ def _render_potd_card_html(
         <div class="potd-badge-row"><div class="potd-badge">{_html_escape(badge_text)}</div><span class="potd-odds-inline">{odds_str}</span></div>
         {f'<div class="potd-current-line">{_html_escape(current_line)}</div>' if current_line else ''}
         <div class="potd-edge">{edge_pct:.1f}% Edge</div>
+        {potd_tournament_badge}
         {potd_march}
         <div class="potd-confidence{f' potd-confidence--warning' if high_variance else ''}">Confidence: {_html_escape(confidence)}</div>
         <div class="potd-reason">{_html_escape(reason)}</div>
@@ -921,6 +950,114 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Project root for logs and scripts
+_APP_ROOT = Path(__file__).resolve().parent
+
+
+def _run_startup_snapshot_and_merge() -> None:
+    """Background: fetch NCAAB odds snapshot, merge closing into games, write snapshot log timestamp."""
+    try:
+        subprocess.run(
+            [sys.executable, str(_APP_ROOT / "scripts" / "fetch_ncaab_odds_snapshot.py")],
+            cwd=str(_APP_ROOT),
+            capture_output=True,
+            timeout=120,
+        )
+        from engine.historical_odds import merge_historical_closing_into_games
+        merge_historical_closing_into_games(
+            espn_db_path=_APP_ROOT / "data" / "espn.db",
+            odds_db_path=_APP_ROOT / "data" / "odds.db",
+        )
+        log_dir = _APP_ROOT / "data" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "snapshot_log.txt", "a", encoding="utf-8") as f:
+            f.write(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
+    except Exception:
+        pass
+
+
+def _start_scheduler_once() -> None:
+    """Start APScheduler (8am auto-result, 9am archive, Monday 6am NCAAB retrain) once per session."""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        from engine.archive_job import run_daily_archive
+        from engine.auto_result_job import run_auto_result
+        from engine.retrain_job import run_weekly_retrain
+        scheduler = BackgroundScheduler(timezone="America/New_York")
+        scheduler.add_job(run_auto_result, CronTrigger(hour=8, minute=0), id="play_auto_result")
+        scheduler.add_job(run_daily_archive, CronTrigger(hour=9, minute=0), id="play_history_archive")
+        scheduler.add_job(run_weekly_retrain, CronTrigger(day_of_week="mon", hour=6, minute=0), id="ncaab_weekly_retrain")
+        scheduler.start()
+    except Exception:
+        pass
+
+
+if "scheduler_started" not in st.session_state:
+    _start_scheduler_once()
+    st.session_state["scheduler_started"] = True
+
+if "startup_snapshot_started" not in st.session_state:
+    st.session_state["startup_snapshot_started"] = True
+    t = threading.Thread(target=_run_startup_snapshot_and_merge, daemon=True)
+    t.start()
+
+
+def _read_last_snapshot_time() -> Optional[str]:
+    """Last line of data/logs/snapshot_log.txt as display timestamp, or None."""
+    p = _APP_ROOT / "data" / "logs" / "snapshot_log.txt"
+    if not p.exists():
+        return None
+    try:
+        lines = p.read_text(encoding="utf-8").strip().splitlines()
+        if not lines:
+            return None
+        raw = lines[-1].strip()
+        if not raw:
+            return None
+        # Show as-is if it looks like ISO; otherwise show raw
+        return raw
+    except Exception:
+        return None
+
+
+def _read_last_retrain_status() -> Optional[str]:
+    """Parse last line of retrain_log.txt -> 'YYYY-MM-DD — X games, XX.XX%' or None."""
+    p = _APP_ROOT / "data" / "logs" / "retrain_log.txt"
+    if not p.exists():
+        return None
+    try:
+        lines = p.read_text(encoding="utf-8").strip().splitlines()
+        if not lines:
+            return None
+        line = lines[-1].strip()
+        # Format: "2026-03-06 games=597 val_accuracy=0.8119"
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})\s+games=(\d+)\s+val_accuracy=([\d.]+)", line)
+        if m:
+            date_str, games, acc = m.group(1), m.group(2), m.group(3)
+            pct = float(acc) * 100
+            return f"{date_str} — {games} games, {pct:.2f}%"
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})\s+games=\?\s+val_accuracy=skipped", line)
+        if m:
+            return f"{m.group(1)} — skipped (no train)"
+        return line
+    except Exception:
+        return None
+
+
+def _load_tournament_eligible_teams() -> set[str]:
+    """Load team names from data/ncaab_seeds.csv (tournament field). Returns set of lowercased names for matching."""
+    p = _APP_ROOT / "data" / "ncaab_seeds.csv"
+    if not p.exists():
+        return set()
+    try:
+        df = pd.read_csv(p)
+        col = "team" if "team" in df.columns else df.columns[0]
+        s = df[col].astype(str).str.strip().str.lower()
+        return set(s[(s != "") & s.notna()].tolist())
+    except Exception:
+        return set()
 
 
 def get_injury_alerts(sport: str) -> dict[str, str]:
@@ -1284,6 +1421,22 @@ include_high_risk_odds = st.sidebar.checkbox(
     help="By default, odds greater than +500 are excluded from Best Value (flagged as High Risk).",
 )
 
+# March Madness mode: tournament-eligible NCAAB only, 5% min edge, Tournament Context badge for top seeds
+march_madness_mode = st.sidebar.checkbox(
+    "March Madness mode",
+    value=is_after_selection_sunday(date.today()),
+    help="Filter NCAAB to tournament-eligible teams only, 5% min edge, and show Tournament Context badge for top-25 seeds. Auto-on after Selection Sunday.",
+    key="march_madness_mode",
+)
+
+# Status: last NCAAB snapshot and last retrain (from log files)
+st.sidebar.caption("---")
+st.sidebar.caption("**Status**")
+last_snapshot = _read_last_snapshot_time()
+st.sidebar.caption(f"Last snapshot: {last_snapshot or '—'}")
+last_retrain = _read_last_retrain_status()
+st.sidebar.caption(f"Last retrain: {last_retrain or '—'}")
+
 # -----------------------------------------------------------------------------
 # Engine run — basketball (real historical data only; empty until user provides data)
 # -----------------------------------------------------------------------------
@@ -1398,6 +1551,15 @@ if (odds_api_key or "").strip():
                 except Exception:
                     pass
         value_plays_df = add_ncaab_march_context_to_df(value_plays_df)
+        # March Madness mode: keep only NCAAB plays where both teams are tournament-eligible (in ncaab_seeds.csv)
+        if march_madness_mode and not value_plays_df.empty and "League" in value_plays_df.columns:
+            tournament_eligible = _load_tournament_eligible_teams()
+            if tournament_eligible:
+                ncaab_mask = value_plays_df["League"].astype(str).str.strip().str.upper() == "NCAAB"
+                home_ok = value_plays_df["home_team"].astype(str).str.strip().str.lower().isin(tournament_eligible)
+                away_ok = value_plays_df["away_team"].astype(str).str.strip().str.lower().isin(tournament_eligible)
+                keep = ~ncaab_mask | (ncaab_mask & home_ok & away_ok)
+                value_plays_df = value_plays_df.loc[keep].copy()
     except Exception:
         value_plays_flagged_count = 0
         live_odds_df = pd.DataFrame(
@@ -1582,12 +1744,12 @@ with tab_overview:
     col_nba, col_ncaab = st.columns(2)
     with col_nba:
         st.markdown(
-            _render_potd_card_html("NBA", pod_nba, "blue", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams),
+            _render_potd_card_html("NBA", pod_nba, "blue", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
             unsafe_allow_html=True,
         )
     with col_ncaab:
         st.markdown(
-            _render_potd_card_html("NCAAB", pod_ncaab, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams),
+            _render_potd_card_html("NCAAB", pod_ncaab, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
             unsafe_allow_html=True,
         )
     if value_plays_df.empty:
@@ -1631,7 +1793,13 @@ with tab_overview:
 
     if not value_plays_df.empty:
         # Filter by min edge and league; one best play per game; then correlated filter (max 10, no team twice)
-        eligible = value_plays_df[value_plays_df["Value (%)"] > min_edge].copy()
+        # March Madness mode: NCAAB plays must have at least 5% edge
+        base_edge_ok = value_plays_df["Value (%)"] > min_edge
+        if march_madness_mode:
+            ncaab_min_ok = (value_plays_df["League"].astype(str).str.strip().str.upper() != "NCAAB") | (value_plays_df["Value (%)"] >= 5.0)
+            eligible = value_plays_df[base_edge_ok & ncaab_min_ok].copy()
+        else:
+            eligible = value_plays_df[base_edge_ok].copy()
         if league_filter != "Both":
             eligible = eligible[eligible["League"] == league_filter]
         best_per_game = (
@@ -1645,7 +1813,7 @@ with tab_overview:
             st.warning("**Low volume day** — fewer than 3 qualifying plays. Consider lowering the min edge or check back later.")
         st.caption("**Consensus filter:** Only plays where ≥2 of 3 sub-models agree on direction are shown. **Correlated plays:** Same team in multiple games today is de-duplicated (highest edge per team). Max 10 plays, no team repeated.")
         for _, row in value_plays_list.iterrows():
-            st.markdown(_render_value_play_card_html(row), unsafe_allow_html=True)
+            st.markdown(_render_value_play_card_html(row, march_madness_mode=march_madness_mode), unsafe_allow_html=True)
             # Bet outcome: look up clv_tracker row and show Mark W / Mark L or current result
             _commence = row.get("commence_time") or ""
             _pt = row.get("point")
@@ -1694,7 +1862,9 @@ with tab_ncaab:
     ncaab_value = value_plays_df[value_plays_df["League"] == "NCAAB"] if not value_plays_df.empty and "League" in value_plays_df.columns else pd.DataFrame()
     if not ncaab_value.empty:
         ncaab_best = ncaab_value.sort_values("Value (%)", ascending=False).groupby("Event").head(1).reset_index(drop=True)
-        st.caption("**Best value plays (NCAAB)** — same model as main table. March: conf. tourney, seeds, bubble vs clinched.")
+        if march_madness_mode:
+            ncaab_best = ncaab_best[ncaab_best["Value (%)"] >= 5.0]
+        st.caption("**Best value plays (NCAAB)** — same model as main table. March: conf. tourney, seeds, bubble vs clinched." + (" **March Madness mode:** 5% min edge, tournament-eligible only." if march_madness_mode else ""))
         _vp = ncaab_best.copy()
         _vp["Odds"] = _vp["Odds"].apply(format_american)
         if "Market" in _vp.columns:
@@ -1702,6 +1872,8 @@ with tab_ncaab:
         if "Recommended Stake" in _vp.columns:
             _vp = _vp.drop(columns=["Recommended Stake"])
         _vp["March context"] = _vp.apply(_march_context_badges, axis=1)
+        if march_madness_mode:
+            _vp["Tournament Context"] = _vp.apply(lambda r: "Yes" if _is_top_seed_play(r) else "", axis=1)
         st.dataframe(_vp.rename(columns={"Event": "Game"}), use_container_width=True, hide_index=True)
     else:
         if (odds_api_key or "").strip():
