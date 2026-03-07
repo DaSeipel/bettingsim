@@ -103,6 +103,9 @@ def merge_ncaab_kenpom_into_games(
 ) -> pd.DataFrame:
     """Add home_* and away_* KenPom columns to games_df for NCAAB rows. Non-NCAAB get NaN."""
     g = games_df.copy()
+    # Drop existing KenPom columns so merge does not create duplicates (e.g. when rebuild already attached 2025 stats)
+    for c in KENPOM_STAT_COLUMNS:
+        g = g.drop(columns=[f"home_{c}", f"away_{c}"], errors="ignore")
     if "season" not in g.columns and "game_date" in g.columns:
         g["season"] = g["game_date"].apply(_game_season_from_date)
     if "season" not in g.columns or "league" not in g.columns:
@@ -146,6 +149,13 @@ def main() -> None:
     # 1) Load CSV into ncaab_team_season_stats
     stats_df = load_csv_into_ncaab_team_season_stats(NCAAB_CSV, ESPN_DB)
     print(f"Loaded {len(stats_df)} rows into ncaab_team_season_stats")
+
+    # Use 2025 season as fallback for 2026 games (no 2026 KenPom yet)
+    if "season" in stats_df.columns and 2026 not in stats_df["season"].astype(int).values and (stats_df["season"].astype(int) == 2025).any():
+        fallback = stats_df[stats_df["season"].astype(int) == 2025].copy()
+        fallback["season"] = 2026
+        stats_df = pd.concat([stats_df, fallback], ignore_index=True)
+        print("Using 2025 KenPom as fallback for 2026 season games")
 
     csv_teams = stats_df["TEAM"].astype(str).str.strip().dropna().unique().tolist()
 

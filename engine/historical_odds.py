@@ -520,8 +520,9 @@ def merge_historical_closing_into_games(
             h, a = games.at[idx, "_home"], games.at[idx, "_away"]
             if pd.isna(gd):
                 continue
+            gd_naive = gd.tz_localize(None) if getattr(gd, "tz", None) is not None else gd
             matches = covers_ncaab[
-                (covers_ncaab["_date"] == gd) &
+                (covers_ncaab["_date"] == gd_naive) &
                 (covers_ncaab["home_team"].apply(lambda x: _team_match_join(x, h))) &
                 (covers_ncaab["away_team"].apply(lambda x: _team_match_join(x, a)))
             ]

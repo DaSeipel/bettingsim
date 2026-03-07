@@ -137,23 +137,24 @@ def main() -> int:
             combined = old_rows
         else:
             games_ncaab = games_ncaab.copy()
-            games_ncaab["season"] = 2026
-            # Load KenPom from DB (use 2025 if 2026 missing for fallback)
+            # Use season 2025 KenPom for ALL 2025-26 games (we don't have 2026 KenPom yet)
+            games_ncaab["season"] = 2025
             stats_df = pd.read_sql_query("SELECT * FROM ncaab_team_season_stats", conn)
             if stats_df.empty:
                 print("ncaab_team_season_stats is empty; NCAAB 2025-26 will have no KenPom.")
             else:
-                if 2026 not in stats_df["season"].values and 2025 in stats_df["season"].values:
-                    fallback = stats_df[stats_df["season"] == 2025].copy()
-                    fallback["season"] = 2026
-                    stats_df = pd.concat([stats_df, fallback], ignore_index=True)
-                csv_teams = stats_df["TEAM"].astype(str).str.strip().dropna().unique().tolist()
-                espn_names = list(set(
-                    games_ncaab["home_team_name"].astype(str).str.strip().dropna().tolist() +
-                    games_ncaab["away_team_name"].astype(str).str.strip().dropna().tolist()
-                ))
-                name_mapping = build_team_name_mapping(espn_names, csv_teams)
-                games_ncaab = merge_kenpom_into_games(games_ncaab, stats_df, name_mapping)
+                stats_2025 = stats_df[stats_df["season"].astype(int) == 2025].copy()
+                if stats_2025.empty:
+                    print("No 2025 season in ncaab_team_season_stats; NCAAB 2025-26 will have no KenPom.")
+                else:
+                    csv_teams = stats_2025["TEAM"].astype(str).str.strip().dropna().unique().tolist()
+                    espn_names = list(set(
+                        games_ncaab["home_team_name"].astype(str).str.strip().dropna().tolist() +
+                        games_ncaab["away_team_name"].astype(str).str.strip().dropna().tolist()
+                    ))
+                    name_mapping = build_team_name_mapping(espn_names, csv_teams)
+                    games_ncaab = merge_kenpom_into_games(games_ncaab, stats_2025, name_mapping)
+            games_ncaab["season"] = 2026
             # Align columns with existing table
             if not old_rows.empty:
                 missing = [c for c in old_rows.columns if c not in games_ncaab.columns]
