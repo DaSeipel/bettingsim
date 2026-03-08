@@ -523,6 +523,15 @@ def _live_odds_to_value_plays(
                 continue
         elif market_type == "spreads" and point is not None:
             market_spread = -float(point)
+            # Ensure NCAAB spread model gets required seed columns (model expects home_SEED, away_SEED)
+            if feature_row is not None and league_lookup == "ncaab":
+                _idx = getattr(feature_row, "index", None)
+                if _idx is not None and ("home_SEED" not in _idx or "away_SEED" not in _idx):
+                    feature_row = feature_row.copy()
+                    if "home_SEED" not in feature_row.index:
+                        feature_row["home_SEED"] = 99
+                    if "away_SEED" not in feature_row.index:
+                        feature_row["away_SEED"] = 99
             if league_lookup == "ncaab":
                 try:
                     pred_m = get_spread_predicted_margin(
@@ -1282,7 +1291,8 @@ def run_pipeline_to_cache(
             spread_ok_edge = value_plays_df["Value (%)"] >= NCAAB_SPREAD_MIN_EDGE_PCT
             le = value_plays_df.get("line_error")
             if le is not None:
-                abs_le = le.abs()
+                # Avoid abs() on None/NaN: coerce to numeric, fill nulls with 0, then abs
+                abs_le = pd.to_numeric(le, errors="coerce").fillna(0).abs()
                 # When line_error is NaN (e.g. no model pred), allow play; otherwise require 3–20 pts
                 spread_ok_line = le.isna() | ((abs_le >= SPREAD_LINE_ERROR_MIN_PTS) & (abs_le <= SPREAD_LINE_ERROR_MAX_PTS))
             else:

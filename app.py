@@ -1633,7 +1633,6 @@ march_madness_mode = st.sidebar.checkbox(
 )
 
 # Status: last NCAAB snapshot and last retrain (from log files)
-st.sidebar.caption("---")
 if STRIP_DOWN_MODE:
     st.sidebar.warning("**Strip-down mode:** Pipeline, scheduler, and DB loads disabled. Set `STRIP_DOWN_MODE = False` in app.py to restore.")
 st.sidebar.caption("**Status**")
@@ -1866,6 +1865,28 @@ def _normalize_date_to_iso(raw: str) -> Optional[str]:
     return None
 
 
+def _load_historical_betting_performance_all() -> pd.DataFrame:
+    """Load full data/historical_betting_performance.csv (all dates). Returns empty DataFrame if missing or no Date column."""
+    if not HISTORICAL_BETTING_CSV_PATH.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(HISTORICAL_BETTING_CSV_PATH)
+    except Exception:
+        return pd.DataFrame()
+    if df.empty or "Date" not in df.columns:
+        return df
+    return df.copy()
+
+
+def _historical_unique_dates(df: pd.DataFrame) -> list[str]:
+    """Return unique dates from CSV Date column (YYYY-MM-DD), sorted descending (most recent first)."""
+    if df.empty or "Date" not in df.columns:
+        return []
+    normalized = df["Date"].astype(str).apply(_normalize_date_to_iso)
+    unique = sorted(normalized.dropna().unique(), reverse=True)
+    return [d for d in unique if d]
+
+
 def _load_historical_betting_performance() -> pd.DataFrame:
     """Load data/historical_betting_performance.csv. Returns rows for today's date, accepting YYYY-MM-DD or MM-DD-YYYY in the CSV."""
     if not HISTORICAL_BETTING_CSV_PATH.exists():
@@ -1968,8 +1989,20 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
     }
 
 
-# Load historical picks for fallback
-_historical_picks_df = _load_historical_betting_performance()
+# Load full historical CSV; sidebar "Select Slate Date" (default = most recent); filter to that date for Overview
+_historical_full_df = _load_historical_betting_performance_all()
+_unique_slate_dates = _historical_unique_dates(_historical_full_df)
+if not _unique_slate_dates:
+    _unique_slate_dates = [date.today().strftime("%Y-%m-%d")]
+_selected_slate_date = st.sidebar.selectbox(
+    "Select Slate Date",
+    options=_unique_slate_dates,
+    index=0,
+    key="select_slate_date",
+    help="Slate to show on Overview (POTD and value plays). Default is most recent date in your record.",
+)
+_normalized_slate = _historical_full_df["Date"].astype(str).apply(_normalize_date_to_iso) if not _historical_full_df.empty else pd.Series(dtype=object)
+_historical_picks_df = _historical_full_df[_normalized_slate == _selected_slate_date].copy() if not _historical_full_df.empty else pd.DataFrame()
 if potd_picks.get("NCAAB Pick 1") is None and potd_picks.get("NCAAB Pick 2") is None and not _historical_picks_df.empty:
     potd_picks = _potd_from_historical_csv(_historical_picks_df)
 
@@ -2089,8 +2122,19 @@ def _today_str() -> str:
 st.title("Bobby Bottle's Betting Model")
 st.caption("NCAAB — college basketball value plays and Play of the Day")
 
-# Stat bar: date | plays found | NCAAB | top edge (one row, dividers). Include POTD from historical when cache is empty.
-_summary = _summary_bar_values(value_plays_df)
+# Stat bar: date | plays found | NCAAB | top edge. Use selected slate date and _historical_picks_df when available.
+if not _historical_picks_df.empty:
+    try:
+        _slate_d = datetime.strptime(_selected_slate_date, "%Y-%m-%d")
+        _date_str = _slate_d.strftime("%B ") + str(_slate_d.day)
+    except (ValueError, TypeError):
+        _date_str = _selected_slate_date
+    _n_slate = len(_historical_picks_df)
+    _top_ep = _historical_picks_df["Edge_Points"].max() if "Edge_Points" in _historical_picks_df.columns else None
+    _top_edge_slate = f"{float(_top_ep) / 3:.1f}%" if _top_ep is not None and pd.notna(_top_ep) else "—"
+    _summary = {"date_str": _date_str, "total_plays": _n_slate, "n_nba": 0, "n_ncaab": _n_slate, "top_edge_label": _top_edge_slate}
+else:
+    _summary = _summary_bar_values(value_plays_df)
 if _summary["total_plays"] == 0 and (potd_picks.get("NCAAB Pick 1") or potd_picks.get("NCAAB Pick 2")):
     _n_potd = (1 if potd_picks.get("NCAAB Pick 1") else 0) + (1 if potd_picks.get("NCAAB Pick 2") else 0)
     _potd_edges = []
@@ -2279,7 +2323,7 @@ with tab_overview:
     if value_plays_flagged_count > 0:
         st.warning(f"**Potential Data Error:** {value_plays_flagged_count} play(s) had Value % ≥ 15% and were excluded.")
 
-    # Filter row: NCAAB only; min edge slider (2–15%, default 2)
+    # Filter row: NCAAB only; min edge slider (2–15%, default 2). When showing slate from CSV, slider still filters.
     filter_col1, filter_col2, _ = st.columns([1, 1, 2])
     with filter_col1:
         league_filter = "NCAAB"  # NCAAB only; NBA code kept in backend
@@ -2295,7 +2339,20 @@ with tab_overview:
             help="Only show plays with edge above this threshold.",
         )
 
-    if not value_plays_df.empty:
+    # Overview tables filter by sidebar "Select Slate Date": show _historical_picks_df when available
+    if not _historical_picks_df.empty:
+        _disp = _historical_picks_df.copy()
+        _disp["Event"] = _disp.apply(lambda r: f"{str(r.get('Away', '')).strip()} @ {str(r.get('Home', '')).strip()}", axis=1)
+        _disp["Selection"] = _disp["Pick_Spread"].apply(lambda x: str(x).strip() if pd.notna(x) else "")
+        if "Edge_Points" in _disp.columns:
+            _disp["Value (%)"] = (_disp["Edge_Points"] / 3.0).clip(0, 15)
+        _disp = _disp[_disp["Value (%)"] >= min_edge] if "Value (%)" in _disp.columns else _disp
+        _cols_show = ["Event", "Selection", "Market_Spread", "Edge_Points", "Confidence_Level"]
+        _cols_show = [c for c in _cols_show if c in _disp.columns]
+        if _cols_show:
+            st.caption(f"Slate for **{_selected_slate_date}** — {len(_disp)} play(s) (min edge {min_edge}%).")
+            st.dataframe(_disp[_cols_show].rename(columns={"Market_Spread": "Spread", "Edge_Points": "Edge pts", "Confidence_Level": "Confidence"}), use_container_width=True, hide_index=True)
+    elif not value_plays_df.empty:
         # Filter by min edge and league; one best play per game; then correlated filter (max 10, no team twice)
         # March Madness mode: NCAAB plays must have at least 5% edge
         base_edge_ok = value_plays_df["Value (%)"] > min_edge
@@ -2426,10 +2483,10 @@ with tab_ncaab:
 
 with tab_mark_results:
     st.subheader("Mark Results")
-    st.caption("Mark Win / Loss / Push for past plays (yesterday and earlier). Today's plays are not shown here. Results are saved to your record and used for ROI.")
+    st.caption("Mark Win / Loss / Push for plays with **Pending** results only (ignores slate date). You can see Saturday pending games while viewing Sunday's slate.")
     _today = date.today()
     _yesterday = _today - timedelta(days=1)
-    _mr_from = _today - timedelta(days=90)  # show last 90 days of past plays
+    _mr_from = _today - timedelta(days=90)  # load last 90 days to find pending
     _mr_history = _load_play_history_cached(from_date_iso=_mr_from.isoformat(), to_date_iso=_yesterday.isoformat())
     if not _mr_history.empty:
         _mr_history = _mr_history.copy()
@@ -2437,6 +2494,8 @@ with tab_mark_results:
         _mr_history["result_clean"] = _mr_history["result"].apply(
             lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
         )
+        # Show only Pending rows (ignore sidebar date) so user can mark Saturday games while viewing Sunday
+        _mr_history = _mr_history[_mr_history["result_clean"].isna()]
 
         def _mr_matchup_key(row: pd.Series) -> str:
             d = row["date_generated"]
@@ -2459,8 +2518,10 @@ with tab_mark_results:
         _mr_list = _mr_history.drop_duplicates(subset=["_matchup_key"], keep="last").sort_values(
             ["date_generated", "my_edge_pct"], ascending=[False, False]
         )
-
-        st.markdown("""
+        if _mr_list.empty:
+            st.info("No pending plays. All plays in the last 90 days have been marked Win / Loss / Push.")
+        else:
+            st.markdown("""
         <style>
         .mr-card { border-radius: 12px; padding: 1.1rem 1.25rem; margin-bottom: 1rem; border-left: 5px solid; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
         .mr-card--pending { border-left-color: #78909c; background: rgba(96,125,139,0.12); }
@@ -2477,69 +2538,69 @@ with tab_mark_results:
         </style>
         """, unsafe_allow_html=True)
 
-        def _mr_bet_str(r: pd.Series) -> str:
-            bt = str(r.get("bet_type", ""))
-            side = str(r.get("recommended_side", ""))
-            line = r.get("spread_or_total")
-            if line is None or pd.isna(line) or line == -999:
-                return f"{bt} · {side}".strip()
-            line = float(line)
-            if "Over" in bt or "Under" in bt or "total" in bt.lower():
-                return f"{bt} · {side} {line:.1f}".strip()
-            return f"{bt} · {side} {line:+.1f}".strip()
+            def _mr_bet_str(r: pd.Series) -> str:
+                bt = str(r.get("bet_type", ""))
+                side = str(r.get("recommended_side", ""))
+                line = r.get("spread_or_total")
+                if line is None or pd.isna(line) or line == -999:
+                    return f"{bt} · {side}".strip()
+                line = float(line)
+                if "Over" in bt or "Under" in bt or "total" in bt.lower():
+                    return f"{bt} · {side} {line:.1f}".strip()
+                return f"{bt} · {side} {line:+.1f}".strip()
 
-        for _, row in _mr_list.iterrows():
-            result = row.get("result_clean")
-            card_class = "mr-card--pending"
-            if result == "W":
-                card_class = "mr-card--win"
-            elif result == "L":
-                card_class = "mr-card--loss"
-            elif result == "P":
-                card_class = "mr-card--push"
-            matchup = f"{row.get('away_team', '')} @ {row.get('home_team', '')}"
-            bet_str = _mr_bet_str(row)
-            edge_str = f"{float(row.get('my_edge_pct', 0)):.1f}%"
-            odds_str = format_american(row.get("market_odds_at_time", 0))
-            sport_label = str(row.get("sport", ""))
-            if result == "W":
-                badge = '<span class="mr-badge mr-badge--win">Win</span>'
-            elif result == "L":
-                badge = '<span class="mr-badge mr-badge--loss">Loss</span>'
-            elif result == "P":
-                badge = '<span class="mr-badge mr-badge--push">Push</span>'
-            else:
-                badge = ""
-            st.markdown(
-                f'<div class="mr-card {card_class}">'
-                f'<div class="mr-matchup">{_html_escape(sport_label)} · {_html_escape(matchup)}</div>'
-                f'<div class="mr-meta">{_html_escape(bet_str)} · Edge {edge_str} · Odds {odds_str}</div>'
-                + (f'<div class="mr-meta">{badge}</div>' if badge else "")
-                + "</div>",
-                unsafe_allow_html=True,
-            )
-            if result is None or pd.isna(result):
-                mk = row.get("_matchup_key", "")
-                pids_in_group = _mr_history.loc[_mr_history["_matchup_key"] == mk, "play_id"].astype(int).tolist()
-                c1, c2, c3, _ = st.columns([1, 1, 1, 3])
-                with c1:
-                    if st.button("✅ Win", key=f"mr_w_{row.get('play_id')}", help="Mark win"):
-                        for _pid in pids_in_group:
-                            update_play_result(_pid, "W")
-                        _load_play_history_cached.clear()
-                        st.rerun()
-                with c2:
-                    if st.button("❌ Loss", key=f"mr_l_{row.get('play_id')}", help="Mark loss"):
-                        for _pid in pids_in_group:
-                            update_play_result(_pid, "L")
-                        _load_play_history_cached.clear()
-                        st.rerun()
-                with c3:
-                    if st.button("➖ Push", key=f"mr_p_{row.get('play_id')}", help="Mark push"):
-                        for _pid in pids_in_group:
-                            update_play_result(_pid, "P")
-                        _load_play_history_cached.clear()
-                        st.rerun()
+            for _, row in _mr_list.iterrows():
+                result = row.get("result_clean")
+                card_class = "mr-card--pending"
+                if result == "W":
+                    card_class = "mr-card--win"
+                elif result == "L":
+                    card_class = "mr-card--loss"
+                elif result == "P":
+                    card_class = "mr-card--push"
+                matchup = f"{row.get('away_team', '')} @ {row.get('home_team', '')}"
+                bet_str = _mr_bet_str(row)
+                edge_str = f"{float(row.get('my_edge_pct', 0)):.1f}%"
+                odds_str = format_american(row.get("market_odds_at_time", 0))
+                sport_label = str(row.get("sport", ""))
+                if result == "W":
+                    badge = '<span class="mr-badge mr-badge--win">Win</span>'
+                elif result == "L":
+                    badge = '<span class="mr-badge mr-badge--loss">Loss</span>'
+                elif result == "P":
+                    badge = '<span class="mr-badge mr-badge--push">Push</span>'
+                else:
+                    badge = ""
+                st.markdown(
+                    f'<div class="mr-card {card_class}">'
+                    f'<div class="mr-matchup">{_html_escape(sport_label)} · {_html_escape(matchup)}</div>'
+                    f'<div class="mr-meta">{_html_escape(bet_str)} · Edge {edge_str} · Odds {odds_str}</div>'
+                    + (f'<div class="mr-meta">{badge}</div>' if badge else "")
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+                if result is None or pd.isna(result):
+                    mk = row.get("_matchup_key", "")
+                    pids_in_group = _mr_history.loc[_mr_history["_matchup_key"] == mk, "play_id"].astype(int).tolist()
+                    c1, c2, c3, _ = st.columns([1, 1, 1, 3])
+                    with c1:
+                        if st.button("✅ Win", key=f"mr_w_{row.get('play_id')}", help="Mark win"):
+                            for _pid in pids_in_group:
+                                update_play_result(_pid, "W")
+                            _load_play_history_cached.clear()
+                            st.rerun()
+                    with c2:
+                        if st.button("❌ Loss", key=f"mr_l_{row.get('play_id')}", help="Mark loss"):
+                            for _pid in pids_in_group:
+                                update_play_result(_pid, "L")
+                            _load_play_history_cached.clear()
+                            st.rerun()
+                    with c3:
+                        if st.button("➖ Push", key=f"mr_p_{row.get('play_id')}", help="Mark push"):
+                            for _pid in pids_in_group:
+                                update_play_result(_pid, "P")
+                            _load_play_history_cached.clear()
+                            st.rerun()
     else:
         st.info("No past plays in the last 90 days to mark. Plays from yesterday and earlier appear here once they are archived.")
 
@@ -2599,6 +2660,9 @@ with tab_play_history:
 
         roi_pct, profit_units, w, l, p, win_rate = _roi_and_units(resolved)
         roi_potd, profit_units_potd, w_potd, l_potd, p_potd, win_rate_potd = _roi_and_units(resolved_potd)
+        # Daily ROI for selected slate date
+        resolved_daily = resolved[resolved["date_generated"].astype(str).str.strip() == _selected_slate_date] if "date_generated" in resolved.columns else pd.DataFrame()
+        roi_daily, units_daily, w_d, l_d, p_d, _ = _roi_and_units(resolved_daily)
 
         st.markdown("""
         <style>
@@ -2636,11 +2700,15 @@ with tab_play_history:
         roi_class = "ph-roi--pos" if roi_pct > 0 else ("ph-roi--neg" if roi_pct < 0 else "ph-roi--zero")
         roi_sign = "+" if roi_pct > 0 else ""
         units_sign = "+" if profit_units > 0 else ""
+        daily_roi_class = "ph-roi--pos" if roi_daily > 0 else ("ph-roi--neg" if roi_daily < 0 else "ph-roi--zero")
+        daily_roi_sign = "+" if roi_daily > 0 else ""
+        daily_roi_label = f"Daily ROI ({_selected_slate_date}): {daily_roi_sign}{roi_daily:.1f}%"
         st.markdown(
             f'<div class="ph-kpi-hero">'
             f'<div class="ph-kpi-record"><span class="ph-w">{int(w)}</span>–<span class="ph-l">{int(l)}</span>–<span class="ph-p">{int(p)}</span></div>'
             f'<div class="ph-kpi-second">'
-            f'<span class="ph-roi {roi_class}">{roi_sign}{roi_pct:.1f}% ROI</span>'
+            f'<span class="ph-roi {roi_class}">{roi_sign}{roi_pct:.1f}% Total ROI</span>'
+            f'<span class="ph-roi {daily_roi_class}">{daily_roi_label}</span>'
             f'<span>{units_sign}{profit_units:.2f} units</span>'
             f'<span>{win_rate:.0f}% win rate</span>'
             f'</div>'
@@ -2711,16 +2779,19 @@ with tab_play_history:
                             if st.button("✅ Win", key=f"ph_w_{row.get('play_id')}_{sport_label}", help="Mark win"):
                                 for _pid in pids_in_group:
                                     update_play_result(_pid, "W")
+                                _load_play_history_cached.clear()
                                 st.rerun()
                         with c2:
                             if st.button("❌ Loss", key=f"ph_l_{row.get('play_id')}_{sport_label}", help="Mark loss"):
                                 for _pid in pids_in_group:
                                     update_play_result(_pid, "L")
+                                _load_play_history_cached.clear()
                                 st.rerun()
                         with c3:
                             if st.button("➖ Push", key=f"ph_p_{row.get('play_id')}_{sport_label}", help="Mark push"):
                                 for _pid in pids_in_group:
                                     update_play_result(_pid, "P")
+                                _load_play_history_cached.clear()
                                 st.rerun()
     else:
         st.info("No archived plays yet. Plays are saved when you load the dashboard (and at 9am ET). Open the app before games to capture today's top picks.")

@@ -739,6 +739,26 @@ def consensus_moneyline(
     return (prob, agree >= 2)
 
 
+def _ensure_seed_columns(row: pd.Series) -> pd.Series:
+    """Ensure home_SEED and away_SEED exist (model expects these). Default 99 (unseeded) when missing or zero."""
+    r = row.copy() if isinstance(row, pd.Series) else pd.Series(dict(row))
+    _default = 99.0
+    for prefix in ("home", "away"):
+        key_lower = f"{prefix}_seed"
+        key_upper = f"{prefix}_SEED"
+        val = r.get(key_lower) if key_lower in r.index else r.get(key_upper)
+        if val is None or (isinstance(val, (int, float)) and (val == 0 or pd.isna(val))):
+            val = _default
+        else:
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                val = _default
+        r[key_lower] = val
+        r[key_upper] = val
+    return r
+
+
 def get_feature_row_for_game(
     feature_matrix: pd.DataFrame,
     home_team: str,
@@ -788,7 +808,7 @@ def get_feature_row_for_game(
             pass
     subset = feature_matrix.loc[mask]
     if not subset.empty:
-        return subset.iloc[0]
+        return _ensure_seed_columns(subset.iloc[0])
 
     # Flexible match: Live Odds names (e.g. "Kentucky Wildcats") vs feature-matrix names (e.g. "Kentucky")
     fm_league = feature_matrix["league"].astype(str).str.strip().str.lower() == league_norm
@@ -809,7 +829,7 @@ def get_feature_row_for_game(
                 if best is None:
                     best = row
     if best is not None:
-        return best
+        return _ensure_seed_columns(best)
 
     sample_home = feature_matrix["home_team_name"].astype(str).str.strip().iloc[:5].tolist() if len(feature_matrix) > 0 else []
     sample_away = feature_matrix["away_team_name"].astype(str).str.strip().iloc[:5].tolist() if len(feature_matrix) > 0 else []
@@ -958,6 +978,21 @@ def build_ncaab_feature_row_from_team_stats(
     for col in NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS:
         if col not in row:
             row[col] = 0.0
+    # Model expects home_SEED / away_SEED (capital). Default 99 (unseeded) when missing or zero.
+    _seed_default = 99.0
+    for prefix in ("home", "away"):
+        key = f"{prefix}_seed"
+        val = row.get(key)
+        if val is None:
+            row[key] = _seed_default
+        else:
+            try:
+                v = float(val)
+                row[key] = v if v != 0 and not pd.isna(v) else _seed_default
+            except (TypeError, ValueError):
+                row[key] = _seed_default
+    row["home_SEED"] = row["home_seed"]
+    row["away_SEED"] = row["away_seed"]
     row["home_days_rest"] = 0.0
     row["away_days_rest"] = 0.0
     row["home_games_in_last_5_days"] = 0
@@ -1588,6 +1623,12 @@ def load_feature_matrix_for_inference(
             fm = fm.loc[:, ~fm.columns.duplicated()]
     except Exception:
         pass
+    # Model expects home_SEED / away_SEED (capital). Ensure they exist; default 99 (unseeded) when missing.
+    _seed_default = 99.0
+    if "home_SEED" not in fm.columns:
+        fm["home_SEED"] = fm["home_seed"].fillna(_seed_default).replace(0, _seed_default) if "home_seed" in fm.columns else _seed_default
+    if "away_SEED" not in fm.columns:
+        fm["away_SEED"] = fm["away_seed"].fillna(_seed_default).replace(0, _seed_default) if "away_seed" in fm.columns else _seed_default
     keep = _ncaab_inference_feature_columns()
     cols_to_keep = [c for c in fm.columns if c in keep]
     if cols_to_keep:
