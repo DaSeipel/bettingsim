@@ -8,6 +8,7 @@ import gc
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -18,6 +19,7 @@ from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
+import plotly.graph_objects as go
 from engine.engine import (
     BettingEngine,
     get_live_odds,
@@ -1882,6 +1884,184 @@ def _load_historical_betting_performance_all() -> pd.DataFrame:
     return df.copy()
 
 
+# ----- Game Lookup tab helpers -----
+def _load_team_stats_2026() -> pd.DataFrame:
+    """Load data/ncaab/team_stats_2026.csv. Returns empty DataFrame if missing."""
+    path = _APP_ROOT / "data" / "ncaab" / "team_stats_2026.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _team_match_query(team_name: str, query: str) -> bool:
+    """True if query is contained in team_name (case-insensitive) or exact match."""
+    t = (team_name or "").strip().lower()
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    return q in t or t == q
+
+
+def _find_team_in_stats(team_stats_df: pd.DataFrame, query: str) -> Optional[pd.Series]:
+    """Return first row from team_stats_2026 where TEAM matches or contains query (case-insensitive)."""
+    if team_stats_df.empty or "TEAM" not in team_stats_df.columns:
+        return None
+    q = (query or "").strip().lower()
+    if not q:
+        return None
+    for _, row in team_stats_df.iterrows():
+        team = str(row.get("TEAM", "")).strip().lower()
+        if q == team or q in team or team in q:
+            return row
+    return None
+
+
+def _find_game_for_team(
+    team_query: str,
+    value_plays_df: pd.DataFrame,
+    historical_picks_df: pd.DataFrame,
+) -> Optional[tuple[str, dict]]:
+    """
+    Find today's (or selected slate) game involving the given team.
+    Returns ('cache', row_dict) or ('historical', row_dict) or None.
+    row_dict has home_team, away_team, spread, pred_margin, edge, confidence, pick, etc.
+    """
+    q = (team_query or "").strip().lower()
+    if not q:
+        return None
+    # 1) Value plays cache (has home_team, away_team)
+    if not value_plays_df.empty and "home_team" in value_plays_df.columns and "away_team" in value_plays_df.columns:
+        for _, row in value_plays_df.iterrows():
+            home = str(row.get("home_team", "")).strip()
+            away = str(row.get("away_team", "")).strip()
+            if _team_match_query(home, team_query) or _team_match_query(away, team_query):
+                point = row.get("point") or row.get("Point")
+                try:
+                    pt = float(point) if point is not None and pd.notna(point) else None
+                except (TypeError, ValueError):
+                    pt = None
+                # point is from picked team's perspective; market spread (home) = point if home picked else -point
+                selection = str(row.get("Selection", "")).strip()
+                spread = pt if selection == home else (-pt if pt is not None else None)
+                # Edge: from reason string or Value (%) * 3 as proxy
+                value_pct = row.get("Value (%)") or 0
+                try:
+                    edge_pts = float(value_pct) * 3.0 if value_pct is not None else None
+                except (TypeError, ValueError):
+                    edge_pts = None
+                reason = str(row.get("reason") or row.get("reasoning_summary") or "").strip()
+                return ("cache", {
+                    "home_team": home,
+                    "away_team": away,
+                    "market_spread": spread,
+                    "pred_margin": None,  # cache may not have it
+                    "edge_points": edge_pts,
+                    "confidence_tier": str(row.get("confidence_tier", "Medium")).strip() or "Medium",
+                    "pick_spread": str(row.get("Selection", "")).strip(),
+                    "recommended_pick": str(row.get("Selection", "")).strip(),
+                    "value_pct": value_pct,
+                    "reason": reason or None,
+                })
+    # 2) Historical CSV for selected slate date
+    if not historical_picks_df.empty and "Home" in historical_picks_df.columns and "Away" in historical_picks_df.columns:
+        for _, row in historical_picks_df.iterrows():
+            home = str(row.get("Home", "")).strip()
+            away = str(row.get("Away", "")).strip()
+            if _team_match_query(home, team_query) or _team_match_query(away, team_query):
+                try:
+                    spread = float(row.get("Market_Spread")) if row.get("Market_Spread") is not None and pd.notna(row.get("Market_Spread")) else None
+                except (TypeError, ValueError):
+                    spread = None
+                try:
+                    pred = float(row.get("Pred_Margin")) if row.get("Pred_Margin") is not None and pd.notna(row.get("Pred_Margin")) else None
+                except (TypeError, ValueError):
+                    pred = None
+                try:
+                    edge_pts = float(row.get("Edge_Points")) if row.get("Edge_Points") is not None and pd.notna(row.get("Edge_Points")) else None
+                except (TypeError, ValueError):
+                    edge_pts = None
+                pick = str(row.get("Pick_Spread", "Home")).strip()
+                selection = home if pick == "Home" else away
+                h_b = row.get("Home_BARTHAG")
+                a_b = row.get("Away_BARTHAG")
+                if h_b is not None and a_b is not None and not (pd.isna(h_b) or pd.isna(a_b)):
+                    try:
+                        h_val, a_val = float(h_b), float(a_b)
+                        gap = abs(h_val - a_val)
+                        favored = home if h_val > a_val else away
+                        edge_str = f"{edge_pts:+.1f}" if edge_pts is not None else "—"
+                        ms_str = f"{spread:+.1f}" if spread is not None else "—"
+                        reason = f"{home} (BARTHAG {h_val:.3f}) hosts {away} (BARTHAG {a_val:.3f}). Model sees a {gap:.3f} KenPom gap favoring {favored}. Edge of {edge_str} pts vs market spread of {ms_str}."
+                    except (TypeError, ValueError):
+                        reason = f"Model favors {selection}. Edge of {edge_pts:+.1f} pts vs market." if edge_pts is not None else f"Model favors {selection}."
+                else:
+                    reason = f"Model favors {selection}." + (f" Edge of {edge_pts:+.1f} pts." if edge_pts is not None else "")
+                return ("historical", {
+                    "home_team": home,
+                    "away_team": away,
+                    "market_spread": spread,
+                    "pred_margin": pred,
+                    "edge_points": edge_pts,
+                    "confidence_tier": str(row.get("Confidence_Level", "Medium")).strip() or "Medium",
+                    "pick_spread": pick,
+                    "recommended_pick": selection,
+                    "home_barthag": h_b,
+                    "away_barthag": a_b,
+                    "reason": reason,
+                })
+    return None
+
+
+def _get_head_to_head(home_team: str, away_team: str) -> pd.DataFrame:
+    """Return past games between these two teams this season from data/espn.db games_with_team_stats."""
+    db_path = _APP_ROOT / "data" / "espn.db"
+    if not db_path.exists():
+        return pd.DataFrame()
+    conn = sqlite3.connect(db_path)
+    try:
+        # Table may use home_team_name / away_team_name
+        try:
+            df = pd.read_sql_query(
+                """
+                SELECT game_date, home_team_name, away_team_name
+                FROM games_with_team_stats
+                WHERE league = 'ncaab'
+                  AND (
+                    (LOWER(TRIM(home_team_name)) = LOWER(?) AND LOWER(TRIM(away_team_name)) = LOWER(?))
+                    OR (LOWER(TRIM(home_team_name)) = LOWER(?) AND LOWER(TRIM(away_team_name)) = LOWER(?))
+                  )
+                ORDER BY game_date DESC
+                """,
+                conn,
+                params=(home_team.strip(), away_team.strip(), away_team.strip(), home_team.strip()),
+            )
+        except sqlite3.OperationalError:
+            # Fallback if column names differ
+            df = pd.read_sql_query("SELECT * FROM games_with_team_stats WHERE league = 'ncaab' LIMIT 1", conn)
+            if df.empty or "home_team_name" not in df.columns:
+                return pd.DataFrame()
+            df = pd.read_sql_query(
+                """
+                SELECT game_date, home_team_name, away_team_name
+                FROM games_with_team_stats
+                WHERE league = 'ncaab'
+                  AND (
+                    (LOWER(TRIM(home_team_name)) = LOWER(?) AND LOWER(TRIM(away_team_name)) = LOWER(?))
+                    OR (LOWER(TRIM(home_team_name)) = LOWER(?) AND LOWER(TRIM(away_team_name)) = LOWER(?))
+                  )
+                ORDER BY game_date DESC
+                """,
+                conn,
+                params=(home_team.strip(), away_team.strip(), away_team.strip(), home_team.strip()),
+            )
+        return df
+    finally:
+        conn.close()
+
+
 def _historical_unique_dates(df: pd.DataFrame) -> list[str]:
     """Return unique dates from CSV Date column (YYYY-MM-DD), sorted descending (most recent first)."""
     if df.empty or "Date" not in df.columns:
@@ -1959,7 +2139,8 @@ def _generic_potd_reason(selection: str, market_spread: Optional[float], pick_si
 
 def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
     """Convert one historical_betting_performance.csv row to POTD card dict.
-    Edge = Edge_Points / 3 (capped at 15%). Builds dynamic reasoning from BARTHAG, edge, and market spread when available."""
+    Edge = Edge_Points / 3 (capped at 15%). Builds dynamic reasoning from BARTHAG, edge, and market spread when available.
+    Spread (point) must be from the picked team's perspective: Home = Market_Spread, Away = -Market_Spread."""
     home = str(row.get("Home", "")).strip()
     away = str(row.get("Away", "")).strip()
     pick_side = str(row.get("Pick_Spread", "Home")).strip()
@@ -1974,6 +2155,8 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
         ms = float(row.get("Market_Spread")) if row.get("Market_Spread") is not None and pd.notna(row.get("Market_Spread")) else None
     except (TypeError, ValueError):
         ms = None
+    # Spread from picked team's perspective: market spread is home perspective; away pick gets -ms
+    point_val = ms if pick_side == "Home" else (-float(ms) if ms is not None else None)
     # Dynamic reasoning from BARTHAG, edge, market spread (fallback to generic if BARTHAG missing)
     h_b = row.get("Home_BARTHAG")
     a_b = row.get("Away_BARTHAG")
@@ -1997,7 +2180,7 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
         "Market": "Spread",
         "Odds": None,
         "Value (%)": edge_pct,
-        "point": row.get("Market_Spread"),
+        "point": point_val,
         "Recommended Stake": 0,
         "Start Time": "Today",
         "commence_time": "",
@@ -2276,7 +2459,7 @@ if _unresolved_stale > 0:
     )
     st.markdown(_slim_alert_html, unsafe_allow_html=True)
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
-tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds = st.tabs(["Overview", "NCAAB", "NBA (Coming Soon)", "Mark Results", "Play of the Day History", "Manual Odds"])
+tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(["Overview", "NCAAB", "NBA (Coming Soon)", "Mark Results", "Play of the Day History", "Manual Odds", "Game Lookup"])
 
 with tab_overview:
     st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
@@ -2900,6 +3083,213 @@ with tab_manual_odds:
                 st.caption(f"**{len(_list)}** manual game(s) in cache (pipeline uses today's date; duplicate matchups overwrite by last entry).")
         except (json.JSONDecodeError, OSError):
             pass
+
+with tab_game_lookup:
+    st.subheader("Game Lookup")
+    st.caption("Search by team name to find today's matchup (from value plays or historical slate), view a detailed matchup card, BARTHAG comparison, and head-to-head history.")
+    team_stats_2026 = _load_team_stats_2026()
+    # BARTHAG rank: 1 = best (highest BARTHAG) in team_stats_2026
+    if not team_stats_2026.empty and "BARTHAG" in team_stats_2026.columns:
+        _barthag_sorted = team_stats_2026.sort_values("BARTHAG", ascending=False).reset_index(drop=True)
+        _barthag_sorted["_barthag_rank"] = _barthag_sorted.index + 1
+        _rank_map = _barthag_sorted.set_index("TEAM")["_barthag_rank"].to_dict()
+    else:
+        _rank_map = {}
+    search_query = st.text_input("Team name", placeholder="e.g. Duke or Michigan", key="game_lookup_team")
+    found_game = None
+    if search_query and search_query.strip():
+        found_game = _find_game_for_team(search_query.strip(), value_plays_df, _historical_picks_df)
+    if found_game:
+        source, game = found_game
+        home_team = game["home_team"]
+        away_team = game["away_team"]
+        home_stats = _find_team_in_stats(team_stats_2026, home_team)
+        away_stats = _find_team_in_stats(team_stats_2026, away_team)
+        home_barthag = None
+        away_barthag = None
+        home_adjoe = None
+        home_adjde = None
+        away_adjoe = None
+        away_adjde = None
+        home_rank = None
+        away_rank = None
+        if home_stats is not None:
+            home_barthag = home_stats.get("BARTHAG")
+            home_adjoe = home_stats.get("ADJOE")
+            home_adjde = home_stats.get("ADJDE")
+            home_rank = _rank_map.get(str(home_stats.get("TEAM", "")).strip())
+        if away_stats is not None:
+            away_barthag = away_stats.get("BARTHAG")
+            away_adjoe = away_stats.get("ADJOE")
+            away_adjde = away_stats.get("ADJDE")
+            away_rank = _rank_map.get(str(away_stats.get("TEAM", "")).strip())
+        if home_barthag is None and game.get("home_barthag") is not None:
+            home_barthag = game["home_barthag"]
+        if away_barthag is None and game.get("away_barthag") is not None:
+            away_barthag = game["away_barthag"]
+        def _num_fmt(x, decimals=2):
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return "—"
+            try:
+                return f"{float(x):.{decimals}f}"
+            except (TypeError, ValueError):
+                return "—"
+        def _record_str(stats_row: Optional[pd.Series]) -> str:
+            if stats_row is None or not isinstance(stats_row, pd.Series):
+                return ""
+            try:
+                g = stats_row.get("G")
+                w = stats_row.get("W")
+                if g is not None and w is not None and not (pd.isna(g) or pd.isna(w)):
+                    gi, wi = int(g), int(w)
+                    return f" ({wi}-{gi - wi})"
+            except (TypeError, ValueError):
+                pass
+            return ""
+        away_record = _record_str(away_stats)
+        home_record = _record_str(home_stats)
+        st.markdown(f"**Matchup:** {away_team} @ {home_team}")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.markdown("**Away**")
+            st.markdown(f"**{away_team}**{away_record}")
+            st.caption(f"BARTHAG rank: {away_rank if away_rank is not None else '—'}")
+            st.caption(f"BARTHAG: {_num_fmt(away_barthag, 3)}")
+            st.caption(f"ADJOE: {_num_fmt(away_adjoe)} | ADJDE: {_num_fmt(away_adjde)}")
+        with col_b:
+            st.markdown("**vs**")
+            spread = game.get("market_spread")
+            st.caption(f"Market spread (home): {_num_fmt(spread, 1) if spread is not None else '—'}")
+            # Always recalculate pred_margin and edge from BARTHAG when available (ignore stale cache/CSV)
+            pred = None
+            if home_barthag is not None and away_barthag is not None:
+                try:
+                    hb = float(home_barthag)
+                    ab = float(away_barthag)
+                    if not (pd.isna(hb) or pd.isna(ab)):
+                        pred = (hb - ab) * 50
+                except (TypeError, ValueError):
+                    pass
+            if pred is None:
+                pred = game.get("pred_margin")
+            st.caption(f"Model predicted margin: {_num_fmt(pred, 1) if pred is not None else '—'}")
+            if pred is not None and spread is not None:
+                abs_spread = abs(spread)
+                edge = (pred - abs_spread) if spread < 0 else (pred + abs_spread)
+            else:
+                edge = game.get("edge_points")
+            st.caption(f"Edge (pts): {_num_fmt(edge, 1) if edge is not None else '—'}")
+            st.caption(f"Confidence: **{game.get('confidence_tier', '—')}**")
+            st.caption(f"Recommended pick: **{game.get('recommended_pick', '—')}**")
+        with col_c:
+            st.markdown("**Home**")
+            st.markdown(f"**{home_team}**{home_record}")
+            st.caption(f"BARTHAG rank: {home_rank if home_rank is not None else '—'}")
+            st.caption(f"BARTHAG: {_num_fmt(home_barthag, 3)}")
+            st.caption(f"ADJOE: {_num_fmt(home_adjoe)} | ADJDE: {_num_fmt(home_adjde)}")
+        # Model Verdict: green if we like home, orange if we like away; pick + reasoning in large text
+        pick_team = game.get("recommended_pick") or ""
+        like_home = pick_team.strip().lower() == home_team.strip().lower() or (home_team and pick_team and home_team.strip().lower() in pick_team.strip().lower())
+        verdict_bg = "#1b5e20" if like_home else "#e65100"
+        verdict_label = "Home" if like_home else "Away"
+        # Use recalculated edge in reason when available so verdict is consistent with vs column
+        if edge is not None and home_barthag is not None and away_barthag is not None:
+            try:
+                hb = float(home_barthag)
+                ab = float(away_barthag)
+                if not (pd.isna(hb) or pd.isna(ab)):
+                    reason_text = f"Model favors {pick_team} — Edge {edge:+.1f} pts. KenPom: {home_team} (BARTHAG {hb:.3f}) vs {away_team} ({ab:.3f}). Stronger profile by {abs(hb - ab):.3f}."
+                else:
+                    reason_text = (game.get("reason") or "Model favors this side.").strip()
+            except (TypeError, ValueError):
+                reason_text = (game.get("reason") or "Model favors this side.").strip()
+        else:
+            reason_text = (game.get("reason") or "Model favors this side.").strip()
+        reason_escaped = reason_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        pick_escaped = (pick_team or "—").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        verdict_html = (
+            f'<div style="background:{verdict_bg}; color:white; padding:1rem 1.25rem; border-radius:8px; margin:1rem 0;">'
+            f'<div style="font-size:0.85rem; opacity:0.9; margin-bottom:0.35rem;">Model Verdict — {verdict_label}</div>'
+            f'<div style="font-size:1.5rem; font-weight:700; margin-bottom:0.5rem;">{pick_escaped}</div>'
+            f'<div style="font-size:1.05rem; line-height:1.45; opacity:0.95;">{reason_escaped}</div>'
+            f'</div>'
+        )
+        st.markdown(verdict_html, unsafe_allow_html=True)
+        h_b = float(home_barthag) if home_barthag is not None and not (isinstance(home_barthag, float) and pd.isna(home_barthag)) else 0.0
+        a_b = float(away_barthag) if away_barthag is not None and not (isinstance(away_barthag, float) and pd.isna(away_barthag)) else 0.0
+        if (h_b > 0 or a_b > 0) and (home_team or away_team):
+            away_label = f"{away_team} (Away)"
+            home_label = f"{home_team} (Home)"
+            x_away = round(a_b * 100, 1)
+            x_home = round(h_b * 100, 1)
+            fig = go.Figure()
+            # Use numeric y (0, 1) so both bars always render; label via ticktext
+            fig.add_trace(go.Bar(
+                y=[0, 1],
+                x=[x_away, x_home],
+                orientation="h",
+                marker_color=["steelblue", "darkorange"],
+                text=[f"{away_team} ({x_away})", f"{home_team} ({x_home})"],
+                textposition="outside",
+            ))
+            fig.update_layout(
+                title="BARTHAG comparison (longer = stronger team)",
+                xaxis_title="BARTHAG (%)",
+                height=140,
+                margin=dict(l=100, t=40, b=40),
+                xaxis=dict(range=[0, 105]),
+                yaxis=dict(
+                    tickvals=[0, 1],
+                    ticktext=[away_label, home_label],
+                    range=[-0.6, 1.6],
+                ),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        # KenPom Stats comparison table: Home and Away as row headers, ADJOE, ADJDE, BARTHAG, ADJ_T as columns
+        st.markdown("**KenPom Stats**")
+        kp_cols = ["ADJOE", "ADJDE", "BARTHAG", "ADJ_T"]
+        kp_data = []
+        for label, stats_row in [("Away", away_stats), ("Home", home_stats)]:
+            if stats_row is not None:
+                row = {"": f"{away_team} (Away)" if label == "Away" else f"{home_team} (Home)"}
+                for c in kp_cols:
+                    if c in stats_row.index:
+                        v = stats_row.get(c)
+                        if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                            row[c] = f"{float(v):.2f}"
+                        else:
+                            row[c] = "—"
+                    else:
+                        row[c] = "—"
+                kp_data.append(row)
+        if kp_data:
+            kp_df = pd.DataFrame(kp_data)
+            st.dataframe(kp_df.set_index(""), use_container_width=True, hide_index=True)
+        st.markdown("---")
+        st.markdown("**Head to Head**")
+        h2h = _get_head_to_head(home_team, away_team)
+        if not h2h.empty:
+            st.caption("Meetings this season (from espn.db):")
+            st.dataframe(h2h, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No prior meetings this season in our database, or espn.db not available.")
+    else:
+        if search_query and search_query.strip():
+            team_row = _find_team_in_stats(team_stats_2026, search_query.strip())
+            if team_row is not None:
+                st.info(f"No game today for **{search_query.strip()}**. Showing season stats from team_stats_2026.")
+                st.markdown(f"**{team_row.get('TEAM', '—')}** (season {team_row.get('season', '—')})")
+                disp_cols = ["CONF", "G", "W", "ADJOE", "ADJDE", "BARTHAG", "ADJ_T", "WAB"]
+                show = [c for c in disp_cols if c in team_row.index]
+                if show:
+                    st.dataframe(pd.DataFrame([team_row[show]]), use_container_width=True, hide_index=True)
+                rank = _rank_map.get(str(team_row.get("TEAM", "")).strip())
+                if rank is not None:
+                    st.caption(f"BARTHAG rank: {rank}")
+            else:
+                st.warning(f"No game today and no team matching **{search_query.strip()}** in team_stats_2026.")
+        else:
+            st.caption("Enter a team name above to find today's game or view season stats.")
 
 with tab_nba:
     st.subheader("NBA — Coming Soon")

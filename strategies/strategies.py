@@ -388,14 +388,20 @@ def spread_cover_prob_from_margins(
     k: float = 0.35,
 ) -> float:
     """
-    P(cover) for the spread using a logistic in point difference (same idea as predict_spread_prob).
+    P(cover) for the spread from pred_margin vs market_spread, scaled by edge so probabilities
+    are realistic (e.g. edge 3 pts ~57%%, edge 8 pts ~70%%, not 98%%).
     pred_margin = home - away (positive = home wins by X). market_spread = home spread (negative = home favored).
-    diff = pred_margin - market_spread: positive means model likes home to cover vs market.
-    prob_home_cover = 1 / (1 + exp(-k * diff)); then map to our side via we_cover_favorite and home_favored.
+    Edge for home cover: when home favored (spread < 0), edge = pred_margin - abs(spread); when away favored, edge = pred_margin + abs(spread).
+    prob_home_cover = 0.5 + 0.28 * (1 - exp(-edge/8)), then map to our side via we_cover_favorite and home_favored.
     Returns value in [0.02, 0.98].
     """
-    diff = pred_margin - market_spread
-    prob_home_cover = 1.0 / (1.0 + math.exp(-k * diff))
+    abs_spread = abs(market_spread)
+    if market_spread < 0:
+        edge_home_cover = pred_margin - abs_spread
+    else:
+        edge_home_cover = pred_margin + abs_spread
+    # Softer curve: ~57% at 3 pts edge, ~70% at 8 pts (avoid 98% for everything)
+    prob_home_cover = 0.5 + 0.28 * (1.0 - math.exp(-edge_home_cover / 8.0))
     home_favored = market_spread <= 0
     if we_cover_favorite:
         raw = prob_home_cover if home_favored else (1.0 - prob_home_cover)

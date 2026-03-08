@@ -29,21 +29,28 @@ KENPOM_STAT_COLUMNS = ["ADJOE", "ADJDE", "BARTHAG", "EFG_O", "EFG_D", "TOR", "TO
 ODDS_TO_STATS_NAME: dict[str, str] = {
     "FGCU": "Florida Gulf Coast",
     "Central Ark": "Central Arkansas",
+    "NW State": "Northwestern St.",
+    "Nicholls": "Nicholls St.",
+    "W. Carolina": "Western Carolina",
+    "Queens Charlotte": "Queens",
+    "Ga. Southern": "Georgia Southern",
+    "Boston U": "Boston University",
 }
 
-# Value play: only when |edge| > this (pts). Pick Home if edge > 3, Away if edge < -3, skip if |edge| <= 3.
+# Value play: only when |edge| > this (pts). Pick Home if edge > 3 (model thinks home does better than spread), Away if edge < -3, skip if |edge| <= 3.
 VALUE_PLAY_THRESHOLD = 3.0
 # Confidence: High = |edge| > 7, Medium = 3 < |edge| <= 7, Low = |edge| <= 3
 EDGE_HIGH_CONFIDENCE = 7.0
-# BARTHAG-based margin: pred_margin = (home_BARTHAG - away_BARTHAG) * this (0.1 diff = 3 pts)
-BARTHAG_TO_POINTS_SCALE = 30.0
+# BARTHAG-based margin: pred_margin = (home_BARTHAG - away_BARTHAG) * this (research: 50-60 maps better to actual margins)
+BARTHAG_TO_POINTS_SCALE = 50.0
 # Rebounding: ⭐ when recommended side has ROff advantage over opponent > this
 ROFF_ADVANTAGE_THRESHOLD = 3.0
-# Reliability: if away BARTHAG > home BARTHAG + this, flag as low reliability and exclude from value plays
+# Reliability: if away BARTHAG > home BARTHAG + this, flag as low reliability (temporarily not excluding)
 BARTHAG_MISMATCH_THRESHOLD = 0.25
 LOW_RELIABILITY_FLAG = "Low Reliability - Large KenPom Mismatch"
-# Diversity: max share of value plays that can be Home picks (remainder Away)
-VALUE_PLAY_MAX_HOME_RATIO = 0.70
+# Diversity: max share of value plays that can be Home picks; min floor so Home has at least this share
+VALUE_PLAY_MAX_HOME_RATIO = 0.60
+VALUE_PLAY_MIN_HOME_RATIO = 0.30
 # Use 2026 in dates to match stats database
 ODDS_YEAR = 2026
 
@@ -264,7 +271,7 @@ def main() -> None:
     )
     from engine.engine import get_team_power_ratings, get_nba_team_pace_stats, NBA_LEAGUE_AVG_PACE, NBA_LEAGUE_AVG_OFF_RATING
     NCAAB_DEFAULT_RATING = (NBA_LEAGUE_AVG_PACE * NBA_LEAGUE_AVG_OFF_RATING) / 100.0
-    from strategies.strategies import implied_probability_no_vig
+    from strategies.strategies import implied_probability_no_vig, spread_cover_prob_from_margins
     # Use date from odds filename (e.g. March_08_2026_Odds.csv -> 2026-03-08) so saved plays match the slate
     game_date = _game_date_from_odds_path(path)
     season = game_season_from_date(game_date) or ODDS_YEAR
@@ -327,8 +334,15 @@ def main() -> None:
                 pred_margin = (float(h_b) - float(a_b)) * BARTHAG_TO_POINTS_SCALE
             except (TypeError, ValueError):
                 pass
-        # Edge = pred_margin - market_spread. Positive = Home covers, negative = Away covers.
-        edge_pts = (pred_margin - market_spread) if pred_margin is not None else None
+        # Edge: compare pred_margin to required margin. Home favored (spread < 0): required = abs(spread), edge = pred_margin - abs(spread). Away favored (spread > 0): edge = pred_margin + abs(spread). If edge > 3 → Home covers; if edge < -3 → Away covers.
+        if pred_margin is not None:
+            abs_spread = abs(market_spread)
+            if market_spread < 0:
+                edge_pts = pred_margin - abs_spread
+            else:
+                edge_pts = pred_margin + abs_spread
+        else:
+            edge_pts = None
         # Pick: Home if edge > 3, Away if edge < -3, Skip if |edge| <= 3
         if edge_pts is not None:
             if edge_pts > VALUE_PLAY_THRESHOLD:
@@ -347,6 +361,9 @@ def main() -> None:
             away_r = power_ratings.get(away, default_rating)
             in_house_spread = (home_r - away_r) / 100.0
         spread_prob, spread_ok = consensus_spread(feature_row, spread, we_cover_favorite, in_house_spread, 0.5, league="ncaab") if feature_row is not None else (0.5, True)
+        if pred_margin is not None:
+            we_pick_favorite = (pick_spread == "Home" and market_spread <= 0) or (pick_spread == "Away" and market_spread > 0)
+            spread_prob = spread_cover_prob_from_margins(pred_margin, market_spread, we_pick_favorite)
         over_prob, tot_ok = consensus_totals(feature_row, total, True, total, "ncaab", 0.5) if feature_row is not None and total else (0.5, True)
         under_prob = 1.0 - over_prob if total else 0.5
         if edge_pts is not None:
@@ -392,6 +409,8 @@ def main() -> None:
         results.append({
             "Home": home,
             "Away": away,
+            "Home_Raw": home_raw,
+            "Away_Raw": away_raw,
             "Home_BARTHAG": float(h_b) if h_b is not None and pd.notna(h_b) else None,
             "Away_BARTHAG": float(a_b) if a_b is not None and pd.notna(a_b) else None,
             "Market_Spread": market_spread,
@@ -410,33 +429,52 @@ def main() -> None:
             "Reliability_Flag": reliability_flag,
         })
     value_plays_raw = [r for r in results if r["Is_Value_Play"]]
-    value_plays = [r for r in value_plays_raw if not r.get("Reliability_Flag")]
-    filtered_mismatch = len(value_plays_raw) - len(value_plays)
+    value_plays = value_plays_raw
+    filtered_mismatch = 0
     n_after_reliability = len(value_plays)
-    # Diversity: cap Home picks at 70%; sort by edge and take top Home up to cap + all Away
     if value_plays:
         home_plays = sorted([r for r in value_plays if r["Pick_Spread"] == "Home"], key=lambda x: abs(x.get("Edge") or 0), reverse=True)
         away_plays = sorted([r for r in value_plays if r["Pick_Spread"] == "Away"], key=lambda x: abs(x.get("Edge") or 0), reverse=True)
         n_total = len(value_plays)
-        max_home = int(VALUE_PLAY_MAX_HOME_RATIO * n_total)
+        max_home = max(1, int(VALUE_PLAY_MAX_HOME_RATIO * n_total))
         if len(home_plays) > max_home:
             value_plays = home_plays[:max_home] + away_plays
-            value_plays = sorted(value_plays, key=lambda x: abs(x.get("Edge") or 0), reverse=True)
         else:
-            value_plays = sorted(value_plays, key=lambda x: abs(x.get("Edge") or 0), reverse=True)
+            value_plays = home_plays + away_plays
+        value_plays = sorted(value_plays, key=lambda x: abs(x.get("Edge") or 0), reverse=True)
         n_home = sum(1 for r in value_plays if r["Pick_Spread"] == "Home")
+        n_total_after = len(value_plays)
+        min_home = max(1, (n_total_after * 30 + 99) // 100)
+        if n_home < min_home and len(home_plays) > n_home:
+            in_set = {(r["Home"], r["Away"]) for r in value_plays}
+            need = min_home - n_home
+            extra_home = [p for p in home_plays if (p["Home"], p["Away"]) not in in_set][:need]
+            if extra_home:
+                value_plays = value_plays + extra_home
+                value_plays = sorted(value_plays, key=lambda x: abs(x.get("Edge") or 0), reverse=True)
+            n_home = sum(1 for r in value_plays if r["Pick_Spread"] == "Home")
         n_away = len(value_plays) - n_home
         pct_home = (100.0 * n_home / len(value_plays)) if value_plays else 0
-        print(f"Value plays after diversity (max {int(VALUE_PLAY_MAX_HOME_RATIO*100)}% Home): {n_home} Home / {n_away} Away  ({pct_home:.0f}% Home).")
+        print(f"Value plays after diversity (max {int(VALUE_PLAY_MAX_HOME_RATIO*100)}% Home, min {int(VALUE_PLAY_MIN_HOME_RATIO*100)}% Home): {n_home} Home / {n_away} Away  ({pct_home:.0f}% Home).")
         print(f"Final Home vs Away ratio: {n_home} / {n_away}  ({pct_home:.0f}% Home).")
     value_plays_set = {(r["Home"], r["Away"]) for r in value_plays} if value_plays else set()
     high_confidence = [r for r in results if r.get("Confidence") == "High" and not r.get("Reliability_Flag")]
-    print(f"Loaded: {path.name} ({len(results)} games)  |  Value plays (|edge| > {VALUE_PLAY_THRESHOLD} pts): {len(value_plays_raw)}  |  After reliability filter: {n_after_reliability}  |  After diversity: {len(value_plays)}  |  High confidence: {len(high_confidence)}")
-    if filtered_mismatch:
-        print(f"Filtered out {filtered_mismatch} game(s) as '{LOW_RELIABILITY_FLAG}' (away BARTHAG > home BARTHAG + {BARTHAG_MISMATCH_THRESHOLD}).")
+    print(f"Loaded: {path.name} ({len(results)} games)  |  Value plays (|edge| > {VALUE_PLAY_THRESHOLD} pts): {len(value_plays_raw)}  |  After diversity: {len(value_plays)}  |  High confidence: {len(high_confidence)}")
     print(f"Games using KenPom (BARTHAG): {used_kenpom}  |  Fallback (Stats N/A): {used_fallback}\n")
+    # Team name lookup: odds file name -> matched name used for stats (verify no wrong matches)
+    print("Team name lookup (odds -> stats) — ALL games from odds file")
+    print("-" * 95)
+    print(f"{'Odds Home':<28} -> {'Matched Home':<28} | {'Odds Away':<28} -> {'Matched Away':<28}")
+    print("-" * 95)
+    for r in results:
+        h_raw = r.get("Home_Raw", "")
+        a_raw = r.get("Away_Raw", "")
+        h_mat = r.get("Home", "")
+        a_mat = r.get("Away", "")
+        print(f"{h_raw:<28} -> {h_mat:<28} | {a_raw:<28} -> {a_mat:<28}")
+    print("-" * 95)
     # BARTHAG by game: Home vs Away so we can see if home is genuinely better in most games
-    print("BARTHAG by game (today's slate)")
+    print("\nBARTHAG by game (today's slate) — ALL games")
     print("-" * 80)
     print(f"{'Game':<45} | {'Home BARTHAG':>12} | {'Away BARTHAG':>12} | Who is better")
     print("-" * 80)
@@ -457,6 +495,26 @@ def main() -> None:
             who = "N/A"
         print(f"{game:<45} | {h_str:>12} | {a_str:>12} | {who}")
     print("-" * 80)
+    # Full diagnostic: Home_BARTHAG, Away_BARTHAG, market_spread, pred_margin, edge, pick — ALL games including Skip
+    print("\nBARTHAG + margin + edge + pick — ALL games from odds file (including Skip)")
+    print("-" * 115)
+    print(f"{'Game':<38} | {'H_BARTHAG':>9} | {'A_BARTHAG':>9} | {'Spread':>7} | {'Pred':>6} | {'Edge':>6} | Pick")
+    print("-" * 115)
+    for r in results:
+        game = f"{r['Away']} @ {r['Home']}"
+        h_b = r.get("Home_BARTHAG")
+        a_b = r.get("Away_BARTHAG")
+        h_str = f"{h_b:.3f}" if h_b is not None else "—"
+        a_str = f"{a_b:.3f}" if a_b is not None else "—"
+        spread = r.get("Market_Spread")
+        spread_s = f"{spread:+.1f}" if spread is not None else "—"
+        pred = r.get("Pred_Margin")
+        pred_s = f"{pred:+.1f}" if pred is not None else "—"
+        edge = r.get("Edge")
+        edge_s = f"{edge:+.1f}" if edge is not None else "—"
+        pick = r.get("Pick_Spread", "Skip")
+        print(f"{game:<38} | {h_str:>9} | {a_str:>9} | {spread_s:>7} | {pred_s:>6} | {edge_s:>6} | {pick}")
+    print("-" * 115)
     # Debug: games where away has better BARTHAG — show pred_margin and pick
     _away_better_home_pick_games = [
         ("Colgate", "Lehigh"),
@@ -492,7 +550,7 @@ def main() -> None:
         print(f"  Market (home): {r['Market_Spread']:+.1f}   Pred (home): {pm}   Edge: {edge_str} pts   Confidence: {r['Confidence']}   P(cover): {r['Spread_Prob']:.2f}  → {pick_str}{reliability_note}")
         print(f"  Total: {r['Over_Under']:.1f}  P(Over): {r['Over_Prob']:.2f}  → {r['Pick_Total']}\n")
     if value_plays:
-        header = "--- Value Plays Summary (|edge| > 3 pts)" + (" — remaining after reliability filter ---" if filtered_mismatch else " ---")
+        header = "--- Value Plays Summary (|edge| > 3 pts) ---"
         print(header)
         for r in value_plays:
             star = " ⭐" if r.get("Rebounding_Star") else ""
