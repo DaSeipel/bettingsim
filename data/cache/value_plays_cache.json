@@ -15,8 +15,8 @@
       "home_team": "South Florida",
       "away_team": "Charlotte",
       "confidence_tier": "High",
-      "reason": "Model favors South Florida to cover the -16.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors South Florida to cover the -16.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors South Florida (-16.5) \u2014 Edge +26.5 pts. KenPom: South Florida (BARTHAG 0.817) vs Charlotte (0.485). Stronger profile by 0.332.",
+      "reasoning_summary": "Model favors South Florida (-16.5) \u2014 Edge +26.5 pts. KenPom: South Florida (BARTHAG 0.817) vs Charlotte (0.485). Stronger profile by 0.332."
     },
     {
       "League": "NCAAB",
@@ -33,8 +33,8 @@
       "home_team": "Tulsa",
       "away_team": "Temple",
       "confidence_tier": "High",
-      "reason": "Model favors Tulsa to cover the -11.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Tulsa to cover the -11.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Tulsa (-11.5) \u2014 Edge +20.0 pts. KenPom: Tulsa (BARTHAG 0.814) vs Temple (0.530). Stronger profile by 0.284.",
+      "reasoning_summary": "Model favors Tulsa (-11.5) \u2014 Edge +20.0 pts. KenPom: Tulsa (BARTHAG 0.814) vs Temple (0.530). Stronger profile by 0.284."
     },
     {
       "League": "NCAAB",
@@ -51,8 +51,8 @@
       "home_team": "Rice",
       "away_team": "UTSA",
       "confidence_tier": "High",
-      "reason": "Model favors Rice to cover the -11.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Rice to cover the -11.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Rice (-11.5) \u2014 Edge +19.6 pts. KenPom: Rice (BARTHAG 0.403) vs UTSA (0.134). Stronger profile by 0.269.",
+      "reasoning_summary": "Model favors Rice (-11.5) \u2014 Edge +19.6 pts. KenPom: Rice (BARTHAG 0.403) vs UTSA (0.134). Stronger profile by 0.269."
     },
     {
       "League": "NCAAB",
@@ -69,8 +69,8 @@
       "home_team": "UAB",
       "away_team": "East Carolina",
       "confidence_tier": "High",
-      "reason": "Model favors UAB to cover the -10.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors UAB to cover the -10.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors UAB (-10.5) \u2014 Edge +19.3 pts. KenPom: UAB (BARTHAG 0.587) vs East Carolina (0.295). Stronger profile by 0.292.",
+      "reasoning_summary": "Model favors UAB (-10.5) \u2014 Edge +19.3 pts. KenPom: UAB (BARTHAG 0.587) vs East Carolina (0.295). Stronger profile by 0.292."
     },
     {
       "League": "NCAAB",
@@ -87,8 +87,8 @@
       "home_team": "Santa Clara",
       "away_team": "Pacific",
       "confidence_tier": "High",
-      "reason": "Model favors Santa Clara to cover the -10.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Santa Clara to cover the -10.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Santa Clara (-10.5) \u2014 Edge +17.3 pts. KenPom: Santa Clara (BARTHAG 0.891) vs Pacific (0.666). Stronger profile by 0.225.",
+      "reasoning_summary": "Model favors Santa Clara (-10.5) \u2014 Edge +17.3 pts. KenPom: Santa Clara (BARTHAG 0.891) vs Pacific (0.666). Stronger profile by 0.225."
     },
     {
       "League": "NCAAB",
@@ -105,8 +105,8 @@
       "home_team": "High Point",
       "away_team": "Winthrop",
       "confidence_tier": "High",
-      "reason": "Model favors High Point to cover the -6.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors High Point to cover the -6.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors High Point (-6.5) \u2014 Edge +12.6 pts. KenPom: High Point (BARTHAG 0.695) vs Winthrop (0.493). Stronger profile by 0.202.",
+      "reasoning_summary": "Model favors High Point (-6.5) \u2014 Edge +12.6 pts. KenPom: High Point (BARTHAG 0.695) vs Winthrop (0.493). Stronger profile by 0.202."
     },
     {
       "League": "NCAAB",
@@ -123,8 +123,8 @@
       "home_team": "UNC Wilmington",
       "away_team": "Campbell",
       "confidence_tier": "High",
-      "reason": "Model favors UNC Wilmington to cover the -6.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors UNC Wilmington to cover the -6.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors UNC Wilmington (-6.5) \u2014 Edge +11.5 pts. KenPom: UNC Wilmington (BARTHAG 0.620) vs Campbell (0.455). Stronger profile by 0.165.",
+      "reasoning_summary": "Model favors UNC Wilmington (-6.5) \u2014 Edge +11.5 pts. KenPom: UNC Wilmington (BARTHAG 0.620) vs Campbell (0.455). Stronger profile by 0.165."
     },
     {
       "League": "NCAAB",
@@ -141,8 +141,8 @@
       "home_team": "Michigan",
       "away_team": "Michigan St.",
       "confidence_tier": "High",
-      "reason": "Model favors Michigan to cover the -9.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Michigan to cover the -9.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Michigan (-9.5) \u2014 Edge +10.6 pts. KenPom: Michigan (BARTHAG 0.982) vs Michigan St. (0.945). Stronger profile by 0.037.",
+      "reasoning_summary": "Model favors Michigan (-9.5) \u2014 Edge +10.6 pts. KenPom: Michigan (BARTHAG 0.982) vs Michigan St. (0.945). Stronger profile by 0.037."
     },
     {
       "League": "NCAAB",
@@ -159,8 +159,8 @@
       "home_team": "Hofstra",
       "away_team": "William & Mary",
       "confidence_tier": "High",
-      "reason": "Model favors Hofstra to cover the -4.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Hofstra to cover the -4.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Hofstra (-4.5) \u2014 Edge +8.7 pts. KenPom: Hofstra (BARTHAG 0.685) vs William & Mary (0.546). Stronger profile by 0.139.",
+      "reasoning_summary": "Model favors Hofstra (-4.5) \u2014 Edge +8.7 pts. KenPom: Hofstra (BARTHAG 0.685) vs William & Mary (0.546). Stronger profile by 0.139."
     },
     {
       "League": "NCAAB",
@@ -177,8 +177,8 @@
       "home_team": "Nebraska",
       "away_team": "Iowa",
       "confidence_tier": "High",
-      "reason": "Model favors Nebraska to cover the -6.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Nebraska to cover the -6.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Nebraska (-6.5) \u2014 Edge +7.3 pts. KenPom: Nebraska (BARTHAG 0.935) vs Iowa (0.909). Stronger profile by 0.026.",
+      "reasoning_summary": "Model favors Nebraska (-6.5) \u2014 Edge +7.3 pts. KenPom: Nebraska (BARTHAG 0.935) vs Iowa (0.909). Stronger profile by 0.026."
     },
     {
       "League": "NCAAB",
@@ -186,17 +186,17 @@
       "Selection": "Memphis",
       "Market": "Spread",
       "Odds": -110,
-      "Value (%)": 0.0,
-      "point": 1.5,
-      "Point": 1.5,
+      "Value (%)": 2.36,
+      "point": -1.5,
+      "Point": -1.5,
       "Recommended Stake": null,
       "Injury Alert": "\u2014",
       "Start Time": "Today",
       "home_team": "Tulane",
       "away_team": "Memphis",
       "confidence_tier": "High",
-      "reason": "Model favors Memphis to cover the +1.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Memphis to cover the +1.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Memphis (-1.5) \u2014 Edge -7.1 pts. KenPom: Memphis (BARTHAG 0.604) vs Tulane (0.418). Stronger profile by 0.186.",
+      "reasoning_summary": "Model favors Memphis (-1.5) \u2014 Edge -7.1 pts. KenPom: Memphis (BARTHAG 0.604) vs Tulane (0.418). Stronger profile by 0.186."
     },
     {
       "League": "NCAAB",
@@ -213,8 +213,8 @@
       "home_team": "Navy",
       "away_team": "Boston College",
       "confidence_tier": "Medium",
-      "reason": "Model favors Navy to cover the -7.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Navy to cover the -7.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Navy (-7.5) \u2014 Edge +6.9 pts. KenPom: Boston College (BARTHAG 0.561) vs Navy (0.542). Stronger profile by 0.018.",
+      "reasoning_summary": "Model favors Navy (-7.5) \u2014 Edge +6.9 pts. KenPom: Boston College (BARTHAG 0.561) vs Navy (0.542). Stronger profile by 0.018."
     },
     {
       "League": "NCAAB",
@@ -222,17 +222,17 @@
       "Selection": "San Francisco",
       "Market": "Spread",
       "Odds": -110,
-      "Value (%)": 0.0,
-      "point": 3.5,
-      "Point": 3.5,
+      "Value (%)": 2.26,
+      "point": -3.5,
+      "Point": -3.5,
       "Recommended Stake": null,
       "Injury Alert": "\u2014",
       "Start Time": "Today",
       "home_team": "Oregon St.",
       "away_team": "San Francisco",
       "confidence_tier": "Medium",
-      "reason": "Model favors San Francisco to cover the +3.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors San Francisco to cover the +3.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors San Francisco (-3.5) \u2014 Edge -6.8 pts. KenPom: San Francisco (BARTHAG 0.608) vs Oregon St. (0.499). Stronger profile by 0.109.",
+      "reasoning_summary": "Model favors San Francisco (-3.5) \u2014 Edge -6.8 pts. KenPom: San Francisco (BARTHAG 0.608) vs Oregon St. (0.499). Stronger profile by 0.109."
     },
     {
       "League": "NCAAB",
@@ -249,8 +249,8 @@
       "home_team": "Marshall",
       "away_team": "Southern",
       "confidence_tier": "Medium",
-      "reason": "Model favors Marshall to cover the -3.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Marshall to cover the -3.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Marshall (-3.5) \u2014 Edge +6.2 pts. KenPom: Marshall (BARTHAG 0.420) vs Southern (0.330). Stronger profile by 0.089.",
+      "reasoning_summary": "Model favors Marshall (-3.5) \u2014 Edge +6.2 pts. KenPom: Marshall (BARTHAG 0.420) vs Southern (0.330). Stronger profile by 0.089."
     },
     {
       "League": "NCAAB",
@@ -267,8 +267,8 @@
       "home_team": "Rutgers",
       "away_team": "Penn St.",
       "confidence_tier": "Medium",
-      "reason": "Model favors Rutgers to cover the -4.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Rutgers to cover the -4.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Rutgers (-4.5) \u2014 Edge +5.1 pts. KenPom: Rutgers (BARTHAG 0.593) vs Penn St. (0.572). Stronger profile by 0.021.",
+      "reasoning_summary": "Model favors Rutgers (-4.5) \u2014 Edge +5.1 pts. KenPom: Rutgers (BARTHAG 0.593) vs Penn St. (0.572). Stronger profile by 0.021."
     },
     {
       "League": "NCAAB",
@@ -276,24 +276,24 @@
       "Selection": "Colgate",
       "Market": "Spread",
       "Odds": -110,
-      "Value (%)": 0.0,
-      "point": 1.5,
-      "Point": 1.5,
+      "Value (%)": 1.44,
+      "point": -1.5,
+      "Point": -1.5,
       "Recommended Stake": null,
       "Injury Alert": "\u2014",
       "Start Time": "Today",
       "home_team": "Lehigh",
       "away_team": "Colgate",
       "confidence_tier": "Medium",
-      "reason": "Model favors Colgate to cover the +1.5 spread. Strong edge based on scoring margin and rebounding.",
-      "reasoning_summary": "Model favors Colgate to cover the +1.5 spread. Strong edge based on scoring margin and rebounding."
+      "reason": "Model favors Colgate (-1.5) \u2014 Edge -4.3 pts. KenPom: Colgate (BARTHAG 0.327) vs Lehigh (0.233). Stronger profile by 0.094.",
+      "reasoning_summary": "Model favors Colgate (-1.5) \u2014 Edge -4.3 pts. KenPom: Colgate (BARTHAG 0.327) vs Lehigh (0.233). Stronger profile by 0.094."
     }
   ],
   "potd_picks": {
     "NCAAB Pick 1": null,
     "NCAAB Pick 2": null
   },
-  "timestamp": "2026-03-08T17:12:59.501514+00:00",
+  "timestamp": "2026-03-08T18:14:36.454698+00:00",
   "odds_source_meta": {
     "source": "manual_odds",
     "odds_file": "March_08_2026_Odds.csv"

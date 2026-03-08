@@ -548,15 +548,35 @@ def _write_value_plays_cache(
             edge_pts_f = float(edge_pts) if edge_pts is not None else 0.0
         except (TypeError, ValueError):
             edge_pts_f = 0.0
-        value_pct = edge_pts_f / 3.0
-        value_pct = max(0.0, min(15.0, value_pct))
+        # Value % = edge magnitude for all picks (Away edges are negative; use abs so Away shows non-zero)
+        value_pct = min(15.0, abs(edge_pts_f) / 3.0)
         market_spread = r.get("Market_Spread")
         try:
             spread_f = float(market_spread) if market_spread is not None else None
         except (TypeError, ValueError):
             spread_f = None
-        spread_str = f"{spread_f:+.1f}" if spread_f is not None else "—"
-        reason = f"Model favors {selection} to cover the {spread_str} spread. Strong edge based on scoring margin and rebounding."
+        # Spread from picked team's perspective: Home = market (home line), Away = -market (away line)
+        point_picked = spread_f if pick == "Home" else (-spread_f if spread_f is not None else None)
+        point_str = f"{point_picked:+.1f}" if point_picked is not None else "—"
+        # Dynamic reasoning: edge pts, BARTHAG, which team favored by KenPom
+        h_b = r.get("Home_BARTHAG")
+        a_b = r.get("Away_BARTHAG")
+        edge_str = f"{edge_pts_f:+.1f}" if edge_pts_f is not None else "—"
+        if h_b is not None and a_b is not None and not (isinstance(h_b, float) and (h_b != h_b)) and not (isinstance(a_b, float) and (a_b != a_b)):
+            try:
+                h_val, a_val = float(h_b), float(a_b)
+                diff = abs(h_val - a_val)
+                if h_val > a_val:
+                    favored = f"{home} (BARTHAG {h_val:.3f})"
+                    underdog = f"{away} ({a_val:.3f})"
+                else:
+                    favored = f"{away} (BARTHAG {a_val:.3f})"
+                    underdog = f"{home} ({h_val:.3f})"
+                reason = f"Model favors {selection} ({point_str}) — Edge {edge_str} pts. KenPom: {favored} vs {underdog}. Stronger profile by {diff:.3f}."
+            except (TypeError, ValueError):
+                reason = f"Model favors {selection} ({point_str}) — Edge {edge_str} pts. Strong edge based on scoring margin and rebounding."
+        else:
+            reason = f"Model favors {selection} ({point_str}) — Edge {edge_str} pts. Strong edge based on scoring margin and rebounding."
         value_plays_list.append({
             "League": "NCAAB",
             "Event": f"{away} @ {home}",
@@ -564,8 +584,8 @@ def _write_value_plays_cache(
             "Market": "Spread",
             "Odds": -110,
             "Value (%)": round(value_pct, 2),
-            "point": spread_f,
-            "Point": spread_f,
+            "point": point_picked,
+            "Point": point_picked,
             "Recommended Stake": None,
             "Injury Alert": "—",
             "Start Time": "Today",
@@ -597,7 +617,7 @@ def _save_historical_performance(
     hist_path = APP_ROOT / "data" / "historical_betting_performance.csv"
     hist_path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
-        "Date", "Odds_File", "Home", "Away", "Market_Spread", "Pred_Margin", "Pick_Spread",
+        "Date", "Odds_File", "Home", "Away", "Home_BARTHAG", "Away_BARTHAG", "Market_Spread", "Pred_Margin", "Pick_Spread",
         "Confidence_Level", "Edge_Points", "Has_Rebound_Advantage", "Spread_Prob", "Over_Under", "Pick_Total",
     ]
     # Use 2026 in Odds_File display name to match stats year (e.g. March_07_2026_Odds.csv)
@@ -613,6 +633,8 @@ def _save_historical_performance(
             "Odds_File": odds_file_display,
             "Home": r["Home"],
             "Away": r["Away"],
+            "Home_BARTHAG": r.get("Home_BARTHAG"),
+            "Away_BARTHAG": r.get("Away_BARTHAG"),
             "Market_Spread": r["Market_Spread"],
             "Pred_Margin": r["Pred_Margin"],
             "Pick_Spread": r["Pick_Spread"],

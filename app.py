@@ -773,7 +773,11 @@ def _value_play_reasoning(row: pd.Series) -> str:
     """
     One or two sentence plain-English reasoning from model feature context: rest/B2B, home court, market type, injury.
     Uses home_team, away_team, is_home_b2b, is_away_b2b, Market, Selection, and optional injury flags.
+    If the row has reason or reasoning_summary (e.g. from NCAAB manual-odds cache), use that so dynamic KenPom/BARTHAG text is shown.
     """
+    reason = row.get("reason") or row.get("reasoning_summary")
+    if reason is not None and str(reason).strip():
+        return str(reason).strip()
     home = str(row.get("home_team", "")).strip()
     away = str(row.get("away_team", "")).strip()
     selection = str(row.get("Selection", "")).strip()
@@ -1941,9 +1945,21 @@ def _potd_from_historical_csv(df_today: pd.DataFrame) -> dict:
     return result
 
 
+def _generic_potd_reason(selection: str, market_spread: Optional[float], pick_side: str) -> str:
+    """Fallback POTD reason when BARTHAG columns are missing."""
+    if market_spread is not None and pick_side == "Away":
+        spread_from_pick = -market_spread
+    else:
+        spread_from_pick = market_spread
+    spread_str = f"{spread_from_pick:+.1f}" if spread_from_pick is not None else None
+    if spread_str:
+        return f"Model favors {selection} to cover the {spread_str} spread. Strong edge detected based on scoring margin and rebounding advantage."
+    return f"Model favors {selection}. Strong edge detected based on scoring margin and rebounding advantage."
+
+
 def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
     """Convert one historical_betting_performance.csv row to POTD card dict.
-    Edge = Edge_Points / 3 (capped at 15%), since Pred_Margin and Market_Spread come from incompatible models."""
+    Edge = Edge_Points / 3 (capped at 15%). Builds dynamic reasoning from BARTHAG, edge, and market spread when available."""
     home = str(row.get("Home", "")).strip()
     away = str(row.get("Away", "")).strip()
     pick_side = str(row.get("Pick_Spread", "Home")).strip()
@@ -1954,20 +1970,26 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
     except (TypeError, ValueError):
         edge_pct = 0.0
     edge_pct = max(0.0, min(15.0, edge_pct))
-    # Human-readable reason: team name, spread from pick's perspective, no raw model numbers
     try:
         ms = float(row.get("Market_Spread")) if row.get("Market_Spread") is not None and pd.notna(row.get("Market_Spread")) else None
     except (TypeError, ValueError):
         ms = None
-    if ms is not None and pick_side == "Away":
-        spread_from_pick = -ms  # away spread = opposite of home spread
+    # Dynamic reasoning from BARTHAG, edge, market spread (fallback to generic if BARTHAG missing)
+    h_b = row.get("Home_BARTHAG")
+    a_b = row.get("Away_BARTHAG")
+    if h_b is not None and a_b is not None and not (isinstance(h_b, float) and pd.isna(h_b)) and not (isinstance(a_b, float) and pd.isna(a_b)):
+        try:
+            h_val = float(h_b)
+            a_val = float(a_b)
+            gap = abs(h_val - a_val)
+            favored = home if h_val > a_val else away
+            edge_str = f"{float(edge_pts):+.1f}" if edge_pts is not None and pd.notna(edge_pts) else "—"
+            ms_str = f"{ms:+.1f}" if ms is not None else "—"
+            reason = f"{home} (BARTHAG {h_val:.3f}) hosts {away} (BARTHAG {a_val:.3f}). Model sees a {gap:.3f} KenPom gap favoring {favored}. Edge of {edge_str} pts vs market spread of {ms_str}."
+        except (TypeError, ValueError):
+            reason = _generic_potd_reason(selection, ms, pick_side)
     else:
-        spread_from_pick = ms
-    spread_str = f"{spread_from_pick:+.1f}" if spread_from_pick is not None else None
-    if spread_str:
-        reason = f"Model favors {selection} to cover the {spread_str} spread. Strong edge detected based on scoring margin and rebounding advantage."
-    else:
-        reason = f"Model favors {selection}. Strong edge detected based on scoring margin and rebounding advantage."
+        reason = _generic_potd_reason(selection, ms, pick_side)
     return {
         "League": label,
         "Event": f"{away} @ {home}",
@@ -2294,32 +2316,26 @@ with tab_overview:
 
     # ——— All Value Plays (card list, filters, low-volume warning) ———
     st.subheader("All Value Plays")
-    st.caption("Every game today where the model found edge. One best play per game. Sorted by edge %.")
+    st.caption("Today's best NCAAB value plays sorted by edge. Powered by KenPom BARTHAG ratings.")
     if (odds_api_key or "").strip():
-        _ref_col, _clear_col, _ = st.columns([1, 1, 3])
-        with _ref_col:
-            if st.button("Refresh", key="overview_refresh", help="Run the value-plays pipeline and reload cache; page will rerun so new data is visible"):
-                _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
-                env = os.environ.copy()
-                env["ODDS_API_KEY"] = (odds_api_key or "").strip()
-                try:
-                    subprocess.run(
-                        [sys.executable, str(_script)],
-                        cwd=str(Path(__file__).resolve().parent),
-                        env=env,
-                        timeout=300,
-                        check=False,
-                    )
-                except subprocess.TimeoutExpired:
-                    st.error("Pipeline timed out after 5 minutes.")
-                except Exception as e:
-                    st.error(f"Pipeline error: {e}")
-                # Force full rerun so cache and historical CSV are re-read and UI updates
-                st.rerun()
-        with _clear_col:
-            if st.button("Clear cache", key="overview_clear_cache", help="Purge all cached data (odds, features, play history) so the next load uses fresh data. Use after fixing signage or pipeline."):
-                st.cache_data.clear()
-                st.rerun()
+        if st.button("Refresh", key="overview_refresh", help="Run the value-plays pipeline and reload cache; page will rerun so new data is visible"):
+            _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
+            env = os.environ.copy()
+            env["ODDS_API_KEY"] = (odds_api_key or "").strip()
+            try:
+                subprocess.run(
+                    [sys.executable, str(_script)],
+                    cwd=str(Path(__file__).resolve().parent),
+                    env=env,
+                    timeout=300,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                st.error("Pipeline timed out after 5 minutes.")
+            except Exception as e:
+                st.error(f"Pipeline error: {e}")
+            # Force full rerun so cache and historical CSV are re-read and UI updates
+            st.rerun()
     if value_plays_flagged_count > 0:
         st.warning(f"**Potential Data Error:** {value_plays_flagged_count} play(s) had Value % ≥ 15% and were excluded.")
 
@@ -2343,15 +2359,37 @@ with tab_overview:
     if not _historical_picks_df.empty:
         _disp = _historical_picks_df.copy()
         _disp["Event"] = _disp.apply(lambda r: f"{str(r.get('Away', '')).strip()} @ {str(r.get('Home', '')).strip()}", axis=1)
-        _disp["Selection"] = _disp["Pick_Spread"].apply(lambda x: str(x).strip() if pd.notna(x) else "")
+        # Selection = actual team name (from cache/CSV: Home or Away per Pick_Spread)
+        _disp["Selection"] = _disp.apply(
+            lambda r: str(r.get("Home", "")).strip() if str(r.get("Pick_Spread", "")).strip() == "Home" else str(r.get("Away", "")).strip(),
+            axis=1,
+        )
+        # Pick = team name + spread from picked team's perspective, e.g. "South Florida -16.5"
+        def _pick_with_spread(r):
+            sel = str(r.get("Selection", "")).strip()
+            ms = r.get("Market_Spread")
+            if ms is None or (isinstance(ms, float) and pd.isna(ms)):
+                return sel
+            try:
+                spread = float(ms)
+            except (TypeError, ValueError):
+                return sel
+            # Spread from picked team: home line if Home pick, else -home (away line)
+            pick_spread = spread if str(r.get("Pick_Spread", "")).strip() == "Home" else -spread
+            return f"{sel} {pick_spread:+.1f}"
+        _disp["Pick"] = _disp.apply(_pick_with_spread, axis=1)
         if "Edge_Points" in _disp.columns:
             _disp["Value (%)"] = (_disp["Edge_Points"] / 3.0).clip(0, 15)
         _disp = _disp[_disp["Value (%)"] >= min_edge] if "Value (%)" in _disp.columns else _disp
-        _cols_show = ["Event", "Selection", "Market_Spread", "Edge_Points", "Confidence_Level"]
+        # Edge pts rounded to 1 decimal for display
+        if "Edge_Points" in _disp.columns:
+            _disp = _disp.copy()
+            _disp["Edge_Points"] = _disp["Edge_Points"].round(1)
+        _cols_show = ["Event", "Pick", "Edge_Points", "Confidence_Level"]
         _cols_show = [c for c in _cols_show if c in _disp.columns]
         if _cols_show:
             st.caption(f"Slate for **{_selected_slate_date}** — {len(_disp)} play(s) (min edge {min_edge}%).")
-            st.dataframe(_disp[_cols_show].rename(columns={"Market_Spread": "Spread", "Edge_Points": "Edge pts", "Confidence_Level": "Confidence"}), use_container_width=True, hide_index=True)
+            st.dataframe(_disp[_cols_show].rename(columns={"Edge_Points": "Edge pts", "Confidence_Level": "Confidence"}), use_container_width=True, hide_index=True)
     elif not value_plays_df.empty:
         # Filter by min edge and league; one best play per game; then correlated filter (max 10, no team twice)
         # March Madness mode: NCAAB plays must have at least 5% edge
@@ -2414,7 +2452,7 @@ with tab_overview:
 
 with tab_ncaab:
     st.subheader("NCAAB")
-    st.caption("College basketball value plays from the same model: in-house line (power ratings), key numbers, fractional Kelly half-units.")
+    st.caption("Today's NCAAB value plays ranked by edge. Picks powered by KenPom BARTHAG ratings.")
     if (odds_api_key or "").strip():
         if st.button("Refresh", key="ncaab_refresh", help="Run the value-plays pipeline and reload cache"):
             _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
@@ -2474,7 +2512,10 @@ with tab_ncaab:
         _vp["March context"] = _vp.apply(_march_context_badges, axis=1)
         if march_madness_mode:
             _vp["Tournament Context"] = _vp.apply(lambda r: "Yes" if _is_top_seed_play(r) else "", axis=1)
-        st.dataframe(_vp.rename(columns={"Event": "Game"}), use_container_width=True, hide_index=True)
+        # Display table: only Point (spread from picked team), drop duplicate point and internal columns
+        _cols_drop = ["point", "League", "Injury Alert", "home_team", "away_team", "March context", "Tournament Context", "Market (home)"]
+        _vp_display = _vp.drop(columns=[c for c in _cols_drop if c in _vp.columns])
+        st.dataframe(_vp_display.rename(columns={"Event": "Game", "confidence_tier": "Confidence"}), use_container_width=True, hide_index=True)
     else:
         if (odds_api_key or "").strip():
             st.info("No NCAAB games for today from the Odds API, or no value plays with 3% ≤ Value % < 15%. Try again later or use Refresh.")
