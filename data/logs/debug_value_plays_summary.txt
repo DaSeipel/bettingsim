@@ -1,0 +1,46 @@
+DEBUG_VALUE_PLAYS=1 run — first 20 debug lines (raw edges before filtering)
+================================================================================
+
+[DEBUG_VALUE_PLAYS] Thresholds: min_ev_pct=3.0%, max_ev_pct=15.0%, MIN_BOOKMAKERS_VALUE_PLAY=3 (effective=3)
+[DEBUG_VALUE_PLAYS] DEBUG_RELAX_FILTERS=None (consensus disabled=False)
+[DEBUG] RAW_EDGE: NCAAB | Stanford Cardinal @ NC State Wolfpack | h2h | NC State Wolfpack | model_prob=0.500 implied_prob=0.768 raw_edge_pct=-36.11%
+[DEBUG] RAW_EDGE: NCAAB | Stanford Cardinal @ NC State Wolfpack | h2h | Stanford Cardinal | model_prob=0.500 implied_prob=0.232 raw_edge_pct=117.00%
+[DEBUG] RAW_EDGE: NCAAB | Stanford Cardinal @ NC State Wolfpack | spreads | NC State Wolfpack | model_prob=0.580 implied_prob=0.491 raw_edge_pct=15.43%
+[DEBUG] RAW_EDGE: NCAAB | Stanford Cardinal @ NC State Wolfpack | spreads | NC State Wolfpack | model_prob=0.580 implied_prob=0.506 raw_edge_pct=10.73%
+[DEBUG] PASS: NCAAB | Stanford Cardinal @ NC State Wolfpack | spreads | NC State Wolfpack | edge=10.73% stake=30.0
+[DEBUG] RAW_EDGE: NCAAB | Stanford Cardinal @ NC State Wolfpack | spreads | Stanford Cardinal | model_prob=0.450 implied_prob=0.498 raw_edge_pct=-12.14%
+[DEBUG] RAW_EDGE: NCAAB | Stanford Cardinal @ NC State Wolfpack | spreads | Stanford Cardinal | model_prob=0.450 implied_prob=0.506 raw_edge_pct=-14.09%
+[DEBUG] SKIP no_consensus: NCAAB | Stanford Cardinal @ NC State Wolfpack | totals | Over 152.0 (model_prob=0.620)
+[DEBUG] SKIP no_consensus: NCAAB | Stanford Cardinal @ NC State Wolfpack | totals | Over 152.5 (model_prob=0.620)
+[DEBUG] SKIP bookmakers<3: NCAAB | Stanford Cardinal @ NC State Wolfpack | totals | Over 153.5 (books=1)
+[DEBUG] SKIP no_consensus: NCAAB | Stanford Cardinal @ NC State Wolfpack | totals | Under 152.0 (model_prob=0.450)
+[DEBUG] SKIP no_consensus: NCAAB | Stanford Cardinal @ NC State Wolfpack | totals | Under 152.5 (model_prob=0.450)
+[DEBUG] SKIP bookmakers<3: NCAAB | Stanford Cardinal @ NC State Wolfpack | totals | Under 153.5 (books=1)
+[DEBUG] RAW_EDGE: NCAAB | Northern Arizona Lumberjacks @ Idaho State Bengals | h2h | Idaho State Bengals | model_prob=0.500 implied_prob=0.636 raw_edge_pct=-23.68%
+[DEBUG] RAW_EDGE: NCAAB | Northern Arizona Lumberjacks @ Idaho State Bengals | h2h | Northern Arizona Lumberjacks | model_prob=0.500 implied_prob=0.360 raw_edge_pct=35.00%
+[DEBUG] RAW_EDGE: NCAAB | Northern Arizona Lumberjacks @ Idaho State Bengals | spreads | Idaho State Bengals | model_prob=0.540 implied_prob=0.501 raw_edge_pct=4.94%
+[DEBUG] PASS: NCAAB | Northern Arizona Lumberjacks @ Idaho State Bengals | spreads | Idaho State Bengals | edge=4.94% stake=30.0
+[DEBUG] RAW_EDGE: NCAAB | Northern Arizona Lumberjacks @ Idaho State Bengals | spreads | Northern Arizona Lumberjacks | model_prob=0.450 implied_prob=0.499 raw_edge_pct=-12.14%
+[DEBUG] SKIP bookmakers<3: NCAAB | Northern Arizona Lumberjacks @ Idaho State Bengals | totals | Over 141.5 (books=1)
+[DEBUG] SKIP no_consensus: NCAAB | Northern Arizona Lumberjacks @ Idaho State Bengals | totals | Over 143.0 (model_prob=0.620)
+
+Exact skip reason counts (normal filters: min_books=3, consensus on)
+====================================================================
+aggregated_rows=1014
+skip_bookmakers=332
+skip_odds=0
+skip_high_risk=0
+skip_no_consensus=220
+below_min_ev=259
+above_max_ev=105
+skip_stake=0
+PASSED=98
+
+With relaxed filters (min_books=1, consensus disabled via DEBUG_RELAX_FILTERS=1)
+===============================================================================
+aggregated_rows=1108
+skip_bookmakers=0
+skip_no_consensus=0
+below_min_ev=628
+above_max_ev=320
+PASSED=160

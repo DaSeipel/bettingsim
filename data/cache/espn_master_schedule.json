@@ -1,0 +1,465 @@
+{
+  "date": "2026-03-07",
+  "matchups": [
+    {
+      "game_id": "401827726",
+      "home_team": "Iowa State Cyclones",
+      "away_team": "Arizona State Sun Devils"
+    },
+    {
+      "game_id": "401827727",
+      "home_team": "Kansas Jayhawks",
+      "away_team": "Kansas State Wildcats"
+    },
+    {
+      "game_id": "401820790",
+      "home_team": "Miami Hurricanes",
+      "away_team": "Louisville Cardinals"
+    },
+    {
+      "game_id": "401808286",
+      "home_team": "Tennessee Volunteers",
+      "away_team": "Vanderbilt Commodores"
+    },
+    {
+      "game_id": "401851519",
+      "home_team": "Long Island University Sharks",
+      "away_team": "Wagner Seahawks"
+    },
+    {
+      "game_id": "401851199",
+      "home_team": "Vermont Catamounts",
+      "away_team": "Bryant Bulldogs"
+    },
+    {
+      "game_id": "401830012",
+      "home_team": "Dartmouth Big Green",
+      "away_team": "Cornell Big Red"
+    },
+    {
+      "game_id": "401828467",
+      "home_team": "Loyola Chicago Ramblers",
+      "away_team": "George Washington Revolutionaries"
+    },
+    {
+      "game_id": "401828465",
+      "home_team": "Fordham Rams",
+      "away_team": "Rhode Island Rams"
+    },
+    {
+      "game_id": "401828464",
+      "home_team": "Duquesne Dukes",
+      "away_team": "Richmond Spiders"
+    },
+    {
+      "game_id": "401827729",
+      "home_team": "TCU Horned Frogs",
+      "away_team": "Cincinnati Bearcats"
+    },
+    {
+      "game_id": "401820789",
+      "home_team": "Florida State Seminoles",
+      "away_team": "SMU Mustangs"
+    },
+    {
+      "game_id": "401818337",
+      "home_team": "Yale Bulldogs",
+      "away_team": "Princeton Tigers"
+    },
+    {
+      "game_id": "401804967",
+      "home_team": "Florida International Panthers",
+      "away_team": "Western Kentucky Hilltoppers"
+    },
+    {
+      "game_id": "401804963",
+      "home_team": "Liberty Flames",
+      "away_team": "Sam Houston Bearkats"
+    },
+    {
+      "game_id": "401820791",
+      "home_team": "NC State Wolfpack",
+      "away_team": "Stanford Cardinal"
+    },
+    {
+      "game_id": "401856424",
+      "home_team": "Drexel Dragons",
+      "away_team": "Northeastern Huskies"
+    },
+    {
+      "game_id": "401851583",
+      "home_team": "Wofford Terriers",
+      "away_team": "UNC Greensboro Spartans"
+    },
+    {
+      "game_id": "401851352",
+      "home_team": "Winthrop Eagles",
+      "away_team": "Presbyterian Blue Hose"
+    },
+    {
+      "game_id": "401804968",
+      "home_team": "Missouri State Bears",
+      "away_team": "Middle Tennessee Blue Raiders"
+    },
+    {
+      "game_id": "401804965",
+      "home_team": "UTEP Miners",
+      "away_team": "Jacksonville State Gamecocks"
+    },
+    {
+      "game_id": "401822973",
+      "home_team": "Marquette Golden Eagles",
+      "away_team": "UConn Huskies"
+    },
+    {
+      "game_id": "401827728",
+      "home_team": "Oklahoma State Cowboys",
+      "away_team": "Houston Cougars"
+    },
+    {
+      "game_id": "401820794",
+      "home_team": "Virginia Cavaliers",
+      "away_team": "Virginia Tech Hokies"
+    },
+    {
+      "game_id": "401808285",
+      "home_team": "Missouri Tigers",
+      "away_team": "Arkansas Razorbacks"
+    },
+    {
+      "game_id": "401856423",
+      "home_team": "Stony Brook Seawolves",
+      "away_team": "Campbell Fighting Camels"
+    },
+    {
+      "game_id": "401851581",
+      "home_team": "East Tennessee State Buccaneers",
+      "away_team": "The Citadel Bulldogs"
+    },
+    {
+      "game_id": "401851517",
+      "home_team": "Mercyhurst Lakers",
+      "away_team": "Stonehill Skyhawks"
+    },
+    {
+      "game_id": "401851351",
+      "home_team": "High Point Panthers",
+      "away_team": "UNC Asheville Bulldogs"
+    },
+    {
+      "game_id": "401828463",
+      "home_team": "St. Bonaventure Bonnies",
+      "away_team": "Davidson Wildcats"
+    },
+    {
+      "game_id": "401822975",
+      "home_team": "DePaul Blue Demons",
+      "away_team": "Butler Bulldogs"
+    },
+    {
+      "game_id": "401822974",
+      "home_team": "Villanova Wildcats",
+      "away_team": "Xavier Musketeers"
+    },
+    {
+      "game_id": "401820793",
+      "home_team": "Boston College Eagles",
+      "away_team": "Notre Dame Fighting Irish"
+    },
+    {
+      "game_id": "401820787",
+      "home_team": "Clemson Tigers",
+      "away_team": "Georgia Tech Yellow Jackets"
+    },
+    {
+      "game_id": "401804964",
+      "home_team": "Delaware Blue Hens",
+      "away_team": "Louisiana Tech Bulldogs"
+    },
+    {
+      "game_id": "401851200",
+      "home_team": "UMass Lowell River Hawks",
+      "away_team": "UAlbany Great Danes"
+    },
+    {
+      "game_id": "401851198",
+      "home_team": "UMBC Retrievers",
+      "away_team": "New Hampshire Wildcats"
+    },
+    {
+      "game_id": "401828468",
+      "home_team": "Saint Joseph's Hawks",
+      "away_team": "La Salle Explorers"
+    },
+    {
+      "game_id": "401808283",
+      "home_team": "Ole Miss Rebels",
+      "away_team": "South Carolina Gamecocks"
+    },
+    {
+      "game_id": "401851492",
+      "home_team": "UIC Flames",
+      "away_team": "Drake Bulldogs"
+    },
+    {
+      "game_id": "401808284",
+      "home_team": "Mississippi State Bulldogs",
+      "away_team": "Georgia Bulldogs"
+    },
+    {
+      "game_id": "401808281",
+      "home_team": "Kentucky Wildcats",
+      "away_team": "Florida Gators"
+    },
+    {
+      "game_id": "401825565",
+      "home_team": "Purdue Boilermakers",
+      "away_team": "Wisconsin Badgers"
+    },
+    {
+      "game_id": "401828466",
+      "home_team": "George Mason Patriots",
+      "away_team": "Saint Louis Billikens"
+    },
+    {
+      "game_id": "401851201",
+      "home_team": "NJIT Highlanders",
+      "away_team": "Maine Black Bears"
+    },
+    {
+      "game_id": "401829340",
+      "home_team": "Utah State Aggies",
+      "away_team": "New Mexico Lobos"
+    },
+    {
+      "game_id": "401828261",
+      "home_team": "Wichita State Shockers",
+      "away_team": "Florida Atlantic Owls"
+    },
+    {
+      "game_id": "401823834",
+      "home_team": "Colorado State Rams",
+      "away_team": "Boise State Broncos"
+    },
+    {
+      "game_id": "401820795",
+      "home_team": "Wake Forest Demon Deacons",
+      "away_team": "California Golden Bears"
+    },
+    {
+      "game_id": "401804966",
+      "home_team": "New Mexico State Aggies",
+      "away_team": "Kennesaw State Owls"
+    },
+    {
+      "game_id": "401820792",
+      "home_team": "Syracuse Orange",
+      "away_team": "Pittsburgh Panthers"
+    },
+    {
+      "game_id": "401851249",
+      "home_team": "Central Arkansas Bears",
+      "away_team": "Florida Gulf Coast Eagles"
+    },
+    {
+      "game_id": "401829334",
+      "home_team": "San Jos\u00e9 State Spartans",
+      "away_team": "Wyoming Cowboys"
+    },
+    {
+      "game_id": "401827723",
+      "home_team": "Baylor Bears",
+      "away_team": "Utah Utes"
+    },
+    {
+      "game_id": "401825563",
+      "home_team": "Ohio State Buckeyes",
+      "away_team": "Indiana Hoosiers"
+    },
+    {
+      "game_id": "401856425",
+      "home_team": "Towson Tigers",
+      "away_team": "Hampton Pirates"
+    },
+    {
+      "game_id": "401851586",
+      "home_team": "Samford Bulldogs",
+      "away_team": "Furman Paladins"
+    },
+    {
+      "game_id": "401851493",
+      "home_team": "Bradley Braves",
+      "away_team": "Northern Iowa Panthers"
+    },
+    {
+      "game_id": "401851462",
+      "home_team": "Quinnipiac Bobcats",
+      "away_team": "Marist Red Foxes"
+    },
+    {
+      "game_id": "401808282",
+      "home_team": "LSU Tigers",
+      "away_team": "Texas A&M Aggies"
+    },
+    {
+      "game_id": "401820788",
+      "home_team": "Duke Blue Devils",
+      "away_team": "North Carolina Tar Heels"
+    },
+    {
+      "game_id": "401851702",
+      "home_team": "App State Mountaineers",
+      "away_team": "Southern Miss Golden Eagles"
+    },
+    {
+      "game_id": "401809164",
+      "home_team": "Cal Poly Mustangs",
+      "away_team": "Cal State Bakersfield Roadrunners"
+    },
+    {
+      "game_id": "401805214",
+      "home_team": "Abilene Christian Wildcats",
+      "away_team": "UT Arlington Mavericks"
+    },
+    {
+      "game_id": "401851325",
+      "home_team": "Idaho State Bengals",
+      "away_team": "Northern Arizona Lumberjacks"
+    },
+    {
+      "game_id": "401851250",
+      "home_team": "Austin Peay Governors",
+      "away_team": "Queens University Royals"
+    },
+    {
+      "game_id": "401851626",
+      "home_team": "North Dakota State Bison",
+      "away_team": "Omaha Mavericks"
+    },
+    {
+      "game_id": "401823806",
+      "home_team": "Grand Canyon Lopes",
+      "away_team": "Fresno State Bulldogs"
+    },
+    {
+      "game_id": "401823186",
+      "home_team": "Cal State Northridge Matadors",
+      "away_team": "Cal State Fullerton Titans"
+    },
+    {
+      "game_id": "401822976",
+      "home_team": "Georgetown Hoyas",
+      "away_team": "Providence Friars"
+    },
+    {
+      "game_id": "401809122",
+      "home_team": "UC Irvine Anteaters",
+      "away_team": "UC Davis Aggies"
+    },
+    {
+      "game_id": "401808288",
+      "home_team": "Alabama Crimson Tide",
+      "away_team": "Auburn Tigers"
+    },
+    {
+      "game_id": "401856426",
+      "home_team": "William & Mary Tribe",
+      "away_team": "Elon Phoenix"
+    },
+    {
+      "game_id": "401851582",
+      "home_team": "Mercer Bears",
+      "away_team": "Western Carolina Catamounts"
+    },
+    {
+      "game_id": "401851464",
+      "home_team": "Siena Saints",
+      "away_team": "Mount St. Mary's Mountaineers"
+    },
+    {
+      "game_id": "401808287",
+      "home_team": "Texas Longhorns",
+      "away_team": "Oklahoma Sooners"
+    },
+    {
+      "game_id": "401805216",
+      "home_team": "Southern Utah Thunderbirds",
+      "away_team": "California Baptist Lancers"
+    },
+    {
+      "game_id": "401851753",
+      "home_team": "San Francisco Dons",
+      "away_team": "Portland Pilots"
+    },
+    {
+      "game_id": "401851703",
+      "home_team": "Coastal Carolina Chanticleers",
+      "away_team": "Georgia Southern Eagles"
+    },
+    {
+      "game_id": "401851534",
+      "home_team": "Tennessee State Tigers",
+      "away_team": "Morehead State Eagles"
+    },
+    {
+      "game_id": "401825566",
+      "home_team": "USC Trojans",
+      "away_team": "UCLA Bruins"
+    },
+    {
+      "game_id": "401825562",
+      "home_team": "Minnesota Golden Gophers",
+      "away_team": "Northwestern Wildcats"
+    },
+    {
+      "game_id": "401809104",
+      "home_team": "UC Santa Barbara Gauchos",
+      "away_team": "UC San Diego Tritons"
+    },
+    {
+      "game_id": "401805215",
+      "home_team": "Utah Tech Trailblazers",
+      "away_team": "Utah Valley Wolverines"
+    },
+    {
+      "game_id": "401851326",
+      "home_team": "Idaho Vandals",
+      "away_team": "Sacramento State Hornets"
+    },
+    {
+      "game_id": "401820576",
+      "home_team": "Nevada Wolf Pack",
+      "away_team": "Air Force Falcons"
+    },
+    {
+      "game_id": "401827724",
+      "home_team": "BYU Cougars",
+      "away_team": "Texas Tech Red Raiders"
+    },
+    {
+      "game_id": "401851627",
+      "home_team": "St. Thomas-Minnesota Tommies",
+      "away_team": "North Dakota Fighting Hawks"
+    },
+    {
+      "game_id": "401827725",
+      "home_team": "Colorado Buffaloes",
+      "away_team": "Arizona Wildcats"
+    },
+    {
+      "game_id": "401825564",
+      "home_team": "Oregon Ducks",
+      "away_team": "Washington Huskies"
+    },
+    {
+      "game_id": "401851754",
+      "home_team": "Pacific Tigers",
+      "away_team": "Seattle U Redhawks"
+    },
+    {
+      "game_id": "401809152",
+      "home_team": "Hawai'i Rainbow Warriors",
+      "away_team": "Long Beach State Beach"
+    }
+  ]
+}

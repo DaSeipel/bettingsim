@@ -1,0 +1,19 @@
+# NCAAB Odds Filing Protocol
+
+## Filing Logic
+Whenever the user pastes a list of team names and numbers, interpret it as **NCAAB odds**. Create a new CSV in `data/odds/` named with today's date in the format: **March_07_2026_Odds.csv** (Month_DD_YYYY_Odds.csv). **Always use the year 2026 in the filename** (e.g. March_07_2026_Odds.csv) so it matches the 2026 stats database — do not use the system year.
+
+## Formatting
+Use exactly these headers in the CSV:
+- **Home_Team**
+- **Away_Team**
+- **Spread**
+- **Over_Under**
+
+Parse the pasted content into rows: each game = one row with home team, away team, spread (home perspective, e.g. -7.5), and total (over/under line).
+
+## Auto-Cleanup
+If the user pastes data that looks like a list of games (e.g. "Alabama -7.5 145.5 Tennessee", or two teams with spread and total), format it into the CSV **immediately** and save to `data/odds/<Month_DD_2026>_Odds.csv` (year must be 2026) without asking for permission. Do not prompt for confirmation before creating or overwriting the file.
+
+## Reminder
+The prediction script (`scripts/predict_games.py`) loads the **most recent** file in `data/odds/` by modification time, so saving today's file is enough for the next run.

@@ -1,0 +1,5 @@
+
+[DEBUG_VALUE_PLAYS] Thresholds: min_ev_pct=1.5%, max_ev_pct=15.0%, MIN_BOOKMAKERS_VALUE_PLAY=3 (effective=1)
+[DEBUG_VALUE_PLAYS] DEBUG_RELAX_FILTERS=None (consensus disabled=False)
+[DEBUG] RAW_EDGE: NCAAB | Florida Gators @ Kentucky Wildcats | h2h | Florida Gators | model_prob=0.500 implied_prob=0.695 raw_edge_pct=-31.13%
+[DEBUG] RAW_EDGE: NCAAB | Florida Gators @ Kentucky Wildcats | h2h | Kentucky Wildcats | model_prob=0.500 implied_prob=0.304 raw_edge_pct=57.50%
