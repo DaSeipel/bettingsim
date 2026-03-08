@@ -1,3 +1,33 @@
+# BettingSim — Cursor Rules
+
+## "Run today's plays" — Shortcut Workflow
+
+When the user says **"Run today's plays"** (or equivalent, e.g. "run today's plays", "Run todays plays"), execute this workflow in order. Do not skip steps unless the user explicitly asks to.
+
+1. **Fetch KenPom stats**  
+   Run: `python3 scripts/fetch_barttorvik_2026.py`  
+   (Gets fresh Barttorvik/KenPom data for predictions.)
+
+2. **Odds for today**  
+   - Check if `data/odds/` contains a CSV for **today's date** in the form `Month_DD_2026_Odds.csv` (e.g. `March_08_2026_Odds.csv`). Use the system date for month/day; **always use year 2026** in the filename.  
+   - If such a file exists (or a file was just created from pasted odds), proceed to step 3.  
+   - If no odds file for today exists, **ask the user**: "Paste today's odds (team names, spreads, totals) and I'll save them, or confirm you've added a file to data/odds/ for today." If they paste odds, create the CSV per the **NCAAB Odds Filing Protocol** below, then continue.
+
+3. **Run predictions**  
+   Run: `python3 scripts/predict_games.py`  
+   (Uses the most recent file in `data/odds/` by modification time; writes value plays to cache and historical CSV.)
+
+4. **Run pipeline to cache**  
+   Run: `python3 scripts/run_pipeline_to_cache.py`  
+   (Requires ODDS_API_KEY or .streamlit/secrets.toml; updates the dashboard cache from live pipeline.)
+
+5. **Summary**  
+   Print a short summary of today's plays: number of value plays, high-confidence count, and where they were written (e.g. `data/cache/value_plays_cache.json`, `data/historical_betting_performance.csv`). If step 4 failed (e.g. no API key), note that and still summarize from step 3.
+
+Run all commands from the **project root**: `bettingsim` (the repo root where `scripts/` and `data/` live).
+
+---
+
 # NCAAB Odds Filing Protocol
 
 ## Filing Logic

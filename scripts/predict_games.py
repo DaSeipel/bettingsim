@@ -531,9 +531,8 @@ def _write_value_plays_cache(
     odds_path: Path,
     game_date: str,
 ) -> None:
-    """Write value plays to data/cache/value_plays_cache.json so the dashboard 'All Value Plays' section populates from manual odds."""
-    if not value_plays:
-        return
+    """Write value plays to data/cache/value_plays_cache.json so the dashboard 'All Value Plays' section populates from manual odds.
+    Always overwrites the entire file with this run's plays only (never appends)."""
     cache_dir = APP_ROOT / "data" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / "value_plays_cache.json"
@@ -585,7 +584,7 @@ def _write_value_plays_cache(
     }
     with open(cache_path, "w") as f:
         json.dump(payload, f, indent=2)
-    print(f"Wrote {len(value_plays_list)} value plays to {cache_path.relative_to(APP_ROOT)}.")
+    print(f"Wrote {len(value_plays_list)} value plays to {cache_path.relative_to(APP_ROOT)} (cache overwritten with this run only).")
 
 
 def _save_historical_performance(
@@ -632,6 +631,10 @@ def _save_historical_performance(
         for c in columns:
             if c not in existing.columns:
                 existing[c] = None
+        # Keep only one set of plays per date: drop any existing rows with today's date before appending
+        if "Date" in existing.columns:
+            existing["Date"] = existing["Date"].astype(str).str.strip()
+            existing = existing[existing["Date"] != game_date]
         df_new = df_new[[c for c in columns if c in df_new.columns]]
         combined = pd.concat([existing, df_new], ignore_index=True)
     else:
