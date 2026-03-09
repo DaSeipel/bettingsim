@@ -2560,12 +2560,12 @@ if _unresolved_stale > 0:
     _slim_alert_html = (
         f'<div class="dashboard-slim-alert">'
         f'⚠️ {_n_plays} {_plays_word} need results marked. '
-        f'<a href="#play-history">Go to Play of the Day History</a>'
+        f'<a href="#play-history">Go to Record</a>'
         f'</div>'
     )
     st.markdown(_slim_alert_html, unsafe_allow_html=True)
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
-tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(["Overview", "NCAAB", "NBA (Coming Soon)", "Mark Results", "Play of the Day History", "Manual Odds", "Game Lookup"])
+tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(["Overview", "NCAAB", "NBA (Coming Soon)", "Mark Results", "Record", "Manual Odds", "Game Lookup"])
 
 with tab_overview:
     st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
@@ -2956,8 +2956,8 @@ with tab_mark_results:
         st.info("No past plays in the last 90 days to mark. Plays from yesterday and earlier appear here once they are archived.")
 
 with tab_play_history:
-    st.subheader("Play of the Day History")
-    st.caption("Two NCAAB picks per day (Pick 1 & Pick 2, last 30 days). Results auto-filled at 8am ET from ESPN.")
+    st.subheader("Record")
+    st.caption("Two NCAAB picks per day (Pick 1 & Pick 2, last 30 days).")
     _from = date.today() - timedelta(days=30)
     # Load fresh from DB on every render (no cache) so Mark Results / Delete updates appear immediately
     _history = load_play_history(from_date=_from, to_date=date.today())
@@ -2989,7 +2989,8 @@ with tab_play_history:
         top_per_day = _history.loc[_history.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
         top_per_day = top_per_day[top_per_day["sport"].astype(str).str.strip().isin(("NCAAB Pick 1", "NCAAB Pick 2"))]
         resolved = _history[_history["result_clean"].notna()]
-        resolved = resolved[resolved["sport"].astype(str).str.strip().str.upper() == "NCAAB"]
+        # Include all NCAAB plays (NCAAB, NCAAB Pick 1, NCAAB Pick 2) so Mark Results updates show in KPI and chart
+        resolved = resolved[resolved["sport"].astype(str).str.strip().str.upper().str.startswith("NCAAB")]
         resolved_potd = top_per_day[top_per_day["result_clean"].notna()]
 
         def _roi_and_units(df: pd.DataFrame) -> tuple[float, float, float, float, float]:
@@ -3012,14 +3013,6 @@ with tab_play_history:
 
         roi_pct, profit_units, w, l, p, win_rate = _roi_and_units(resolved)
         roi_potd, profit_units_potd, w_potd, l_potd, p_potd, win_rate_potd = _roi_and_units(resolved_potd)
-        if os.environ.get("DEBUG_PLAY_HISTORY", "").strip() == "1":
-            _hdf = _load_historical_betting_performance_all()
-            _hrows = len(_hdf) if not _hdf.empty else 0
-            st.caption(f"**DEBUG:** play_history DB → All NCAAB resolved: W={int(w)} L={int(l)} P={int(p)} | POTD: W={int(w_potd)} L={int(l_potd)} P={int(p_potd)}. historical_betting_performance.csv: {_hrows} rows (no W-L; CSV is picks only).")
-        # Daily ROI for selected slate date
-        resolved_daily = resolved[resolved["date_generated"].astype(str).str.strip() == _selected_slate_date] if "date_generated" in resolved.columns else pd.DataFrame()
-        roi_daily, units_daily, w_d, l_d, p_d, _ = _roi_and_units(resolved_daily)
-
         st.markdown("""
         <style>
         .ph-kpi-hero { text-align: center; padding: 1.25rem 1.5rem; margin-bottom: 1rem; }
@@ -3032,7 +3025,10 @@ with tab_play_history:
         .ph-kpi-second .ph-roi--pos { color: #4caf50; }
         .ph-kpi-second .ph-roi--neg { color: #f44336; }
         .ph-kpi-second .ph-roi--zero { color: rgba(255,255,255,0.8); }
-        .ph-kpi-breakdown { display: flex; justify-content: center; gap: 3rem; margin-top: 0.75rem; padding: 0.75rem; background: rgba(255,255,255,0.05); border-radius: 10px; font-size: 0.95rem; }
+        .ph-kpi-breakdown { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; margin-top: 0.75rem; padding: 0.75rem 1.5rem; background: rgba(255,255,255,0.05); border-radius: 10px; font-size: 0.95rem; }
+        .ph-kpi-breakdown-row { display: flex; align-items: center; justify-content: center; gap: 0.75rem; width: 100%; }
+        .ph-kpi-breakdown-label { color: rgba(255,255,255,0.7); font-size: 0.85rem; min-width: 7rem; text-align: right; }
+        .ph-kpi-breakdown-record { font-weight: 700; }
         .ph-kpi-breakdown span { color: rgba(255,255,255,0.85); }
         .ph-kpi-breakdown strong { color: #fafafa; }
         .ph-feed-card { border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; border-left: 5px solid; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
@@ -3056,24 +3052,68 @@ with tab_play_history:
         roi_class = "ph-roi--pos" if roi_pct > 0 else ("ph-roi--neg" if roi_pct < 0 else "ph-roi--zero")
         roi_sign = "+" if roi_pct > 0 else ""
         units_sign = "+" if profit_units > 0 else ""
-        daily_roi_class = "ph-roi--pos" if roi_daily > 0 else ("ph-roi--neg" if roi_daily < 0 else "ph-roi--zero")
-        daily_roi_sign = "+" if roi_daily > 0 else ""
-        daily_roi_label = f"Daily ROI ({_selected_slate_date}): {daily_roi_sign}{roi_daily:.1f}%"
         st.markdown(
             f'<div class="ph-kpi-hero">'
             f'<div class="ph-kpi-record"><span class="ph-w">{int(w)}</span>–<span class="ph-l">{int(l)}</span>–<span class="ph-p">{int(p)}</span></div>'
             f'<div class="ph-kpi-second">'
             f'<span class="ph-roi {roi_class}">{roi_sign}{roi_pct:.1f}% Total ROI</span>'
-            f'<span class="ph-roi {daily_roi_class}">{daily_roi_label}</span>'
             f'<span>{units_sign}{profit_units:.2f} units</span>'
             f'<span>{win_rate:.0f}% win rate</span>'
             f'</div>'
             f'<div class="ph-kpi-breakdown">'
-            f'<span><strong>Play of the Day:</strong> <span class="ph-w">{int(w_potd)}</span>–<span class="ph-l">{int(l_potd)}</span>–<span class="ph-p">{int(p_potd)}</span></span>'
-            f'<span><strong>All value plays:</strong> <span class="ph-w">{int(w)}</span>–<span class="ph-l">{int(l)}</span>–<span class="ph-p">{int(p)}</span></span>'
+            f'<div class="ph-kpi-breakdown-row"><span class="ph-kpi-breakdown-label">Play of the Day</span><span class="ph-kpi-breakdown-record"><span class="ph-w">{int(w_potd)}</span>–<span class="ph-l">{int(l_potd)}</span>–<span class="ph-p">{int(p_potd)}</span></span></div>'
+            f'<div class="ph-kpi-breakdown-row"><span class="ph-kpi-breakdown-label">All value plays</span><span class="ph-kpi-breakdown-record"><span class="ph-w">{int(w)}</span>–<span class="ph-l">{int(l)}</span>–<span class="ph-p">{int(p)}</span></span></div>'
             f'</div></div>',
             unsafe_allow_html=True,
         )
+
+        # Monthly performance chart: W-L by date (green wins, red losses)
+        if not resolved.empty and "date_generated" in resolved.columns:
+            def _daily_wl(g):
+                return pd.Series({
+                    "Wins": (g["result_clean"] == "W").sum(),
+                    "Losses": (g["result_clean"] == "L").sum(),
+                })
+            daily = resolved.groupby("date_generated").apply(_daily_wl).reset_index()
+            daily["date_generated"] = pd.to_datetime(daily["date_generated"])
+            daily = daily.sort_values("date_generated")
+            # Limit to last 30 days for readability
+            cutoff = date.today() - timedelta(days=30)
+            daily = daily[daily["date_generated"].dt.date >= cutoff]
+            if not daily.empty:
+                st.subheader("Performance by Date")
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Bar(
+                        x=daily["date_generated"].dt.strftime("%b %d"),
+                        y=daily["Wins"],
+                        name="Wins",
+                        marker_color="#4caf50",
+                    )
+                )
+                fig.add_trace(
+                    go.Bar(
+                        x=daily["date_generated"].dt.strftime("%b %d"),
+                        y=daily["Losses"],
+                        name="Losses",
+                        marker_color="#f44336",
+                    )
+                )
+                fig.update_layout(
+                    barmode="group",
+                    xaxis_title="Date",
+                    yaxis_title="Count",
+                    margin=dict(t=20, b=40, l=50, r=20),
+                    height=280,
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(255,255,255,0.05)",
+                    font=dict(color="rgba(255,255,255,0.9)", size=12),
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.1)"),
+                    yaxis=dict(gridcolor="rgba(255,255,255,0.1)"),
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
         def _bet_str(r: pd.Series) -> str:
             bt = str(r.get("bet_type", ""))
@@ -3130,7 +3170,7 @@ with tab_play_history:
                     if result is None or pd.isna(result):
                         mk = row.get("_matchup_key", "")
                         pids_in_group = _history.loc[_history["_matchup_key"] == mk, "play_id"].astype(int).tolist()
-                        c1, c2, c3, _ = st.columns([1, 1, 1, 3])
+                        c1, c2, c3, _gap, c4, _ = st.columns([1, 1, 1, 1.5, 0.7, 1.8])
                         with c1:
                             if st.button("✅ Win", key=f"ph_w_{row.get('play_id')}_{sport_label}", help="Mark win"):
                                 for _pid in pids_in_group:
@@ -3147,6 +3187,21 @@ with tab_play_history:
                             if st.button("➖ Push", key=f"ph_p_{row.get('play_id')}_{sport_label}", help="Mark push"):
                                 for _pid in pids_in_group:
                                     update_play_result(_pid, "P")
+                                _load_play_history_cached.clear()
+                                st.rerun()
+                        with c4:
+                            if st.button("🗑️", key=f"ph_del_{row.get('play_id')}_{sport_label}", help="Delete this play"):
+                                first_row_data = None
+                                for _pid in pids_in_group:
+                                    deleted = delete_play(_pid)
+                                    if deleted and first_row_data is None:
+                                        first_row_data = deleted
+                                if first_row_data:
+                                    _remove_play_from_historical_csv(
+                                        first_row_data["date_generated"],
+                                        first_row_data["home_team"],
+                                        first_row_data["away_team"],
+                                    )
                                 _load_play_history_cached.clear()
                                 st.rerun()
     else:
