@@ -677,6 +677,7 @@ def _live_odds_to_value_plays(
         line_error_for_row: Optional[float] = None
         if league_lookup == "ncaab" and market_type == "spreads":
             line_error_for_row = round(_cur_line_error, 2) if _cur_line_error is not None else None
+        commence_str = r.get("commence_time", "") or ""
         rows.append({
             "League": league,
             "Event": r.get("event_name", ""),
@@ -686,8 +687,9 @@ def _live_odds_to_value_plays(
             "Value (%)": round(ev_pct, 2),
             "Recommended Stake": stake,
             "Injury Alert": "—",
-            "Start Time": _format_start_time(r.get("commence_time", "")),
-            "commence_time": r.get("commence_time", ""),
+            "Start Time": _format_start_time(commence_str),
+            "commence_time": commence_str,
+            "start_time": commence_str,
             "model_prob": model_prob,
             "implied_prob": implied_prob,
             "point": point,

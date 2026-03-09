@@ -7,11 +7,16 @@ in data/odds/ by modification time.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 APP_ROOT = Path(__file__).resolve().parent.parent
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
@@ -89,7 +94,7 @@ def _game_date_from_odds_path(odds_path: Path) -> str:
 
 
 def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
-    """Allow case-insensitive headers; map to exact Home_Team, Away_Team, Spread, Over_Under."""
+    """Allow case-insensitive headers; map to exact Home_Team, Away_Team, Spread, Over_Under, Time."""
     rename = {}
     for col in df.columns:
         n = col.strip().lower().replace(" ", "_")
@@ -101,7 +106,84 @@ def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
             rename[col] = "Spread"
         elif n in ("over_under", "total", "ou"):
             rename[col] = "Over_Under"
+        elif n in ("time", "start_time", "tip", "game_time", "start"):
+            rename[col] = "Time"
     return df.rename(columns=rename)
+
+
+def _get_time_column(df: pd.DataFrame) -> str | None:
+    """Return 'Time' if present in df, else None."""
+    return "Time" if "Time" in df.columns else None
+
+
+def _parse_time_value_to_iso_utc(raw: str, game_date: str) -> str | None:
+    """Parse a time string (e.g. '7:00 PM', '19:00') with game_date YYYY-MM-DD; assume ET; return ISO UTC string."""
+    raw = str(raw).strip() if raw is not None else ""
+    if not raw or raw.lower() in ("nan", "nat", "—", "-"):
+        return None
+    try:
+        yr, mo, day = (int(game_date[:4]), int(game_date[5:7]), int(game_date[8:10]))
+        et = ZoneInfo("America/New_York")
+        # Try common formats
+        for fmt in ("%I:%M %p", "%I:%M%p", "%H:%M", "%I %p", "%I%p"):
+            try:
+                # Parse time only
+                t = datetime.strptime(raw.strip(), fmt)
+                dt_et = datetime(yr, mo, day, t.hour, t.minute, 0, tzinfo=et)
+                dt_utc = dt_et.astimezone(timezone.utc)
+                return dt_utc.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+            except ValueError:
+                continue
+        # 12:00 or 12 PM style
+        m = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", raw.strip(), re.I)
+        if m:
+            h = int(m.group(1))
+            minute = int(m.group(2) or 0)
+            ap = (m.group(3) or "").lower()
+            if ap == "pm" and h != 12:
+                h += 12
+            elif ap == "am" and h == 12:
+                h = 0
+            elif not ap and h <= 12:
+                pass  # assume PM for afternoon
+            dt_et = datetime(yr, mo, day, h % 24, minute, 0, tzinfo=et)
+            dt_utc = dt_et.astimezone(timezone.utc)
+            return dt_utc.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+    except (ValueError, TypeError, IndexError):
+        pass
+    return None
+
+
+def _game_start_from_row(row: pd.Series, game_date: str, time_col: str | None) -> str | None:
+    """Get game start time ISO UTC from row: use Time column if present and parseable."""
+    if not time_col or time_col not in row.index:
+        return None
+    return _parse_time_value_to_iso_utc(row.get(time_col), game_date)
+
+
+def _espn_start_time_for_match(espn_times: dict[tuple[str, str], str], home: str, away: str) -> str | None:
+    """Look up (home, away) in espn_times; try exact then (away, home); then fuzzy match keys."""
+    home = (home or "").strip()
+    away = (away or "").strip()
+    if (home, away) in espn_times:
+        return espn_times[(home, away)]
+    if (away, home) in espn_times:
+        return espn_times[(away, home)]
+    # Fuzzy match against keys
+    try:
+        from thefuzz import fuzz
+        from thefuzz import process as fuzz_process
+    except ImportError:
+        return None
+    best_score = 0
+    best_commence: str | None = None
+    for (h, a), commence in espn_times.items():
+        sh = fuzz.token_set_ratio(home, h) if home and h else 0
+        sa = fuzz.token_set_ratio(away, a) if away and a else 0
+        if sh >= 70 and sa >= 70 and (sh + sa) > best_score:
+            best_score = sh + sa
+            best_commence = commence
+    return best_commence
 
 
 def _load_kenpom_from_csv() -> pd.DataFrame:
@@ -270,10 +352,14 @@ def main() -> None:
         consensus_totals,
     )
     from engine.engine import get_team_power_ratings, get_nba_team_pace_stats, NBA_LEAGUE_AVG_PACE, NBA_LEAGUE_AVG_OFF_RATING
+    from engine.espn_odds import get_ncaab_start_times_for_date
     NCAAB_DEFAULT_RATING = (NBA_LEAGUE_AVG_PACE * NBA_LEAGUE_AVG_OFF_RATING) / 100.0
     from strategies.strategies import implied_probability_no_vig, spread_cover_prob_from_margins
     # Use date from odds filename (e.g. March_08_2026_Odds.csv -> 2026-03-08) so saved plays match the slate
     game_date = _game_date_from_odds_path(path)
+    game_date_obj = datetime.strptime(game_date, "%Y-%m-%d").date()
+    espn_start_times = get_ncaab_start_times_for_date(game_date_obj)
+    time_col = _get_time_column(df)
     season = game_season_from_date(game_date) or ODDS_YEAR
     effective_season = effective_kenpom_season(game_date, season) or season
     pace_stats = get_nba_team_pace_stats()
@@ -406,6 +492,16 @@ def main() -> None:
                     reliability_flag = LOW_RELIABILITY_FLAG
             except (TypeError, ValueError):
                 pass
+        start_time = _game_start_from_row(row, game_date, time_col) or _espn_start_time_for_match(espn_start_times, home, away)
+        if start_time and not start_time.endswith("Z") and "+" not in start_time:
+            try:
+                dt = datetime.fromisoformat(start_time.replace("Z", ""))
+                if dt.tzinfo is None:
+                    et = ZoneInfo("America/New_York")
+                    dt_et = dt.replace(tzinfo=et)
+                    start_time = dt_et.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+            except (ValueError, TypeError):
+                pass
         results.append({
             "Home": home,
             "Away": away,
@@ -427,6 +523,7 @@ def main() -> None:
             "Pick_Spread": pick_spread,
             "Pick_Total": "Over" if over_prob > 0.5 else "Under",
             "Reliability_Flag": reliability_flag,
+            "start_time": start_time,
         })
     value_plays_raw = [r for r in results if r["Is_Value_Play"]]
     value_plays = value_plays_raw
@@ -635,6 +732,20 @@ def _write_value_plays_cache(
                 reason = f"Model favors {selection} ({point_str}) — Edge {edge_str} pts. Strong edge based on scoring margin and rebounding."
         else:
             reason = f"Model favors {selection} ({point_str}) — Edge {edge_str} pts. Strong edge based on scoring margin and rebounding."
+        start_time_iso = r.get("start_time")
+        if start_time_iso and str(start_time_iso).strip():
+            try:
+                s = str(start_time_iso).replace("Z", "+00:00")
+                dt = datetime.fromisoformat(s)
+                if dt.tzinfo:
+                    dt_et = dt.astimezone(ZoneInfo("America/New_York"))
+                    start_time_display = dt_et.strftime("%b %d, %I:%M %p ET")
+                else:
+                    start_time_display = dt.strftime("%b %d, %I:%M %p")
+            except (ValueError, TypeError):
+                start_time_display = "Today"
+        else:
+            start_time_display = "Today"
         value_plays_list.append({
             "League": "NCAAB",
             "Event": f"{away} @ {home}",
@@ -646,7 +757,8 @@ def _write_value_plays_cache(
             "Point": point_picked,
             "Recommended Stake": None,
             "Injury Alert": "—",
-            "Start Time": "Today",
+            "Start Time": start_time_display,
+            "start_time": start_time_iso,
             "home_team": home,
             "away_team": away,
             "confidence_tier": str(r.get("Confidence", "Medium")).strip() or "Medium",

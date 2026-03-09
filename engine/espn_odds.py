@@ -134,6 +134,34 @@ def _fetch_scoreboard(league_slug: str, session: requests.Session, on_date: date
     return _fetch_json(url, session)
 
 
+def get_ncaab_start_times_for_date(on_date: date) -> dict[tuple[str, str], str]:
+    """
+    Fetch NCAAB scoreboard for on_date and return (home_team, away_team) -> commence_time (ISO string).
+    Keys use ESPN displayName. Caller should fuzzy-match if needed.
+    """
+    league_slug = "mens-college-basketball"
+    out: dict[tuple[str, str], str] = {}
+    with requests.Session() as session:
+        data = _fetch_scoreboard(league_slug, session, on_date)
+    if not data or not isinstance(data, dict):
+        return out
+    for ev in data.get("events") or []:
+        commence_time = ev.get("date") or ""
+        if not commence_time:
+            continue
+        comps = ev.get("competitions") or []
+        if not comps:
+            continue
+        comp = comps[0] if isinstance(comps[0], dict) else {}
+        home_team, away_team = _parse_competitors_home_away(comp.get("competitors") or [])
+        if not home_team or not away_team:
+            name = ev.get("name") or ""
+            home_team, away_team = _parse_home_away_from_name(name)
+        if home_team and away_team:
+            out[(home_team.strip(), away_team.strip())] = commence_time
+    return out
+
+
 def _parse_competitors_home_away(competitors: list) -> tuple[str, str]:
     """From scoreboard competition.competitors (homeAway + team.displayName), return (home_team, away_team)."""
     home_team = ""

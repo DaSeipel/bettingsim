@@ -1840,7 +1840,72 @@ def _load_value_plays_cache() -> tuple[pd.DataFrame, dict, pd.DataFrame, int, di
     cache_error = data.get("error")
     return value_plays_df, potd_picks, empty_live, value_plays_flagged_count, odds_source_meta, cache_error
 
+
+def _filter_value_plays_not_started(df: pd.DataFrame, debug: bool = False) -> tuple[pd.DataFrame, int]:
+    """Filter out plays where start_time (or commence_time) is in the past (UTC). Returns (filtered_df, n_already_started)."""
+    _log = lambda msg: print(msg, file=sys.stderr)
+    if df.empty:
+        if debug:
+            _log("[_filter_value_plays_not_started] df is empty")
+        return df, 0
+    # Pipeline writes commence_time; predict_games writes start_time. Use either.
+    has_start = "start_time" in df.columns
+    has_commence = "commence_time" in df.columns
+    now_utc = datetime.now(timezone.utc)
+    if debug:
+        _log(f"[_filter_value_plays_not_started] current UTC time: {now_utc.isoformat()}")
+        _log(f"[_filter_value_plays_not_started] columns: start_time={has_start}, commence_time={has_commence}")
+    if not has_start and not has_commence:
+        if debug:
+            _log("[_filter_value_plays_not_started] No start_time or commence_time column — skipping filter")
+        return df, 0
+    kept_indices = []
+    n_started = 0
+    for idx, row in df.iterrows():
+        st_val = row.get("start_time") if has_start else None
+        if st_val is None or (isinstance(st_val, float) and pd.isna(st_val)) or not str(st_val).strip():
+            st_val = row.get("commence_time") if has_commence else None
+        event = row.get("Event", "")
+        if st_val is None or (isinstance(st_val, float) and pd.isna(st_val)) or not str(st_val).strip():
+            if debug:
+                _log(f"  KEEP (no time) idx={idx} Event={event!r} start_time={row.get('start_time')!r} commence_time={row.get('commence_time')!r}")
+            kept_indices.append(idx)
+            continue
+        # Parse ISO string: normalize Z to +00:00 so fromisoformat gets UTC
+        raw = str(st_val).strip()
+        s = raw.replace("Z", "+00:00")
+        parsed_ok = False
+        dt = None
+        try:
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            parsed_ok = True
+        except (ValueError, TypeError) as e:
+            if debug:
+                _log(f"  KEEP (parse error) idx={idx} Event={event!r} start_time={raw!r} error={e}")
+            kept_indices.append(idx)
+            continue
+        if not parsed_ok or dt is None:
+            kept_indices.append(idx)
+            continue
+        if dt <= now_utc:
+            n_started += 1
+            if debug:
+                _log(f"  FILTER (started) idx={idx} Event={event!r} start_time={raw!r} parsed={dt.isoformat()} (<= now_utc)")
+            continue
+        if debug:
+            _log(f"  KEEP (future) idx={idx} Event={event!r} start_time={raw!r} parsed={dt.isoformat()}")
+        kept_indices.append(idx)
+    filtered = df.loc[kept_indices].copy() if kept_indices else pd.DataFrame()
+    if debug:
+        _log(f"[_filter_value_plays_not_started] result: n_started={n_started} kept={len(kept_indices)} total={len(df)}")
+    return filtered, n_started
+
+
 value_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, _odds_meta, _cache_err = _load_value_plays_cache()
+_filter_debug = os.environ.get("DEBUG_VALUE_PLAYS_FILTER", "").strip() == "1"
+value_plays_df, _n_value_plays_already_started = _filter_value_plays_not_started(value_plays_df, debug=_filter_debug)
 st.session_state["odds_source_meta"] = _odds_meta
 st.session_state["value_plays_pipeline_error"] = (_cache_err, "") if _cache_err else None
 
@@ -1905,6 +1970,34 @@ def _team_match_query(team_name: str, query: str) -> bool:
     return q in t or t == q
 
 
+# Game Lookup: fuzzy match threshold (0-100). Matches Event, home_team, away_team.
+GAME_LOOKUP_FUZZY_THRESHOLD = 60
+
+
+def _value_play_matches_query(row: pd.Series, query: str) -> bool:
+    """True if query matches this value-play row via exact/substring or fuzzy (Event, home_team, away_team) >= GAME_LOOKUP_FUZZY_THRESHOLD."""
+    q = (query or "").strip()
+    if not q:
+        return False
+    home = str(row.get("home_team", "")).strip()
+    away = str(row.get("away_team", "")).strip()
+    event = str(row.get("Event", "")).strip()
+    if _team_match_query(home, query) or _team_match_query(away, query):
+        return True
+    try:
+        from thefuzz import fuzz
+        q_lower = q.lower()
+        if fuzz.partial_ratio(q_lower, event.lower()) >= GAME_LOOKUP_FUZZY_THRESHOLD:
+            return True
+        if fuzz.partial_ratio(q_lower, home.lower()) >= GAME_LOOKUP_FUZZY_THRESHOLD:
+            return True
+        if fuzz.partial_ratio(q_lower, away.lower()) >= GAME_LOOKUP_FUZZY_THRESHOLD:
+            return True
+    except ImportError:
+        pass
+    return False
+
+
 def _find_team_in_stats(team_stats_df: pd.DataFrame, query: str) -> Optional[pd.Series]:
     """Return first row from team_stats_2026 where TEAM matches or contains query (case-insensitive)."""
     if team_stats_df.empty or "TEAM" not in team_stats_df.columns:
@@ -1932,12 +2025,12 @@ def _find_game_for_team(
     q = (team_query or "").strip().lower()
     if not q:
         return None
-    # 1) Value plays cache (has home_team, away_team)
+    # 1) Value plays cache: search Event, home_team, away_team (exact/substring or fuzzy >= GAME_LOOKUP_FUZZY_THRESHOLD)
     if not value_plays_df.empty and "home_team" in value_plays_df.columns and "away_team" in value_plays_df.columns:
         for _, row in value_plays_df.iterrows():
             home = str(row.get("home_team", "")).strip()
             away = str(row.get("away_team", "")).strip()
-            if _team_match_query(home, team_query) or _team_match_query(away, team_query):
+            if _value_play_matches_query(row, team_query):
                 point = row.get("point") or row.get("Point")
                 try:
                     pt = float(point) if point is not None and pd.notna(point) else None
@@ -2500,6 +2593,9 @@ with tab_overview:
     # ——— All Value Plays (card list, filters, low-volume warning) ———
     st.subheader("All Value Plays")
     st.caption("Today's best NCAAB value plays sorted by edge. Powered by KenPom BARTHAG ratings.")
+    if _n_value_plays_already_started > 0:
+        remaining = len(value_plays_df) if not value_plays_df.empty else 0
+        st.caption(f"**{_n_value_plays_already_started}** play(s) already started — showing **{remaining}** remaining.")
     if (odds_api_key or "").strip():
         if st.button("Refresh", key="overview_refresh", help="Run the value-plays pipeline and reload cache; page will rerun so new data is visible"):
             _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
@@ -2636,6 +2732,9 @@ with tab_overview:
 with tab_ncaab:
     st.subheader("NCAAB")
     st.caption("Today's NCAAB value plays ranked by edge. Picks powered by KenPom BARTHAG ratings.")
+    if _n_value_plays_already_started > 0:
+        remaining = len(value_plays_df[value_plays_df["League"] == "NCAAB"]) if not value_plays_df.empty and "League" in value_plays_df.columns else 0
+        st.caption(f"**{_n_value_plays_already_started}** play(s) already started — showing **{remaining}** remaining.")
     if (odds_api_key or "").strip():
         if st.button("Refresh", key="ncaab_refresh", help="Run the value-plays pipeline and reload cache"):
             _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
@@ -3087,6 +3186,7 @@ with tab_manual_odds:
 with tab_game_lookup:
     st.subheader("Game Lookup")
     st.caption("Search by team name to find today's matchup (from value plays or historical slate), view a detailed matchup card, BARTHAG comparison, and head-to-head history.")
+    st.caption(f"**Search fields:** Event, home_team, away_team. **Match:** exact/substring or fuzzy score ≥ {GAME_LOOKUP_FUZZY_THRESHOLD}.")
     team_stats_2026 = _load_team_stats_2026()
     # BARTHAG rank: 1 = best (highest BARTHAG) in team_stats_2026
     if not team_stats_2026.empty and "BARTHAG" in team_stats_2026.columns:
