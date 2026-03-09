@@ -61,7 +61,7 @@ from engine.clv_tracker import (
     get_clv_row_for_play,
     mark_bet_result,
 )
-from engine.play_history import archive_value_plays, load_play_history, update_play_result
+from engine.play_history import archive_value_plays, delete_play, load_play_history, update_play_result
 from engine.auto_result_job import run_auto_result
 from engine.ncaab_march_context import add_ncaab_march_context_to_df, is_after_selection_sunday
 from engine.betting_models import (
@@ -1949,6 +1949,31 @@ def _load_historical_betting_performance_all() -> pd.DataFrame:
     return df.copy()
 
 
+def _remove_play_from_historical_csv(date_generated: str, home_team: str, away_team: str) -> int:
+    """Remove matching row(s) from historical_betting_performance.csv. Returns number of rows removed."""
+    if not HISTORICAL_BETTING_CSV_PATH.exists():
+        return 0
+    try:
+        df = pd.read_csv(HISTORICAL_BETTING_CSV_PATH)
+    except Exception:
+        return 0
+    if df.empty or "Date" not in df.columns or "Home" not in df.columns or "Away" not in df.columns:
+        return 0
+    date_norm = _normalize_date_to_iso(date_generated) or str(date_generated).strip()
+    home = str(home_team or "").strip()
+    away = str(away_team or "").strip()
+    mask = (
+        (df["Date"].astype(str).str.strip() == date_norm)
+        & (df["Home"].astype(str).str.strip() == home)
+        & (df["Away"].astype(str).str.strip() == away)
+    )
+    n = int(mask.sum())
+    if n > 0:
+        df = df[~mask]
+        df.to_csv(HISTORICAL_BETTING_CSV_PATH, index=False)
+    return n
+
+
 # ----- Game Lookup tab helpers -----
 def _load_team_stats_2026() -> pd.DataFrame:
     """Load data/ncaab/team_stats_2026.csv. Returns empty DataFrame if missing."""
@@ -2180,39 +2205,27 @@ def _load_historical_betting_performance() -> pd.DataFrame:
 
 
 def _potd_from_historical_csv(df_today: pd.DataFrame) -> dict:
-    """Build potd_picks from historical_betting_performance.csv: top 2 different games by Edge_Points desc. Prefer High confidence, then Medium fallback."""
+    """Build potd_picks from historical_betting_performance.csv: top 2 different games by abs(Edge_Points) descending."""
     result = {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
     if df_today.empty or "Edge_Points" not in df_today.columns:
         return result
-    has_conf = "Confidence_Level" in df_today.columns
-    # Dedupe: one row per game (keep best Edge_Points per Home/Away pair)
+    # Dedupe: one row per game (keep row with max abs(Edge_Points) per Home/Away pair)
     df_today = df_today.copy()
     df_today["_game_key"] = df_today.apply(lambda r: (str(r.get("Home", "")).strip(), str(r.get("Away", "")).strip()), axis=1)
-    best_per_game = df_today.loc[df_today.groupby("_game_key")["Edge_Points"].idxmax()].copy()
-    best_per_game = best_per_game.sort_values("Edge_Points", ascending=False).reset_index(drop=True)
+    df_today["_abs_edge"] = df_today["Edge_Points"].abs()
+    best_per_game = df_today.loc[df_today.groupby("_game_key")["_abs_edge"].idxmax()].copy()
+    best_per_game = best_per_game.sort_values("_abs_edge", ascending=False).reset_index(drop=True)
 
-    def _eligible(level: str) -> pd.DataFrame:
-        if not has_conf:
-            return best_per_game
-        return best_per_game[best_per_game["Confidence_Level"].astype(str).str.strip().str.upper() == level.upper()]
-
-    # Confidence filter: try High first, then High+Medium, then all
-    candidates = _eligible("High")
-    if len(candidates) < 2:
-        candidates = best_per_game[best_per_game["Confidence_Level"].astype(str).str.strip().str.upper().isin(("HIGH", "MEDIUM"))] if has_conf else best_per_game
-        candidates = candidates.sort_values("Edge_Points", ascending=False).reset_index(drop=True)
-    if len(candidates) < 2:
-        candidates = best_per_game
-    if candidates.empty:
+    if best_per_game.empty:
         return result
 
-    # Pick 1: top by Edge_Points
-    row1 = candidates.iloc[0]
+    # Pick 1: top by abs(Edge_Points)
+    row1 = best_per_game.iloc[0]
     game_key_1 = (str(row1.get("Home", "")).strip(), str(row1.get("Away", "")).strip())
     result["NCAAB Pick 1"] = _historical_row_to_potd(row1, "NCAAB Pick 1")
 
-    # Pick 2: next best *different* game
-    other = candidates[candidates["_game_key"].apply(lambda k: k != game_key_1)]
+    # Pick 2: next best *different* game by abs(Edge_Points)
+    other = best_per_game[best_per_game["_game_key"].apply(lambda k: k != game_key_1)]
     if not other.empty:
         result["NCAAB Pick 2"] = _historical_row_to_potd(other.iloc[0], "NCAAB Pick 2")
     return result
@@ -2240,10 +2253,10 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
     selection = home if pick_side == "Home" else away
     edge_pts = row.get("Edge_Points")
     try:
-        edge_pct = float(edge_pts) / 3.0 if edge_pts is not None and pd.notna(edge_pts) else 0.0
+        edge_pct = abs(float(edge_pts)) / 3.0 if edge_pts is not None and pd.notna(edge_pts) else 0.0
     except (TypeError, ValueError):
         edge_pct = 0.0
-    edge_pct = max(0.0, min(15.0, edge_pct))
+    edge_pct = min(15.0, edge_pct)
     try:
         ms = float(row.get("Market_Spread")) if row.get("Market_Spread") is not None and pd.notna(row.get("Market_Spread")) else None
     except (TypeError, ValueError):
@@ -2375,7 +2388,7 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
             "top_edge_label": "—",
         }
     best_per_game = (
-        value_plays_df.sort_values("Value (%)", ascending=False)
+        value_plays_df.sort_values("Value (%)", key=lambda x: x.abs(), ascending=False)
         .groupby("Event")
         .head(1)
         .reset_index(drop=True)
@@ -2388,7 +2401,7 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
     if diversified.empty:
         top_edge_label = "—"
     else:
-        top_row = diversified.iloc[0]
+        top_row = diversified.loc[diversified["Value (%)"].abs().idxmax()]
         sel = str(top_row.get("Selection", ""))
         pt = top_row.get("point")
         if pt is not None:
@@ -2400,7 +2413,7 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
                     sel = f"{sel} {pt_f:+.1f}"
             except (TypeError, ValueError):
                 pass
-        edge_pct = float(top_row.get("Value (%)", 0))
+        edge_pct = abs(float(top_row.get("Value (%)", 0)))
         top_edge_label = f"{sel} at {edge_pct:.1f}%"
     return {
         "date_str": date_str,
@@ -2428,7 +2441,7 @@ if not _historical_picks_df.empty:
     except (ValueError, TypeError):
         _date_str = _selected_slate_date
     _n_slate = len(_historical_picks_df)
-    _top_ep = _historical_picks_df["Edge_Points"].max() if "Edge_Points" in _historical_picks_df.columns else None
+    _top_ep = _historical_picks_df["Edge_Points"].abs().max() if "Edge_Points" in _historical_picks_df.columns else None
     _top_edge_slate = f"{float(_top_ep) / 3:.1f}%" if _top_ep is not None and pd.notna(_top_ep) else "—"
     _summary = {"date_str": _date_str, "total_plays": _n_slate, "n_nba": 0, "n_ncaab": _n_slate, "top_edge_label": _top_edge_slate}
 else:
@@ -2445,7 +2458,7 @@ if _summary["total_plays"] == 0 and (potd_picks.get("NCAAB Pick 1") or potd_pick
                     _potd_edges.append(float(_v))
                 except (TypeError, ValueError):
                     pass
-    _top_edge = f"{max(_potd_edges):.1f}%" if _potd_edges else "—"
+    _top_edge = f"{max(abs(e) for e in _potd_edges):.1f}%" if _potd_edges else "—"
     _summary = {**_summary, "total_plays": _n_potd, "n_ncaab": _n_potd, "top_edge_label": _top_edge}
 _plays_text = f"{_summary['total_plays']} play{'s' if _summary['total_plays'] != 1 else ''} found"
 _nba_ncaab = f"{_summary['n_ncaab']} NCAAB"
@@ -2658,7 +2671,7 @@ with tab_overview:
             return f"{sel} {pick_spread:+.1f}"
         _disp["Pick"] = _disp.apply(_pick_with_spread, axis=1)
         if "Edge_Points" in _disp.columns:
-            _disp["Value (%)"] = (_disp["Edge_Points"] / 3.0).clip(0, 15)
+            _disp["Value (%)"] = (_disp["Edge_Points"].abs() / 3.0).clip(0, 15)
         _disp = _disp[_disp["Value (%)"] >= min_edge] if "Value (%)" in _disp.columns else _disp
         # Edge pts rounded to 1 decimal for display
         if "Edge_Points" in _disp.columns:
@@ -2905,7 +2918,7 @@ with tab_mark_results:
                 if result is None or pd.isna(result):
                     mk = row.get("_matchup_key", "")
                     pids_in_group = _mr_history.loc[_mr_history["_matchup_key"] == mk, "play_id"].astype(int).tolist()
-                    c1, c2, c3, _ = st.columns([1, 1, 1, 3])
+                    c1, c2, c3, c4, _ = st.columns([1, 1, 1, 1, 2])
                     with c1:
                         if st.button("✅ Win", key=f"mr_w_{row.get('play_id')}", help="Mark win"):
                             for _pid in pids_in_group:
@@ -2924,6 +2937,21 @@ with tab_mark_results:
                                 update_play_result(_pid, "P")
                             _load_play_history_cached.clear()
                             st.rerun()
+                    with c4:
+                        if st.button("🗑️ Delete", key=f"mr_del_{row.get('play_id')}", help="Permanently remove this play from play_history and historical_betting_performance.csv"):
+                            first_row_data = None
+                            for _pid in pids_in_group:
+                                deleted = delete_play(_pid)
+                                if deleted and first_row_data is None:
+                                    first_row_data = deleted
+                            if first_row_data:
+                                _remove_play_from_historical_csv(
+                                    first_row_data["date_generated"],
+                                    first_row_data["home_team"],
+                                    first_row_data["away_team"],
+                                )
+                            _load_play_history_cached.clear()
+                            st.rerun()
     else:
         st.info("No past plays in the last 90 days to mark. Plays from yesterday and earlier appear here once they are archived.")
 
@@ -2931,7 +2959,8 @@ with tab_play_history:
     st.subheader("Play of the Day History")
     st.caption("Two NCAAB picks per day (Pick 1 & Pick 2, last 30 days). Results auto-filled at 8am ET from ESPN.")
     _from = date.today() - timedelta(days=30)
-    _history = _load_play_history_cached(from_date_iso=_from.isoformat(), to_date_iso=date.today().isoformat())
+    # Load fresh from DB on every render (no cache) so Mark Results / Delete updates appear immediately
+    _history = load_play_history(from_date=_from, to_date=date.today())
     if not _history.empty:
         _history = _history.copy()
         _history["result_clean"] = _history["result"].apply(
@@ -2983,6 +3012,10 @@ with tab_play_history:
 
         roi_pct, profit_units, w, l, p, win_rate = _roi_and_units(resolved)
         roi_potd, profit_units_potd, w_potd, l_potd, p_potd, win_rate_potd = _roi_and_units(resolved_potd)
+        if os.environ.get("DEBUG_PLAY_HISTORY", "").strip() == "1":
+            _hdf = _load_historical_betting_performance_all()
+            _hrows = len(_hdf) if not _hdf.empty else 0
+            st.caption(f"**DEBUG:** play_history DB → All NCAAB resolved: W={int(w)} L={int(l)} P={int(p)} | POTD: W={int(w_potd)} L={int(l_potd)} P={int(p_potd)}. historical_betting_performance.csv: {_hrows} rows (no W-L; CSV is picks only).")
         # Daily ROI for selected slate date
         resolved_daily = resolved[resolved["date_generated"].astype(str).str.strip() == _selected_slate_date] if "date_generated" in resolved.columns else pd.DataFrame()
         roi_daily, units_daily, w_d, l_d, p_d, _ = _roi_and_units(resolved_daily)

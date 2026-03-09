@@ -206,6 +206,38 @@ def update_play_result(
         conn.close()
 
 
+def delete_play(play_id: int, db_path: Path | None = None) -> Optional[dict]:
+    """
+    Permanently delete a play from play_history. Returns the deleted row as dict
+    (date_generated, home_team, away_team, recommended_side, spread_or_total) for use in
+    removing from historical_betting_performance.csv, or None if not found.
+    """
+    path = db_path or _default_db_path()
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(path)
+    try:
+        cur = conn.execute(
+            "SELECT date_generated, home_team, away_team, recommended_side, spread_or_total FROM play_history WHERE play_id = ?",
+            (play_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        out = {
+            "date_generated": row[0],
+            "home_team": row[1],
+            "away_team": row[2],
+            "recommended_side": row[3],
+            "spread_or_total": row[4],
+        }
+        cur = conn.execute("DELETE FROM play_history WHERE play_id = ?", (play_id,))
+        conn.commit()
+        return out if cur.rowcount > 0 else None
+    finally:
+        conn.close()
+
+
 def set_manual_review_flag(play_id: int, flag: bool = True, db_path: Path | None = None) -> bool:
     """Set or clear manual_review_flag for a play (e.g. when ESPN could not resolve result)."""
     path = db_path or _default_db_path()

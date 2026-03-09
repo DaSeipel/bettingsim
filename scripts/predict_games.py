@@ -48,6 +48,8 @@ VALUE_PLAY_THRESHOLD = 3.0
 EDGE_HIGH_CONFIDENCE = 7.0
 # BARTHAG-based margin: pred_margin = (home_BARTHAG - away_BARTHAG) * this (research: 50-60 maps better to actual margins)
 BARTHAG_TO_POINTS_SCALE = 50.0
+# Neutral site: add ~3 pts to away team (reduce home advantage). Typical HCA ~3 pts.
+NEUTRAL_SITE_ADJUSTMENT_PTS = 3.0
 # Rebounding: ⭐ when recommended side has ROff advantage over opponent > this
 ROFF_ADVANTAGE_THRESHOLD = 3.0
 # Reliability: if away BARTHAG > home BARTHAG + this, flag as low reliability (temporarily not excluding)
@@ -108,12 +110,30 @@ def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
             rename[col] = "Over_Under"
         elif n in ("time", "start_time", "tip", "game_time", "start"):
             rename[col] = "Time"
+        elif n in ("is_neutral", "neutral", "neutral_site"):
+            rename[col] = "Is_Neutral"
     return df.rename(columns=rename)
 
 
 def _get_time_column(df: pd.DataFrame) -> str | None:
     """Return 'Time' if present in df, else None."""
     return "Time" if "Time" in df.columns else None
+
+
+def _is_neutral_from_row(row: pd.Series) -> bool:
+    """True if Is_Neutral column is truthy (1, True, yes, y, etc.)."""
+    if "Is_Neutral" not in row.index:
+        return False
+    val = row.get("Is_Neutral")
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return False
+    s = str(val).strip().lower()
+    if s in ("1", "true", "yes", "y"):
+        return True
+    try:
+        return bool(float(val))
+    except (TypeError, ValueError):
+        return False
 
 
 def _parse_time_value_to_iso_utc(raw: str, game_date: str) -> str | None:
@@ -412,12 +432,15 @@ def main() -> None:
             else:
                 h_b = feature_row.get("home_BARTHAG")
                 a_b = feature_row.get("away_BARTHAG")
-        # Pure BARTHAG-based prediction (no XGBoost): pred_margin = (home_BARTHAG - away_BARTHAG) * 30
+        # Pure BARTHAG-based prediction (no XGBoost): pred_margin = (home_BARTHAG - away_BARTHAG) * scale
         market_spread = float(spread)
+        is_neutral = _is_neutral_from_row(row)
         pred_margin = None
         if h_b is not None and pd.notna(h_b) and a_b is not None and pd.notna(a_b):
             try:
                 pred_margin = (float(h_b) - float(a_b)) * BARTHAG_TO_POINTS_SCALE
+                if is_neutral:
+                    pred_margin -= NEUTRAL_SITE_ADJUSTMENT_PTS  # add ~3 pts to away team
             except (TypeError, ValueError):
                 pass
         # Edge: compare pred_margin to required margin. Home favored (spread < 0): required = abs(spread), edge = pred_margin - abs(spread). Away favored (spread > 0): edge = pred_margin + abs(spread). If edge > 3 → Home covers; if edge < -3 → Away covers.
@@ -524,6 +547,7 @@ def main() -> None:
             "Pick_Total": "Over" if over_prob > 0.5 else "Under",
             "Reliability_Flag": reliability_flag,
             "start_time": start_time,
+            "Is_Neutral": is_neutral,
         })
     value_plays_raw = [r for r in results if r["Is_Value_Play"]]
     value_plays = value_plays_raw
@@ -765,9 +789,16 @@ def _write_value_plays_cache(
             "reason": reason,
             "reasoning_summary": reason,
         })
+    # POTD: top 2 by abs(Edge) descending (value_plays_list is already sorted that way)
+    potd_picks = {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
+    for i, vp in enumerate(value_plays_list[:2]):
+        pick = vp.copy()
+        pick["League"] = f"NCAAB Pick {i + 1}"
+        potd_picks[f"NCAAB Pick {i + 1}"] = pick
+
     payload = {
         "value_plays": value_plays_list,
-        "potd_picks": {"NCAAB Pick 1": None, "NCAAB Pick 2": None},
+        "potd_picks": potd_picks,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "odds_source_meta": {"source": "manual_odds", "odds_file": odds_path.name},
         "value_plays_flagged_count": 0,
