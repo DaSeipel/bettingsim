@@ -2103,18 +2103,13 @@ def _find_game_for_team(
                     edge_pts = None
                 pick = str(row.get("Pick_Spread", "Home")).strip()
                 selection = home if pick == "Home" else away
-                h_b = row.get("Home_BARTHAG")
-                a_b = row.get("Away_BARTHAG")
-                if h_b is not None and a_b is not None and not (pd.isna(h_b) or pd.isna(a_b)):
-                    try:
-                        h_val, a_val = float(h_b), float(a_b)
-                        gap = abs(h_val - a_val)
-                        favored = home if h_val > a_val else away
-                        edge_str = f"{edge_pts:+.1f}" if edge_pts is not None else "—"
-                        ms_str = f"{spread:+.1f}" if spread is not None else "—"
-                        reason = f"{home} (BARTHAG {h_val:.3f}) hosts {away} (BARTHAG {a_val:.3f}). Model sees a {gap:.3f} KenPom gap favoring {favored}. Edge of {edge_str} pts vs market spread of {ms_str}."
-                    except (TypeError, ValueError):
-                        reason = f"Model favors {selection}. Edge of {edge_pts:+.1f} pts vs market." if edge_pts is not None else f"Model favors {selection}."
+                pred_margin = row.get("Pred_Margin")
+                try:
+                    pred_f = float(pred_margin) if pred_margin is not None and pd.notna(pred_margin) else None
+                except (TypeError, ValueError):
+                    pred_f = None
+                if pred_f is not None and spread is not None:
+                    reason = _human_readable_potd_reason(home, away, pred_f, spread, pick)
                 else:
                     reason = f"Model favors {selection}." + (f" Edge of {edge_pts:+.1f} pts." if edge_pts is not None else "")
                 return ("historical", {
@@ -2231,16 +2226,51 @@ def _potd_from_historical_csv(df_today: pd.DataFrame) -> dict:
     return result
 
 
+def _human_readable_potd_reason(
+    home: str, away: str, pred_margin: Optional[float], market_spread: Optional[float], pick_side: str
+) -> str:
+    """Human-readable POTD reason: 'Model projects X to win by ~N pts. Market needs Y — take Z ±Y.'"""
+    try:
+        pred = float(pred_margin) if pred_margin is not None else None
+    except (TypeError, ValueError):
+        pred = None
+    try:
+        ms = float(market_spread) if market_spread is not None else None
+    except (TypeError, ValueError):
+        ms = None
+    if pred is None or ms is None:
+        return f"Model favors {home if pick_side == 'Home' else away}."
+    abs_spread = abs(ms)
+    pick_home = pick_side.strip().upper() == "HOME"
+    selection = home if pick_home else away
+    # Projection: who does model say wins and by how much?
+    if pred >= 0:
+        proj = f"Model projects {home} to win by ~{int(round(pred))} pts."
+    else:
+        proj = f"Model projects {away} to win by ~{int(round(abs(pred)))} pts."
+    # Take line: from picked team's perspective
+    home_favored = ms < 0
+    if pick_home and home_favored:
+        take = f"take {selection} -{abs_spread:.1f}"
+    elif pick_home and not home_favored:
+        take = f"take {selection} +{abs_spread:.1f}"
+    elif not pick_home and home_favored:
+        take = f"take {selection} +{abs_spread:.1f}"
+    else:
+        take = f"take {selection} -{abs_spread:.1f}"
+    return f"{proj} Market needs {abs_spread:.1f} — {take}."
+
+
 def _generic_potd_reason(selection: str, market_spread: Optional[float], pick_side: str) -> str:
-    """Fallback POTD reason when BARTHAG columns are missing."""
+    """Fallback POTD reason when pred_margin/market_spread missing."""
     if market_spread is not None and pick_side == "Away":
         spread_from_pick = -market_spread
     else:
         spread_from_pick = market_spread
     spread_str = f"{spread_from_pick:+.1f}" if spread_from_pick is not None else None
     if spread_str:
-        return f"Model favors {selection} to cover the {spread_str} spread. Strong edge detected based on scoring margin and rebounding advantage."
-    return f"Model favors {selection}. Strong edge detected based on scoring margin and rebounding advantage."
+        return f"Model favors {selection} to cover the {spread_str} spread."
+    return f"Model favors {selection}."
 
 
 def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
@@ -2263,20 +2293,14 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
         ms = None
     # Spread from picked team's perspective: market spread is home perspective; away pick gets -ms
     point_val = ms if pick_side == "Home" else (-float(ms) if ms is not None else None)
-    # Dynamic reasoning from BARTHAG, edge, market spread (fallback to generic if BARTHAG missing)
-    h_b = row.get("Home_BARTHAG")
-    a_b = row.get("Away_BARTHAG")
-    if h_b is not None and a_b is not None and not (isinstance(h_b, float) and pd.isna(h_b)) and not (isinstance(a_b, float) and pd.isna(a_b)):
-        try:
-            h_val = float(h_b)
-            a_val = float(a_b)
-            gap = abs(h_val - a_val)
-            favored = home if h_val > a_val else away
-            edge_str = f"{float(edge_pts):+.1f}" if edge_pts is not None and pd.notna(edge_pts) else "—"
-            ms_str = f"{ms:+.1f}" if ms is not None else "—"
-            reason = f"{home} (BARTHAG {h_val:.3f}) hosts {away} (BARTHAG {a_val:.3f}). Model sees a {gap:.3f} KenPom gap favoring {favored}. Edge of {edge_str} pts vs market spread of {ms_str}."
-        except (TypeError, ValueError):
-            reason = _generic_potd_reason(selection, ms, pick_side)
+    # Human-readable reasoning from pred_margin and market_spread
+    pred_margin = row.get("Pred_Margin")
+    try:
+        pred_f = float(pred_margin) if pred_margin is not None and pd.notna(pred_margin) else None
+    except (TypeError, ValueError):
+        pred_f = None
+    if pred_f is not None and ms is not None:
+        reason = _human_readable_potd_reason(home, away, pred_f, ms, pick_side)
     else:
         reason = _generic_potd_reason(selection, ms, pick_side)
     return {
@@ -3380,17 +3404,10 @@ with tab_game_lookup:
         like_home = pick_team.strip().lower() == home_team.strip().lower() or (home_team and pick_team and home_team.strip().lower() in pick_team.strip().lower())
         verdict_bg = "#1b5e20" if like_home else "#e65100"
         verdict_label = "Home" if like_home else "Away"
-        # Use recalculated edge in reason when available so verdict is consistent with vs column
-        if edge is not None and home_barthag is not None and away_barthag is not None:
-            try:
-                hb = float(home_barthag)
-                ab = float(away_barthag)
-                if not (pd.isna(hb) or pd.isna(ab)):
-                    reason_text = f"Model favors {pick_team} — Edge {edge:+.1f} pts. KenPom: {home_team} (BARTHAG {hb:.3f}) vs {away_team} ({ab:.3f}). Stronger profile by {abs(hb - ab):.3f}."
-                else:
-                    reason_text = (game.get("reason") or "Model favors this side.").strip()
-            except (TypeError, ValueError):
-                reason_text = (game.get("reason") or "Model favors this side.").strip()
+        # Use human-readable reason when pred and spread available
+        pick_side = "Home" if (pick_team and pick_team.strip().lower() == home_team.strip().lower()) else "Away"
+        if pred is not None and spread is not None:
+            reason_text = _human_readable_potd_reason(home_team, away_team, pred, spread, pick_side)
         else:
             reason_text = (game.get("reason") or "Model favors this side.").strip()
         reason_escaped = reason_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")

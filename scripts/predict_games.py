@@ -737,25 +737,32 @@ def _write_value_plays_cache(
         # Spread from picked team's perspective: Home = market (home line), Away = -market (away line)
         point_picked = spread_f if pick == "Home" else (-spread_f if spread_f is not None else None)
         point_str = f"{point_picked:+.1f}" if point_picked is not None else "—"
-        # Dynamic reasoning: edge pts, BARTHAG, which team favored by KenPom
-        h_b = r.get("Home_BARTHAG")
-        a_b = r.get("Away_BARTHAG")
-        edge_str = f"{edge_pts_f:+.1f}" if edge_pts_f is not None else "—"
-        if h_b is not None and a_b is not None and not (isinstance(h_b, float) and (h_b != h_b)) and not (isinstance(a_b, float) and (a_b != a_b)):
-            try:
-                h_val, a_val = float(h_b), float(a_b)
-                diff = abs(h_val - a_val)
-                if h_val > a_val:
-                    favored = f"{home} (BARTHAG {h_val:.3f})"
-                    underdog = f"{away} ({a_val:.3f})"
-                else:
-                    favored = f"{away} (BARTHAG {a_val:.3f})"
-                    underdog = f"{home} ({h_val:.3f})"
-                reason = f"Model favors {selection} ({point_str}) — Edge {edge_str} pts. KenPom: {favored} vs {underdog}. Stronger profile by {diff:.3f}."
-            except (TypeError, ValueError):
-                reason = f"Model favors {selection} ({point_str}) — Edge {edge_str} pts. Strong edge based on scoring margin and rebounding."
+        # Human-readable reasoning: pred_margin, market_spread, pick from picked team's perspective
+        pred_margin = r.get("Pred_Margin")
+        try:
+            pred_f = float(pred_margin) if pred_margin is not None else None
+        except (TypeError, ValueError):
+            pred_f = None
+        if pred_f is not None and spread_f is not None:
+            abs_spread = abs(spread_f)
+            pick_home = pick == "Home"
+            if pred_f >= 0:
+                proj = f"Model projects {home} to win by ~{int(round(pred_f))} pts."
+            else:
+                proj = f"Model projects {away} to win by ~{int(round(abs(pred_f)))} pts."
+            home_favored = spread_f < 0
+            if pick_home and home_favored:
+                take = f"take {selection} -{abs_spread:.1f}"
+            elif pick_home and not home_favored:
+                take = f"take {selection} +{abs_spread:.1f}"
+            elif not pick_home and home_favored:
+                take = f"take {selection} +{abs_spread:.1f}"
+            else:
+                take = f"take {selection} -{abs_spread:.1f}"
+            reason = f"{proj} Market needs {abs_spread:.1f} — {take}."
         else:
-            reason = f"Model favors {selection} ({point_str}) — Edge {edge_str} pts. Strong edge based on scoring margin and rebounding."
+            edge_str = f"{edge_pts_f:+.1f}" if edge_pts_f is not None else "—"
+            reason = f"Model favors {selection} ({point_str}) — Edge {edge_str} pts." if point_str != "—" else f"Model favors {selection}."
         start_time_iso = r.get("start_time")
         if start_time_iso and str(start_time_iso).strip():
             try:
