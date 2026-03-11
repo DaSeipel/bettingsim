@@ -54,6 +54,16 @@ ODDS_TO_STATS_NAME: dict[str, str] = {
     "Queens Charlotte": "Queens",
     "Ga. Southern": "Georgia Southern",
     "Boston U": "Boston University",
+    # Expanded mappings for Torvik naming
+    "Kansas State": "Kansas St.",
+    "Penn State": "Penn St.",
+    "Oklahoma State": "Oklahoma St.",
+    "Wright State": "Wright St.",
+    "Detroit Mercy": "Detroit Mercy",
+    "Missouri State": "Missouri St.",
+    "Jacksonville State": "Jacksonville St.",
+    "Portland State": "Portland St.",
+    "Jackson State": "Jackson St.",
 }
 
 # Value play: only when |edge| > this (pts). Pick Home if edge > 3 (model thinks home does better than spread), Away if edge < -3, skip if |edge| <= 3.

@@ -29,6 +29,12 @@ OUTPUT_PATH = NCAAB_DIR / "current_form_2026.csv"
 CURRENT_SEASON = 2026
 
 
+def _normalize_team_name(s: str) -> str:
+    if pd.isna(s):
+        return ""
+    return " ".join(str(s).strip().lower().split())
+
+
 def main() -> None:
     if not HISTORICAL_GAMES_PATH.exists():
         print(f"Missing {HISTORICAL_GAMES_PATH}", file=sys.stderr)
@@ -54,6 +60,7 @@ def main() -> None:
     # Per-team history: list of (margin from team POV, win 0/1)
     team_hist: dict[str, list[tuple[float, float]]] = defaultdict(list)
     for _, row in games.iterrows():
+        # Normalize names for consistency with Torvik and alias maps
         home = str(row.get("home_team", "")).strip()
         away = str(row.get("away_team", "")).strip()
         margin = float(row.get("margin", 0))
@@ -61,6 +68,33 @@ def main() -> None:
             continue
         team_hist[home].append((margin, 1.0 if margin > 0 else 0.0))
         team_hist[away].append((-margin, 1.0 if margin < 0 else 0.0))
+
+    # Diagnostic for Gonzaga: print all 2026 games and last-5 calc
+    if "Gonzaga" in team_hist:
+        print("\n[DEBUG] Gonzaga 2026 games (from historical_games.csv):")
+        g_games = games[
+            (games["home_team"] == "Gonzaga") | (games["away_team"] == "Gonzaga")
+        ].sort_values("date")
+
+        # Last 5 games only for a concise verification view.
+        g_last5 = g_games.tail(5)
+        for _, r in g_last5.iterrows():
+            date_str = r["date"].strftime("%Y-%m-%d")
+            home = str(r["home_team"])
+            away = str(r["away_team"])
+            margin = float(r.get("margin", 0))
+            if home == "Gonzaga":
+                m_team = margin
+                opp = away
+            else:
+                m_team = -margin
+                opp = home
+            print(f"  {date_str}: vs {opp:20s}  margin={m_team:+.1f}")
+        hist = team_hist["Gonzaga"]
+        take5 = hist[-5:] if len(hist) >= 5 else hist
+        margins5 = [x[0] for x in take5]
+        avg5 = sum(margins5) / len(margins5) if margins5 else 0.0
+        print(f"[DEBUG] Gonzaga last-5 margins: {margins5}  avg={avg5:.2f}")
 
     def avg_margin_winpct(hist: list, n: int) -> tuple[float, float]:
         if not hist:

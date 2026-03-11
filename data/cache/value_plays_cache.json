@@ -6,7 +6,7 @@
       "Selection": "Santa Clara",
       "Market": "Spread",
       "Odds": -110,
-      "Value (%)": 2.96,
+      "Value (%)": 2.11,
       "point": 8.5,
       "Point": 8.5,
       "Recommended Stake": null,
@@ -16,8 +16,8 @@
       "home_team": "Gonzaga",
       "away_team": "Santa Clara",
       "confidence_tier": "High",
-      "reason": "Model projects Santa Clara to win by ~0 pts. Market needs 8.5 \u2014 take Santa Clara +8.5.",
-      "reasoning_summary": "Model projects Santa Clara to win by ~0 pts. Market needs 8.5 \u2014 take Santa Clara +8.5."
+      "reason": "Model projects Gonzaga to win by ~2 pts. Market needs 8.5 \u2014 take Santa Clara +8.5. P(cover): 69.0%.",
+      "reasoning_summary": "Model projects Gonzaga to win by ~2 pts. Market needs 8.5 \u2014 take Santa Clara +8.5. P(cover): 69.0%."
     },
     {
       "League": "NCAAB",
@@ -25,7 +25,7 @@
       "Selection": "NJIT",
       "Market": "Spread",
       "Odds": -110,
-      "Value (%)": 2.26,
+      "Value (%)": 1.55,
       "point": 10.5,
       "Point": 10.5,
       "Recommended Stake": null,
@@ -34,9 +34,9 @@
       "start_time": "2026-03-10T23:00:00Z",
       "home_team": "Vermont",
       "away_team": "NJIT",
-      "confidence_tier": "Medium",
-      "reason": "Model projects Vermont to win by ~4 pts. Market needs 10.5 \u2014 take NJIT +10.5.",
-      "reasoning_summary": "Model projects Vermont to win by ~4 pts. Market needs 10.5 \u2014 take NJIT +10.5."
+      "confidence_tier": "High",
+      "reason": "Model projects Vermont to win by ~6 pts. Market needs 10.5 \u2014 take NJIT +10.5. P(cover): 73.4%.",
+      "reasoning_summary": "Model projects Vermont to win by ~6 pts. Market needs 10.5 \u2014 take NJIT +10.5. P(cover): 73.4%."
     },
     {
       "League": "NCAAB",
@@ -44,7 +44,7 @@
       "Selection": "Jackson St.",
       "Market": "Spread",
       "Odds": -110,
-      "Value (%)": 1.75,
+      "Value (%)": 1.1,
       "point": 6.5,
       "Point": 6.5,
       "Recommended Stake": null,
@@ -53,9 +53,9 @@
       "start_time": "2026-03-11T00:30:00Z",
       "home_team": "Grambling St.",
       "away_team": "Jackson St.",
-      "confidence_tier": "Medium",
-      "reason": "Model projects Grambling St. to win by ~1 pts. Market needs 6.5 \u2014 take Jackson St. +6.5.",
-      "reasoning_summary": "Model projects Grambling St. to win by ~1 pts. Market needs 6.5 \u2014 take Jackson St. +6.5."
+      "confidence_tier": "High",
+      "reason": "Model projects Grambling St. to win by ~3 pts. Market needs 6.5 \u2014 take Jackson St. +6.5. P(cover): 69.2%.",
+      "reasoning_summary": "Model projects Grambling St. to win by ~3 pts. Market needs 6.5 \u2014 take Jackson St. +6.5. P(cover): 69.2%."
     },
     {
       "League": "NCAAB",
@@ -63,7 +63,7 @@
       "Selection": "Jacksonville St.",
       "Market": "Spread",
       "Odds": -110,
-      "Value (%)": 1.55,
+      "Value (%)": 1.08,
       "point": 1.5,
       "Point": 1.5,
       "Recommended Stake": null,
@@ -73,84 +73,8 @@
       "home_team": "New Mexico St.",
       "away_team": "Jacksonville St.",
       "confidence_tier": "Medium",
-      "reason": "Model projects Jacksonville St. to win by ~3 pts. Market needs 1.5 \u2014 take Jacksonville St. +1.5.",
-      "reasoning_summary": "Model projects Jacksonville St. to win by ~3 pts. Market needs 1.5 \u2014 take Jacksonville St. +1.5."
-    },
-    {
-      "League": "NCAAB",
-      "Event": "Mercyhurst @ LIU",
-      "Selection": "Mercyhurst",
-      "Market": "Spread",
-      "Odds": -110,
-      "Value (%)": 1.37,
-      "point": 5.5,
-      "Point": 5.5,
-      "Recommended Stake": null,
-      "Injury Alert": "\u2014",
-      "Start Time": "Mar 10, 07:00 PM ET",
-      "start_time": "2026-03-10T23:00:00Z",
-      "home_team": "LIU",
-      "away_team": "Mercyhurst",
-      "confidence_tier": "Medium",
-      "reason": "Model projects LIU to win by ~1 pts. Market needs 5.5 \u2014 take Mercyhurst +5.5.",
-      "reasoning_summary": "Model projects LIU to win by ~1 pts. Market needs 5.5 \u2014 take Mercyhurst +5.5."
-    },
-    {
-      "League": "NCAAB",
-      "Event": "Kansas St. @ BYU",
-      "Selection": "Kansas St.",
-      "Market": "Spread",
-      "Odds": -110,
-      "Value (%)": 1.16,
-      "point": 10.5,
-      "Point": 10.5,
-      "Recommended Stake": null,
-      "Injury Alert": "\u2014",
-      "Start Time": "Mar 10, 07:00 PM ET",
-      "start_time": "2026-03-10T23:00:00Z",
-      "home_team": "BYU",
-      "away_team": "Kansas St.",
-      "confidence_tier": "Medium",
-      "reason": "Model projects BYU to win by ~7 pts. Market needs 10.5 \u2014 take Kansas St. +10.5.",
-      "reasoning_summary": "Model projects BYU to win by ~7 pts. Market needs 10.5 \u2014 take Kansas St. +10.5."
-    },
-    {
-      "League": "NCAAB",
-      "Event": "Monmouth @ Hofstra",
-      "Selection": "Hofstra",
-      "Market": "Spread",
-      "Odds": -110,
-      "Value (%)": 1.12,
-      "point": -4.5,
-      "Point": -4.5,
-      "Recommended Stake": null,
-      "Injury Alert": "\u2014",
-      "Start Time": "Mar 10, 07:00 PM ET",
-      "start_time": "2026-03-10T23:00:00Z",
-      "home_team": "Hofstra",
-      "away_team": "Monmouth",
-      "confidence_tier": "Medium",
-      "reason": "Model projects Hofstra to win by ~8 pts. Market needs 4.5 \u2014 take Hofstra -4.5.",
-      "reasoning_summary": "Model projects Hofstra to win by ~8 pts. Market needs 4.5 \u2014 take Hofstra -4.5."
-    },
-    {
-      "League": "NCAAB",
-      "Event": "Penn St. @ Northwestern",
-      "Selection": "Northwestern",
-      "Market": "Spread",
-      "Odds": -110,
-      "Value (%)": 1.0,
-      "point": -4.5,
-      "Point": -4.5,
-      "Recommended Stake": null,
-      "Injury Alert": "\u2014",
-      "Start Time": "Mar 10, 07:30 PM ET",
-      "start_time": "2026-03-10T23:30:00Z",
-      "home_team": "Northwestern",
-      "away_team": "Penn St.",
-      "confidence_tier": "Medium",
-      "reason": "Model projects Northwestern to win by ~8 pts. Market needs 4.5 \u2014 take Northwestern -4.5.",
-      "reasoning_summary": "Model projects Northwestern to win by ~8 pts. Market needs 4.5 \u2014 take Northwestern -4.5."
+      "reason": "Model projects Jacksonville St. to win by ~2 pts. Market needs 1.5 \u2014 take Jacksonville St. +1.5. P(cover): 61.6%.",
+      "reasoning_summary": "Model projects Jacksonville St. to win by ~2 pts. Market needs 1.5 \u2014 take Jacksonville St. +1.5. P(cover): 61.6%."
     }
   ],
   "potd_picks": {
@@ -160,7 +84,7 @@
       "Selection": "Santa Clara",
       "Market": "Spread",
       "Odds": -110,
-      "Value (%)": 2.96,
+      "Value (%)": 2.11,
       "point": 8.5,
       "Point": 8.5,
       "Recommended Stake": null,
@@ -170,8 +94,8 @@
       "home_team": "Gonzaga",
       "away_team": "Santa Clara",
       "confidence_tier": "High",
-      "reason": "Model projects Santa Clara to win by ~0 pts. Market needs 8.5 \u2014 take Santa Clara +8.5.",
-      "reasoning_summary": "Model projects Santa Clara to win by ~0 pts. Market needs 8.5 \u2014 take Santa Clara +8.5."
+      "reason": "Model projects Gonzaga to win by ~2 pts. Market needs 8.5 \u2014 take Santa Clara +8.5. P(cover): 69.0%.",
+      "reasoning_summary": "Model projects Gonzaga to win by ~2 pts. Market needs 8.5 \u2014 take Santa Clara +8.5. P(cover): 69.0%."
     },
     "NCAAB Pick 2": {
       "League": "NCAAB Pick 2",
@@ -179,7 +103,7 @@
       "Selection": "NJIT",
       "Market": "Spread",
       "Odds": -110,
-      "Value (%)": 2.26,
+      "Value (%)": 1.55,
       "point": 10.5,
       "Point": 10.5,
       "Recommended Stake": null,
@@ -188,12 +112,12 @@
       "start_time": "2026-03-10T23:00:00Z",
       "home_team": "Vermont",
       "away_team": "NJIT",
-      "confidence_tier": "Medium",
-      "reason": "Model projects Vermont to win by ~4 pts. Market needs 10.5 \u2014 take NJIT +10.5.",
-      "reasoning_summary": "Model projects Vermont to win by ~4 pts. Market needs 10.5 \u2014 take NJIT +10.5."
+      "confidence_tier": "High",
+      "reason": "Model projects Vermont to win by ~6 pts. Market needs 10.5 \u2014 take NJIT +10.5. P(cover): 73.4%.",
+      "reasoning_summary": "Model projects Vermont to win by ~6 pts. Market needs 10.5 \u2014 take NJIT +10.5. P(cover): 73.4%."
     }
   },
-  "timestamp": "2026-03-10T20:44:28.877974+00:00",
+  "timestamp": "2026-03-11T02:40:00.393755+00:00",
   "odds_source_meta": {
     "source": "manual_odds",
     "odds_file": "March_10_2026_Odds.csv"

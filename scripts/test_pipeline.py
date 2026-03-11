@@ -39,6 +39,27 @@ COVER_PROB_PARAMS_PATH = MODELS_DIR / "cover_prob_params.json"
 BARTHAG_TO_POINTS_SCALE = 50.0
 NEUTRAL_SITE_ADJUSTMENT_PTS = 3.0
 
+# Reuse the same odds-to-stats name mapping conceptually as predict_games.py
+ODDS_TO_STATS_NAME = {
+    "FGCU": "Florida Gulf Coast",
+    "Central Ark": "Central Arkansas",
+    "NW State": "Northwestern St.",
+    "Nicholls": "Nicholls St.",
+    "W. Carolina": "Western Carolina",
+    "Queens Charlotte": "Queens",
+    "Ga. Southern": "Georgia Southern",
+    "Boston U": "Boston University",
+    "Kansas State": "Kansas St.",
+    "Penn State": "Penn St.",
+    "Oklahoma State": "Oklahoma St.",
+    "Wright State": "Wright St.",
+    "Detroit Mercy": "Detroit Mercy",
+    "Missouri State": "Missouri St.",
+    "Jacksonville State": "Jacksonville St.",
+    "Portland State": "Portland St.",
+    "Jackson State": "Jackson St.",
+}
+
 
 def _normalize_team_name(s: str) -> str:
     if pd.isna(s):
@@ -59,11 +80,15 @@ def _load_team_stats_2026() -> pd.DataFrame:
 def _lookup_team(stats_2026: pd.DataFrame, name: str) -> pd.Series | None:
     if stats_2026.empty or "TEAM" not in stats_2026.columns:
         return None
-    norm = _normalize_team_name(name)
+    # Apply alias map first
+    mapped_name = ODDS_TO_STATS_NAME.get(name, name)
+    norm = _normalize_team_name(mapped_name)
     if not norm:
         return None
     match = stats_2026[stats_2026.get("_team_norm", "").astype(str) == norm]
-    return match.iloc[0] if not match.empty else None
+    if not match.empty:
+        return match.iloc[0]
+    return None
 
 
 def _load_current_form() -> pd.DataFrame:
@@ -402,10 +427,17 @@ def main() -> int:
                             pred_barthag -= NEUTRAL_SITE_ADJUSTMENT_PTS
                         edge = pred_margin + spread
                         p_cover = _p_cover_from_edge(pred_margin - spread, cover_params)
+                        if p_cover is not None:
+                            p_cover_str = f"{p_cover * 100:.1f}%"
+                        else:
+                            p_cover_str = "—"
 
-                        print(f"{home_raw}, {away_raw}, {spread:+.1f}, {pred_margin:+.2f}, {pred_barthag:+.2f}, {edge:+.2f}, "
-                              f\"{(p_cover*100:.1f)+'%' if p_cover is not None else '—'}, "
-                              f\"{feat.get('home_hca', 0.0):+.2f}, {feat.get('home_last5_margin', 0.0):+.2f}, {feat.get('away_last5_margin', 0.0):+.2f}\")
+                        print(
+                            f"{home_raw}, {away_raw}, {spread:+.1f}, {pred_margin:+.2f}, "
+                            f"{pred_barthag:+.2f}, {edge:+.2f}, {p_cover_str}, "
+                            f"{feat.get('home_hca', 0.0):+.2f}, {feat.get('home_last5_margin', 0.0):+.2f}, "
+                            f"{feat.get('away_last5_margin', 0.0):+.2f}"
+                        )
                         if defaults:
                             issues.append(f"Defaults/zeros for {home_raw} vs {away_raw}: {defaults}")
 
