@@ -89,16 +89,28 @@ def _ensure_models_dir() -> Path:
 
 
 def _select_features(df: pd.DataFrame, columns: list[str]) -> tuple[pd.DataFrame, list[str]]:
-    """Return df with only columns that exist; fill NaN with 0. Returns (X, used_cols)."""
-    used = [c for c in columns if c in df.columns]
-    if not used:
+    """
+    Return a feature matrix with exactly the requested columns in order, filling any
+    missing features with 0. This keeps XGBoost happy when feature_names must match
+    the model's training columns exactly. Returns (X, used_cols).
+    """
+    if df.empty:
         return pd.DataFrame(), []
-    X = df[used].copy()
-    for c in used:
-        if X[c].dtype in (np.float64, np.int64, np.float32, np.int32):
-            X[c] = X[c].fillna(0.0)
+    n_rows = len(df)
+    data = {}
+    used: list[str] = []
+    for c in columns:
+        if c in df.columns:
+            col = df[c]
+            if col.dtype in (np.float64, np.int64, np.float32, np.int32):
+                data[c] = col.fillna(0.0).astype(float)
+            else:
+                data[c] = pd.to_numeric(col, errors="coerce").fillna(0.0).astype(float)
         else:
-            X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.0)
+            # Feature not present in df: create a zero column so feature_names match model
+            data[c] = pd.Series([0.0] * n_rows, index=df.index, dtype=float)
+        used.append(c)
+    X = pd.DataFrame(data, index=df.index, columns=columns)
     return X, used
 
 
