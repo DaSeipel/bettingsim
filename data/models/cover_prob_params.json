@@ -1,0 +1,6 @@
+{
+  "k": 0.033916,
+  "intercept": 0.528921,
+  "edge0": -15.5949,
+  "description": "P(cover) = 1 / (1 + exp(-(k*edge + intercept))). edge = pred_margin - market_spread (home)."
+}

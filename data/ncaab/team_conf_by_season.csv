@@ -1,0 +1,1844 @@
+season,team,conf
+2021,WCC,31-1
+2021,B12,28-2
+2021,Amer,28-4
+2021,B10,24-7
+2021,P12,25-8
+2021,SEC,26-7
+2021,ACC,18-7
+2021,MVC,26-5
+2021,BE,18-7
+2021,MWC,23-5
+2021,A10,16-5
+2021,BW,22-5
+2021,MAC,16-9
+2021,Pat,14-2
+2021,CUSA,18-10
+2021,Horz,18-6
+2021,BSky,16-8
+2021,BSth,23-2
+2021,ASun,23-6
+2021,WAC,17-7
+2021,SC,16-9
+2021,Slnd,24-5
+2021,OVC,26-4
+2021,Sum,16-7
+2021,MAAC,12-6
+2021,CAA,13-7
+2021,AE,10-5
+2021,SB,16-6
+2021,NEC,15-7
+2021,MEAC,17-8
+2021,SWAC,17-9
+2022,Gonzaga,WCC
+2022,Kansas,B12
+2022,Baylor,B12
+2022,Arizona,P12
+2022,Duke,ACC
+2022,Villanova,BE
+2022,Kentucky,SEC
+2022,Auburn,SEC
+2022,Texas Tech,B12
+2022,Tennessee,SEC
+2022,Purdue,B10
+2022,Wisconsin,B10
+2022,UCLA,P12
+2022,Illinois,B10
+2022,Arkansas,SEC
+2022,Providence,BE
+2022,Houston,Amer
+2022,Iowa,B10
+2022,Saint Mary's,WCC
+2022,Connecticut,BE
+2022,Texas,B12
+2022,LSU,SEC
+2022,Alabama,SEC
+2022,Colorado St.,MWC
+2022,Ohio St.,B10
+2022,Michigan St.,B10
+2022,Murray St.,OVC
+2022,USC,P12
+2022,North Carolina,ACC
+2022,San Diego St.,MWC
+2022,Boise St.,MWC
+2022,Seton Hall,BE
+2022,Memphis,Amer
+2022,TCU,B12
+2022,Creighton,BE
+2022,Marquette,BE
+2022,San Francisco,WCC
+2022,Miami FL,ACC
+2022,Loyola Chicago,MVC
+2022,Davidson,A10
+2022,Virginia Tech,ACC
+2022,Michigan,B10
+2022,Notre Dame,ACC
+2022,Iowa St.,B12
+2022,Rutgers,B10
+2022,Indiana,B10
+2022,UAB,CUSA
+2022,Wyoming,MWC
+2022,New Mexico St.,WAC
+2022,Richmond,A10
+2022,Vermont,AE
+2022,Chattanooga,SC
+2022,South Dakota St.,Sum
+2022,Akron,MAC
+2022,Colgate,Pat
+2022,Longwood,BSth
+2022,Yale,Ivy
+2022,Montana St.,BSky
+2022,Saint Peter's,MAAC
+2022,Delaware,CAA
+2022,Jacksonville St.,ASun
+2022,Cal St. Fullerton,BW
+2022,Georgia St.,SB
+2022,Bryant,NEC
+2022,Wright St.,Horz
+2022,Texas Southern,SWAC
+2022,Norfolk St.,MEAC
+2022,Texas A&M Corpus Chris,Slnd
+2022,Oklahoma,B12
+2022,Texas A&M,SEC
+2022,Oklahoma St.,B12
+2022,Wake Forest,ACC
+2022,Washington St.,P12
+2022,Dayton,A10
+2022,Syracuse,ACC
+2022,Xavier,BE
+2022,St. John's,BE
+2022,VCU,A10
+2022,North Texas,CUSA
+2022,Utah St.,MWC
+2022,Florida,SEC
+2022,SMU,Amer
+2022,West Virginia,B12
+2022,Virginia,ACC
+2022,Vanderbilt,SEC
+2022,BYU,WCC
+2022,Santa Clara,WCC
+2022,Northern Iowa,MVC
+2022,DePaul,BE
+2022,Stephen F. Austin,WAC
+2022,Sam Houston St.,WAC
+2022,UC Riverside,BW
+2022,UNC Greensboro,SC
+2022,Bellarmine,ASun
+2022,Long Beach St.,BW
+2022,Old Dominion,CUSA
+2022,Campbell,BSth
+2022,Alcorn St.,SWAC
+2022,Mississippi St.,SEC
+2022,Kansas St.,B12
+2022,Fresno St.,MWC
+2022,Saint Louis,A10
+2022,Tulane,Amer
+2022,Clemson,ACC
+2022,Oregon,P12
+2022,Furman,SC
+2022,Missouri St.,MVC
+2022,Towson,CAA
+2022,Drake,MVC
+2022,Arizona St.,P12
+2022,Maryland,B10
+2022,Colorado,P12
+2022,UNLV,MWC
+2022,Northwestern,B10
+2022,St. Bonaventure,A10
+2022,Wichita St.,Amer
+2022,Iona,MAAC
+2022,Belmont,OVC
+2022,Grand Canyon,WAC
+2022,Penn St.,B10
+2022,Cincinnati,Amer
+2022,Middle Tennessee,CUSA
+2022,UCF,Amer
+2022,Toledo,MAC
+2022,Mississippi,SEC
+2022,Louisiana Tech,CUSA
+2022,Bradley,MVC
+2022,Florida St.,ACC
+2022,South Carolina,SEC
+2022,Washington,P12
+2022,Temple,Amer
+2022,Princeton,Ivy
+2022,Minnesota,B10
+2022,Boston College,ACC
+2022,Hofstra,CAA
+2022,Nebraska,B10
+2022,Abilene Christian,WAC
+2022,Stanford,P12
+2022,Utah Valley,WAC
+2022,Butler,BE
+2022,Louisville,ACC
+2022,Morehead St.,OVC
+2022,North Carolina St.,ACC
+2022,George Mason,A10
+2022,Liberty,ASun
+2022,Utah,P12
+2022,Nevada,MWC
+2022,Western Kentucky,CUSA
+2022,Southern Illinois,MVC
+2022,Wofford,SC
+2022,College of Charleston,CAA
+2022,Texas St.,SB
+2022,Kent St.,MAC
+2022,Florida Atlantic,CUSA
+2022,California,P12
+2022,Georgia Tech,ACC
+2022,Rhode Island,A10
+2022,UC Santa Barbara,BW
+2022,Seattle,WAC
+2022,Drexel,CAA
+2022,Buffalo,MAC
+2022,UC Irvine,BW
+2022,Saint Joseph's,A10
+2022,Ohio,MAC
+2022,Gardner Webb,BSth
+2022,Jacksonville,ASun
+2022,Missouri,SEC
+2022,Appalachian St.,SB
+2022,New Mexico,MWC
+2022,UTEP,CUSA
+2022,UNC Wilmington,CAA
+2022,Wagner,NEC
+2022,Tulsa,Amer
+2022,Mercer,SC
+2022,Coastal Carolina,SB
+2022,Portland,WCC
+2022,South Alabama,SB
+2022,North Dakota St.,Sum
+2022,East Tennessee St.,SC
+2022,Samford,SC
+2022,East Carolina,Amer
+2022,Cleveland St.,Horz
+2022,Monmouth,MAAC
+2022,Georgetown,BE
+2022,VMI,SC
+2022,Louisiana Lafayette,SB
+2022,Hawaii,BW
+2022,Northern Kentucky,Horz
+2022,Winthrop,BSth
+2022,Oakland,Horz
+2022,Southern Utah,BSky
+2022,Fordham,A10
+2022,Cornell,Ivy
+2022,Navy,Pat
+2022,Oral Roberts,Sum
+2022,Florida Gulf Coast,ASun
+2022,Charlotte,CUSA
+2022,Massachusetts,A10
+2022,Georgia,SEC
+2022,Weber St.,BSky
+2022,Pittsburgh,ACC
+2022,Tarleton St.,WAC
+2022,Illinois St.,MVC
+2022,UMKC,Sum
+2022,Arkansas St.,SB
+2022,Indiana St.,MVC
+2022,Troy,SB
+2022,Nicholls St.,Slnd
+2022,Loyola Marymount,WCC
+2022,Valparaiso,MVC
+2022,UC Davis,BW
+2022,Fort Wayne,Horz
+2022,Niagara,MAAC
+2022,Fairfield,MAAC
+2022,Harvard,Ivy
+2022,UNC Asheville,BSth
+2022,South Dakota,Sum
+2022,Oregon St.,P12
+2022,Northern Colorado,BSky
+2022,James Madison,CAA
+2022,Cal Baptist,WAC
+2022,Penn,Ivy
+2022,San Diego,WCC
+2022,George Washington,A10
+2022,Rider,MAAC
+2022,Detroit,Horz
+2022,Dartmouth,Ivy
+2022,Marist,MAAC
+2022,Brown,Ivy
+2022,La Salle,A10
+2022,Boston University,Pat
+2022,Southeast Missouri St.,OVC
+2022,High Point,BSth
+2022,Kennesaw St.,ASun
+2022,Northeastern,CAA
+2022,Eastern Washington,BSky
+2022,UT Arlington,SB
+2022,Southern,SWAC
+2022,Marshall,CUSA
+2022,Stony Brook,AE
+2022,South Florida,Amer
+2022,Quinnipiac,MAAC
+2022,UMBC,AE
+2022,Siena,MAAC
+2022,New Hampshire,AE
+2022,Rice,CUSA
+2022,LIU Brooklyn,NEC
+2022,Youngstown St.,Horz
+2022,The Citadel,SC
+2022,Montana,BSky
+2022,Howard,MEAC
+2022,Ball St.,MAC
+2022,Georgia Southern,SB
+2022,Tennessee Tech,OVC
+2022,Elon,CAA
+2022,Lipscomb,ASun
+2022,Mount St. Mary's,NEC
+2022,Miami OH,MAC
+2022,Western Illinois,Sum
+2022,Portland St.,BSky
+2022,Eastern Kentucky,ASun
+2022,Tennessee St.,OVC
+2022,Pepperdine,WCC
+2022,Air Force,MWC
+2022,Louisiana Monroe,SB
+2022,USC Upstate,BSth
+2022,North Florida,ASun
+2022,UC San Diego,BW
+2022,Manhattan,MAAC
+2022,Presbyterian,BSth
+2022,Southeastern Louisiana,Slnd
+2022,Bowling Green,MAC
+2022,UMass Lowell,AE
+2022,Radford,BSth
+2022,San Jose St.,MWC
+2022,Utah Tech,WAC
+2022,Illinois Chicago,Horz
+2022,FIU,CUSA
+2022,Pacific,WCC
+2022,Prairie View A&M,SWAC
+2022,Canisius,MAAC
+2022,Hartford,AE
+2022,North Carolina A&T,BSth
+2022,Austin Peay,OVC
+2022,St. Thomas,Sum
+2022,Jackson St.,SWAC
+2022,Duquesne,A10
+2022,New Orleans,Slnd
+2022,SIU Edwardsville,OVC
+2022,Loyola MD,Pat
+2022,Army,Pat
+2022,Central Arkansas,ASun
+2022,Cal St. Bakersfield,BW
+2022,Tennessee Martin,OVC
+2022,Merrimack,NEC
+2022,Albany,AE
+2022,Western Carolina,SC
+2022,Denver,Sum
+2022,Cal Poly,BW
+2022,Northern Illinois,MAC
+2022,Morgan St.,MEAC
+2022,Lehigh,Pat
+2022,Binghamton,AE
+2022,North Alabama,ASun
+2022,Eastern Michigan,MAC
+2022,Stetson,ASun
+2022,McNeese St.,Slnd
+2022,Western Michigan,MAC
+2022,Florida A&M,SWAC
+2022,Robert Morris,Horz
+2022,UTSA,CUSA
+2022,Sacramento St.,BSky
+2022,Lafayette,Pat
+2022,UT Rio Grande Valley,WAC
+2022,North Carolina Central,MEAC
+2022,South Carolina St.,MEAC
+2022,Little Rock,SB
+2022,St. Francis NY,NEC
+2022,Central Michigan,MAC
+2022,Coppin St.,MEAC
+2022,Hampton,BSth
+2022,Maryland Eastern Shore,MEAC
+2022,Bucknell,Pat
+2022,Evansville,MVC
+2022,Grambling St.,SWAC
+2022,Sacred Heart,NEC
+2022,St. Francis PA,NEC
+2022,Alabama St.,SWAC
+2022,Southern Miss,CUSA
+2022,Alabama A&M,SWAC
+2022,Idaho,BSky
+2022,Idaho St.,BSky
+2022,Green Bay,Horz
+2022,Northern Arizona,BSky
+2022,Milwaukee,Horz
+2022,Cal St. Northridge,BW
+2022,Northwestern St.,Slnd
+2022,Bethune Cookman,SWAC
+2022,William & Mary,CAA
+2022,American,Pat
+2022,Chicago St.,WAC
+2022,Houston Christian,Slnd
+2022,Charleston Southern,BSth
+2022,NJIT,AE
+2022,North Dakota,Sum
+2022,Fairleigh Dickinson,NEC
+2022,Nebraska Omaha,Sum
+2022,Lamar,WAC
+2022,Holy Cross,Pat
+2022,Arkansas Pine Bluff,SWAC
+2022,Mississippi Valley St.,SWAC
+2022,Incarnate Word,Slnd
+2022,Maine,AE
+2022,Columbia,Ivy
+2022,Central Connecticut,NEC
+2022,Delaware St.,MEAC
+2022,Eastern Illinois,OVC
+2022,IUPUI,Horz
+2023,Kansas,B12
+2023,Purdue,B10
+2023,Alabama,SEC
+2023,Houston,Amer
+2023,Texas,B12
+2023,Marquette,BE
+2023,Arizona,P12
+2023,UCLA,P12
+2023,Kansas St.,B12
+2023,Gonzaga,WCC
+2023,Baylor,B12
+2023,Xavier,BE
+2023,Connecticut,BE
+2023,Indiana,B10
+2023,Virginia,ACC
+2023,Tennessee,SEC
+2023,San Diego St.,MWC
+2023,Miami FL,ACC
+2023,Saint Mary's,WCC
+2023,Duke,ACC
+2023,Creighton,BE
+2023,Kentucky,SEC
+2023,TCU,B12
+2023,Iowa St.,B12
+2023,Northwestern,B10
+2023,Missouri,SEC
+2023,Texas A&M,SEC
+2023,Michigan St.,B10
+2023,Maryland,B10
+2023,Iowa,B10
+2023,Memphis,Amer
+2023,Arkansas,SEC
+2023,Florida Atlantic,CUSA
+2023,Auburn,SEC
+2023,West Virginia,B12
+2023,Illinois,B10
+2023,Penn St.,B10
+2023,USC,P12
+2023,Boise St.,MWC
+2023,Utah St.,MWC
+2023,Pittsburgh,ACC
+2023,Providence,BE
+2023,North Carolina St.,ACC
+2023,Arizona St.,P12
+2023,Mississippi St.,SEC
+2023,Nevada,MWC
+2023,Drake,MVC
+2023,VCU,A10
+2023,Oral Roberts,Sum
+2023,College of Charleston,CAA
+2023,Furman,SC
+2023,Louisiana Lafayette,SB
+2023,Iona,MAAC
+2023,Kent St.,MAC
+2023,Grand Canyon,WAC
+2023,Montana St.,BSky
+2023,Kennesaw St.,ASun
+2023,UC Santa Barbara,BW
+2023,Vermont,AE
+2023,Colgate,Pat
+2023,UNC Asheville,BSth
+2023,Princeton,Ivy
+2023,Fairleigh Dickinson,NEC
+2023,Northern Kentucky,Horz
+2023,Howard,MEAC
+2023,Texas A&M Corpus Chris,Slnd
+2023,Texas Southern,SWAC
+2023,Southeast Missouri St.,OVC
+2023,LIU Brooklyn,NEC
+2023,California,P12
+2023,Green Bay,Horz
+2023,Louisville,ACC
+2023,Hartford,ind
+2023,Tulsa,Amer
+2023,South Carolina St.,MEAC
+2023,Presbyterian,BSth
+2023,Evansville,MVC
+2023,Mississippi Valley St.,SWAC
+2023,IUPUI,Horz
+2023,Delaware St.,MEAC
+2023,Columbia,Ivy
+2023,Florida A&M,SWAC
+2023,NJIT,AE
+2023,Georgetown,BE
+2023,Cal St. Northridge,BW
+2023,VMI,SC
+2023,Monmouth,CAA
+2023,Eastern Michigan,MAC
+2023,Western Michigan,MAC
+2023,Albany,AE
+2023,Alabama St.,SWAC
+2023,Elon,CAA
+2023,Hampton,CAA
+2023,Cal Poly,BW
+2023,New Mexico St.,WAC
+2023,Wyoming,MWC
+2023,Pepperdine,WCC
+2023,Minnesota,B10
+2023,Rhode Island,A10
+2023,Central Arkansas,ASun
+2023,Austin Peay,ASun
+2023,Eastern Illinois,OVC
+2023,Lamar,Slnd
+2023,Florida St.,ACC
+2023,Nebraska Omaha,Sum
+2023,Coppin St.,MEAC
+2023,Dartmouth,Ivy
+2023,UC San Diego,BW
+2023,Canisius,MAAC
+2023,Northeastern,CAA
+2023,Loyola Chicago,A10
+2023,Georgia St.,SB
+2023,Charleston Southern,BSth
+2023,Arkansas Pine Bluff,SWAC
+2023,Little Rock,OVC
+2023,Central Michigan,MAC
+2023,SMU,Amer
+2023,UTSA,CUSA
+2023,Idaho,BSky
+2023,The Citadel,SC
+2023,Holy Cross,Pat
+2023,Central Connecticut,NEC
+2023,Houston Christian,Slnd
+2023,DePaul,BE
+2023,Fresno St.,MWC
+2023,San Diego,WCC
+2023,Bowling Green,MAC
+2023,Coastal Carolina,SB
+2023,Chicago St.,ind
+2023,Notre Dame,ACC
+2023,South Carolina,SEC
+2023,Oregon St.,P12
+2023,UT Arlington,WAC
+2023,Idaho St.,BSky
+2023,Louisiana Monroe,SB
+2023,Valparaiso,MVC
+2023,Illinois St.,MVC
+2023,UMKC,Sum
+2023,Lindenwood,OVC
+2023,Cal St. Bakersfield,BW
+2023,Stony Brook,CAA
+2023,Lafayette,Pat
+2023,McNeese St.,Slnd
+2023,Manhattan,MAAC
+2023,Portland St.,BSky
+2023,South Dakota,Sum
+2023,Incarnate Word,Slnd
+2023,Northern Colorado,BSky
+2023,East Tennessee St.,SC
+2023,Miami OH,MAC
+2023,Illinois Chicago,MVC
+2023,Bucknell,Pat
+2023,New Orleans,Slnd
+2023,Bethune Cookman,SWAC
+2023,Mississippi,SEC
+2023,Northern Arizona,BSky
+2023,Jacksonville,ASun
+2023,Abilene Christian,WAC
+2023,Maine,AE
+2023,Jacksonville St.,ASun
+2023,Fairfield,MAAC
+2023,Binghamton,AE
+2023,St. Francis PA,NEC
+2023,Northern Illinois,MAC
+2023,Prairie View A&M,SWAC
+2023,Oakland,Horz
+2023,North Carolina A&T,CAA
+2023,Mount St. Mary's,MAAC
+2023,North Dakota,Sum
+2023,Marist,MAAC
+2023,Arkansas St.,SB
+2023,William & Mary,CAA
+2023,Texas A&M Commerce,Slnd
+2023,Loyola MD,Pat
+2023,Brown,Ivy
+2023,Harvard,Ivy
+2023,Morgan St.,MEAC
+2023,St. Francis NY,NEC
+2023,North Florida,ASun
+2023,High Point,BSth
+2023,Stonehill,NEC
+2023,Butler,BE
+2023,Air Force,MWC
+2023,South Florida,Amer
+2023,UTEP,CUSA
+2023,St. Bonaventure,A10
+2023,FIU,CUSA
+2023,Northern Iowa,MVC
+2023,Sacramento St.,BSky
+2023,Saint Peter's,MAAC
+2023,Mercer,SC
+2023,Stanford,P12
+2023,Utah Tech,WAC
+2023,LSU,SEC
+2023,Portland,WCC
+2023,Detroit,Horz
+2023,Jackson St.,SWAC
+2023,Wagner,NEC
+2023,New Hampshire,AE
+2023,Gardner Webb,BSth
+2023,Massachusetts,A10
+2023,Oklahoma,B12
+2023,Buffalo,MAC
+2023,Winthrop,BSth
+2023,UT Rio Grande Valley,WAC
+2023,Denver,Sum
+2023,Boston University,Pat
+2023,Southern,SWAC
+2023,Colorado St.,MWC
+2023,Georgia Tech,ACC
+2023,Richmond,A10
+2023,Pacific,WCC
+2023,Louisiana Tech,CUSA
+2023,Bellarmine,ASun
+2023,Alabama A&M,SWAC
+2023,La Salle,A10
+2023,Rider,MAAC
+2023,Lehigh,Pat
+2023,Western Illinois,Sum
+2023,Niagara,MAAC
+2023,Nicholls St.,Slnd
+2023,Texas Tech,B12
+2023,Nebraska,B10
+2023,Temple,Amer
+2023,Washington,P12
+2023,Davidson,A10
+2023,Appalachian St.,SB
+2023,Georgia,SEC
+2023,George Washington,A10
+2023,USC Upstate,BSth
+2023,Florida,SEC
+2023,Boston College,ACC
+2023,Saint Joseph's,A10
+2023,East Carolina,Amer
+2023,North Dakota St.,Sum
+2023,Robert Morris,Horz
+2023,Tennessee Tech,OVC
+2023,Southern Indiana,OVC
+2023,Sacred Heart,NEC
+2023,Campbell,BSth
+2023,Ohio St.,B10
+2023,Texas St.,SB
+2023,Cornell,Ivy
+2023,Penn,Ivy
+2023,Bryant,AE
+2023,Montana,BSky
+2023,Stetson,ASun
+2023,Utah,P12
+2023,Wichita St.,Amer
+2023,Syracuse,ACC
+2023,Missouri St.,MVC
+2023,Drexel,CAA
+2023,Florida Gulf Coast,ASun
+2023,Siena,MAAC
+2023,Murray St.,MVC
+2023,Fort Wayne,Horz
+2023,American,Pat
+2023,Seton Hall,BE
+2023,Long Beach St.,BW
+2023,Cal Baptist,WAC
+2023,Western Kentucky,CUSA
+2023,Georgia Southern,SB
+2023,Delaware,CAA
+2023,Wofford,SC
+2023,Army,Pat
+2023,Washington St.,P12
+2023,Villanova,BE
+2023,Tarleton St.,WAC
+2023,North Carolina Central,MEAC
+2023,Navy,Pat
+2023,Maryland Eastern Shore,MEAC
+2023,UC Davis,BW
+2023,UMBC,AE
+2023,Alcorn St.,SWAC
+2023,Southeastern Louisiana,Slnd
+2023,Tennessee St.,OVC
+2023,St. John's,BE
+2023,Wright St.,Horz
+2023,Weber St.,BSky
+2023,Queens,ASun
+2023,North Alabama,ASun
+2023,Michigan,B10
+2023,Western Carolina,SC
+2023,Merrimack,NEC
+2023,Colorado,P12
+2023,Chattanooga,SC
+2023,Loyola Marymount,WCC
+2023,Old Dominion,SB
+2023,UNLV,MWC
+2023,Stephen F. Austin,WAC
+2023,South Dakota St.,Sum
+2023,Wake Forest,ACC
+2023,Middle Tennessee,CUSA
+2023,Ohio,MAC
+2023,St. Thomas,Sum
+2023,SIU Edwardsville,OVC
+2023,Tennessee Martin,OVC
+2023,Rutgers,B10
+2023,UCF,Amer
+2023,Virginia Tech,ACC
+2023,BYU,WCC
+2023,South Alabama,SB
+2023,Rice,CUSA
+2023,Tulane,Amer
+2023,Quinnipiac,MAAC
+2023,UNC Greensboro,SC
+2023,Seattle,WAC
+2023,Longwood,BSth
+2023,Ball St.,MAC
+2023,North Carolina,ACC
+2023,Cal St. Fullerton,BW
+2023,Duquesne,A10
+2023,Troy,SB
+2023,George Mason,A10
+2023,Lipscomb,ASun
+2023,San Francisco,WCC
+2023,Wisconsin,B10
+2023,Oklahoma St.,B12
+2023,Belmont,MVC
+2023,Samford,SC
+2023,Saint Louis,A10
+2023,Towson,CAA
+2023,San Jose St.,MWC
+2023,Cleveland St.,Horz
+2023,Oregon,P12
+2023,Radford,BSth
+2023,Yale,Ivy
+2023,Akron,MAC
+2023,James Madison,SB
+2023,Hawaii,BW
+2023,Norfolk St.,MEAC
+2023,Northwestern St.,Slnd
+2023,New Mexico,MWC
+2023,Dayton,A10
+2023,UC Riverside,BW
+2023,Morehead St.,OVC
+2023,Milwaukee,Horz
+2023,Charlotte,CUSA
+2023,Vanderbilt,SEC
+2023,Santa Clara,WCC
+2023,Southern Illinois,MVC
+2023,Clemson,ACC
+2023,Eastern Washington,BSky
+2023,UC Irvine,BW
+2023,Cincinnati,Amer
+2023,Indiana St.,MVC
+2023,Eastern Kentucky,ASun
+2023,Youngstown St.,Horz
+2023,UNC Wilmington,CAA
+2023,Southern Utah,WAC
+2023,Marshall,SB
+2023,Grambling St.,SWAC
+2023,Hofstra,CAA
+2023,Bradley,MVC
+2023,Southern Miss,SB
+2023,Fordham,A10
+2023,Sam Houston St.,WAC
+2023,UMass Lowell,AE
+2023,Toledo,MAC
+2023,Liberty,ASun
+2023,Utah Valley,WAC
+2023,UAB,CUSA
+2023,North Texas,CUSA
+2024,Houston,B12
+2024,Connecticut,BE
+2024,Purdue,B10
+2024,North Carolina,ACC
+2024,Iowa St.,B12
+2024,Arizona,P12
+2024,Tennessee,SEC
+2024,Marquette,BE
+2024,Creighton,BE
+2024,Illinois,B10
+2024,Baylor,B12
+2024,Kentucky,SEC
+2024,Auburn,SEC
+2024,Duke,ACC
+2024,Alabama,SEC
+2024,Kansas,B12
+2024,Saint Mary's,WCC
+2024,Gonzaga,WCC
+2024,Wisconsin,B10
+2024,San Diego St.,MWC
+2024,BYU,B12
+2024,Texas Tech,B12
+2024,Clemson,ACC
+2024,South Carolina,SEC
+2024,Texas,B12
+2024,Florida,SEC
+2024,Washington St.,P12
+2024,Dayton,A10
+2024,Nebraska,B10
+2024,Mississippi St.,SEC
+2024,Florida Atlantic,Amer
+2024,Utah St.,MWC
+2024,Michigan St.,B10
+2024,Northwestern,B10
+2024,TCU,B12
+2024,Texas A&M,SEC
+2024,Colorado,P12
+2024,Nevada,MWC
+2024,Boise St.,MWC
+2024,Colorado St.,MWC
+2024,Drake,MVC
+2024,Virginia,ACC
+2024,New Mexico,MWC
+2024,Oregon,P12
+2024,North Carolina St.,ACC
+2024,Duquesne,A10
+2024,James Madison,SB
+2024,Grand Canyon,WAC
+2024,McNeese St.,Slnd
+2024,UAB,Amer
+2024,Yale,Ivy
+2024,Samford,SC
+2024,College of Charleston,CAA
+2024,Vermont,AE
+2024,Akron,MAC
+2024,Morehead St.,OVC
+2024,Oakland,Horz
+2024,Colgate,Pat
+2024,Western Kentucky,CUSA
+2024,South Dakota St.,Sum
+2024,Long Beach St.,BW
+2024,Saint Peter's,MAAC
+2024,Longwood,BSth
+2024,Montana St.,BSky
+2024,Stetson,ASun
+2024,Howard,MEAC
+2024,Grambling St.,SWAC
+2024,Wagner,NEC
+2024,St. John's,BE
+2024,Villanova,BE
+2024,Wake Forest,ACC
+2024,Ohio St.,B10
+2024,Pittsburgh,ACC
+2024,Cincinnati,B12
+2024,Indiana St.,MVC
+2024,Oklahoma,B12
+2024,Utah,P12
+2024,Iowa,B10
+2024,Seton Hall,BE
+2024,Butler,BE
+2024,Virginia Tech,ACC
+2024,Providence,BE
+2024,UCF,B12
+2024,Bradley,MVC
+2024,Washington,P12
+2024,Xavier,BE
+2024,Kansas St.,B12
+2024,Maryland,B10
+2024,North Texas,Amer
+2024,UNLV,MWC
+2024,SMU,Amer
+2024,San Francisco,WCC
+2024,USC,P12
+2024,Penn St.,B10
+2024,Minnesota,B10
+2024,Mississippi,SEC
+2024,Georgia,SEC
+2024,Richmond,A10
+2024,Syracuse,ACC
+2024,Indiana,B10
+2024,LSU,SEC
+2024,VCU,A10
+2024,Loyola Chicago,A10
+2024,Boston College,ACC
+2024,Florida St.,ACC
+2024,UCLA,P12
+2024,UC Irvine,BW
+2024,Princeton,Ivy
+2024,South Florida,Amer
+2024,Miami FL,ACC
+2024,Louisiana Tech,CUSA
+2024,Memphis,Amer
+2024,Massachusetts,A10
+2024,Saint Joseph's,A10
+2024,George Mason,A10
+2024,Appalachian St.,SB
+2024,Rutgers,B10
+2024,Stanford,P12
+2024,St. Bonaventure,A10
+2024,Belmont,MVC
+2024,Oklahoma St.,B12
+2024,Charlotte,Amer
+2024,Arkansas,SEC
+2024,Northern Iowa,MVC
+2024,Cornell,Ivy
+2024,Hofstra,CAA
+2024,Western Carolina,SC
+2024,Michigan,B10
+2024,California,P12
+2024,Southern Illinois,MVC
+2024,UT Arlington,WAC
+2024,Santa Clara,WCC
+2024,Davidson,A10
+2024,Troy,SB
+2024,UNC Wilmington,CAA
+2024,High Point,BSth
+2024,Georgia Tech,ACC
+2024,West Virginia,B12
+2024,UC San Diego,BW
+2024,Arizona St.,P12
+2024,Notre Dame,ACC
+2024,Drexel,CAA
+2024,Seattle,WAC
+2024,Sam Houston St.,CUSA
+2024,Wichita St.,Amer
+2024,Missouri,SEC
+2024,Arkansas St.,SB
+2024,Youngstown St.,Horz
+2024,Louisiana Lafayette,SB
+2024,UNC Greensboro,SC
+2024,Towson,CAA
+2024,St. Thomas,Sum
+2024,Toledo,MAC
+2024,Ohio,MAC
+2024,Tarleton St.,WAC
+2024,Missouri St.,MVC
+2024,Tulane,Amer
+2024,Liberty,CUSA
+2024,Wright St.,Horz
+2024,Oregon St.,P12
+2024,Murray St.,MVC
+2024,Wyoming,MWC
+2024,Furman,SC
+2024,Chattanooga,SC
+2024,Montana,BSky
+2024,Delaware,CAA
+2024,UC Davis,BW
+2024,Quinnipiac,MAAC
+2024,UTEP,CUSA
+2024,Stony Brook,CAA
+2024,Weber St.,BSky
+2024,Eastern Washington,BSky
+2024,Winthrop,BSth
+2024,East Carolina,Amer
+2024,UMass Lowell,AE
+2024,UNC Asheville,BSth
+2024,Bryant,AE
+2024,Kent St.,MAC
+2024,Texas A&M Corpus Chris,Slnd
+2024,Hawaii,BW
+2024,Little Rock,OVC
+2024,La Salle,A10
+2024,Saint Louis,A10
+2024,Fort Wayne,Horz
+2024,Georgetown,BE
+2024,Brown,Ivy
+2024,Illinois Chicago,MVC
+2024,Utah Valley,WAC
+2024,Loyola Marymount,WCC
+2024,Fordham,A10
+2024,East Tennessee St.,SC
+2024,Rice,Amer
+2024,Fairfield,MAAC
+2024,Temple,Amer
+2024,Vanderbilt,SEC
+2024,Pepperdine,WCC
+2024,Stephen F. Austin,WAC
+2024,Gardner Webb,BSth
+2024,UMKC,Sum
+2024,Louisville,ACC
+2024,Illinois St.,MVC
+2024,Rhode Island,A10
+2024,Monmouth,CAA
+2024,Penn,Ivy
+2024,Texas St.,SB
+2024,Eastern Kentucky,ASun
+2024,Northern Kentucky,Horz
+2024,Columbia,Ivy
+2024,George Washington,A10
+2024,Tulsa,Amer
+2024,Northern Colorado,BSky
+2024,Cleveland St.,Horz
+2024,Radford,BSth
+2024,Jacksonville St.,CUSA
+2024,Northeastern,CAA
+2024,Harvard,Ivy
+2024,Mercer,SC
+2024,Abilene Christian,WAC
+2024,Evansville,MVC
+2024,Marist,MAAC
+2024,Lipscomb,ASun
+2024,UC Riverside,BW
+2024,Rider,MAAC
+2024,San Jose St.,MWC
+2024,North Dakota,Sum
+2024,South Alabama,SB
+2024,Wofford,SC
+2024,Merrimack,NEC
+2024,Mount St. Mary's,MAAC
+2024,Cal Baptist,WAC
+2024,Air Force,MWC
+2024,Cal St. Fullerton,BW
+2024,Georgia St.,SB
+2024,Iona,MAAC
+2024,Fresno St.,MWC
+2024,Tennessee Martin,OVC
+2024,Bowling Green,MAC
+2024,North Florida,ASun
+2024,Nicholls St.,Slnd
+2024,UTSA,Amer
+2024,Lamar,Slnd
+2024,Florida Gulf Coast,ASun
+2024,UC Santa Barbara,BW
+2024,Marshall,SB
+2024,Cal St. Northridge,BW
+2024,Austin Peay,ASun
+2024,Milwaukee,Horz
+2024,Portland St.,BSky
+2024,Cal St. Bakersfield,BW
+2024,San Diego,WCC
+2024,Idaho St.,BSky
+2024,Miami OH,MAC
+2024,Maine,AE
+2024,Albany,AE
+2024,Norfolk St.,MEAC
+2024,Southern,SWAC
+2024,UMBC,AE
+2024,Southern Miss,SB
+2024,Southern Utah,WAC
+2024,Queens,ASun
+2024,Canisius,MAAC
+2024,Green Bay,Horz
+2024,Ball St.,MAC
+2024,North Dakota St.,Sum
+2024,North Carolina Central,MEAC
+2024,North Alabama,ASun
+2024,Western Illinois,OVC
+2024,Middle Tennessee,CUSA
+2024,Central Michigan,MAC
+2024,Nebraska Omaha,Sum
+2024,Georgia Southern,SB
+2024,Bucknell,Pat
+2024,Lehigh,Pat
+2024,Binghamton,AE
+2024,Portland,WCC
+2024,Utah Tech,WAC
+2024,New Mexico St.,CUSA
+2024,Oral Roberts,Sum
+2024,New Hampshire,AE
+2024,Kennesaw St.,ASun
+2024,Central Connecticut,NEC
+2024,USC Upstate,BSth
+2024,Denver,Sum
+2024,Presbyterian,BSth
+2024,The Citadel,SC
+2024,Texas Southern,SWAC
+2024,Niagara,MAAC
+2024,SIU Edwardsville,OVC
+2024,DePaul,BE
+2024,FIU,CUSA
+2024,Louisiana Monroe,SB
+2024,Old Dominion,SB
+2024,Valparaiso,MVC
+2024,Sacred Heart,NEC
+2024,Boston University,Pat
+2024,Tennessee St.,OVC
+2024,South Carolina St.,MEAC
+2024,American,Pat
+2024,Jacksonville,ASun
+2024,Alcorn St.,SWAC
+2024,Delaware St.,MEAC
+2024,Bellarmine,ASun
+2024,Campbell,CAA
+2024,Northern Illinois,MAC
+2024,Chicago St.,ind
+2024,Southeastern Louisiana,Slnd
+2024,Le Moyne,NEC
+2024,Sacramento St.,BSky
+2024,Jackson St.,SWAC
+2024,Elon,CAA
+2024,Idaho,BSky
+2024,William & Mary,CAA
+2024,Bethune Cookman,SWAC
+2024,Coastal Carolina,SB
+2024,South Dakota,Sum
+2024,Robert Morris,Horz
+2024,Northern Arizona,BSky
+2024,Western Michigan,MAC
+2024,Northwestern St.,Slnd
+2024,Eastern Illinois,OVC
+2024,Charleston Southern,BSth
+2024,Alabama St.,SWAC
+2024,Lafayette,Pat
+2024,Eastern Michigan,MAC
+2024,Southern Indiana,OVC
+2024,NJIT,AE
+2024,Navy,Pat
+2024,Hampton,CAA
+2024,New Orleans,Slnd
+2024,Dartmouth,Ivy
+2024,Arkansas Pine Bluff,SWAC
+2024,UT Rio Grande Valley,WAC
+2024,Alabama A&M,SWAC
+2024,Morgan St.,MEAC
+2024,Manhattan,MAAC
+2024,Central Arkansas,ASun
+2024,Fairleigh Dickinson,NEC
+2024,Texas A&M Commerce,Slnd
+2024,Cal Poly,BW
+2024,LIU Brooklyn,NEC
+2024,North Carolina A&T,CAA
+2024,Loyola MD,Pat
+2024,Buffalo,MAC
+2024,Incarnate Word,Slnd
+2024,Florida A&M,SWAC
+2024,Army,Pat
+2024,Detroit,Horz
+2024,Tennessee Tech,OVC
+2024,Prairie View A&M,SWAC
+2024,Holy Cross,Pat
+2024,Maryland Eastern Shore,MEAC
+2024,Pacific,WCC
+2024,Houston Christian,Slnd
+2024,Southeast Missouri St.,OVC
+2024,Lindenwood,OVC
+2024,Siena,MAAC
+2024,VMI,SC
+2024,Stonehill,NEC
+2024,St. Francis PA,NEC
+2024,IUPUI,Horz
+2024,Coppin St.,MEAC
+2024,Mississippi Valley St.,SWAC
+2025,Houston,B12
+2025,Duke,ACC
+2025,Auburn,SEC
+2025,Florida,SEC
+2025,Alabama,SEC
+2025,Tennessee,SEC
+2025,Texas Tech,B12
+2025,Iowa St.,B12
+2025,Arizona,B12
+2025,Maryland,B10
+2025,Gonzaga,WCC
+2025,Wisconsin,B10
+2025,Michigan St.,B10
+2025,BYU,B12
+2025,St. John's,BE
+2025,Missouri,SEC
+2025,Kentucky,SEC
+2025,Purdue,B10
+2025,Louisville,ACC
+2025,Kansas,B12
+2025,Clemson,ACC
+2025,Texas A&M,SEC
+2025,Illinois,B10
+2025,Saint Mary's,WCC
+2025,UCLA,B10
+2025,Michigan,B10
+2025,Baylor,B12
+2025,Mississippi,SEC
+2025,VCU,A10
+2025,Georgia,SEC
+2025,Marquette,BE
+2025,Mississippi St.,SEC
+2025,Creighton,BE
+2025,West Virginia,B12
+2025,Connecticut,BE
+2025,North Carolina,ACC
+2025,Xavier,BE
+2025,Colorado St.,MWC
+2025,Oregon,B10
+2025,New Mexico,MWC
+2025,Ohio St.,B10
+2025,Vanderbilt,SEC
+2025,Arkansas,SEC
+2025,Cincinnati,B12
+2025,UC San Diego,BW
+2025,Oklahoma,SEC
+2025,SMU,ACC
+2025,Utah St.,MWC
+2025,Texas,SEC
+2025,Boise St.,MWC
+2025,Santa Clara,WCC
+2025,Villanova,BE
+2025,San Diego St.,MWC
+2025,Northwestern,B10
+2025,Indiana,B10
+2025,Liberty,CUSA
+2025,Kansas St.,B12
+2025,Drake,MVC
+2025,USC,B10
+2025,Memphis,Amer
+2025,San Francisco,WCC
+2025,Nebraska,B10
+2025,McNeese St.,Slnd
+2025,Penn St.,B10
+2025,Arizona St.,B12
+2025,Iowa,B10
+2025,Utah,B12
+2025,Rutgers,B10
+2025,UCF,B12
+2025,Wake Forest,ACC
+2025,George Mason,A10
+2025,Pittsburgh,ACC
+2025,North Texas,Amer
+2025,TCU,B12
+2025,Stanford,ACC
+2025,South Carolina,SEC
+2025,Butler,BE
+2025,Dayton,A10
+2025,Yale,Ivy
+2025,UC Irvine,BW
+2025,Colorado,B12
+2025,Saint Joseph's,A10
+2025,Grand Canyon,WAC
+2025,LSU,SEC
+2025,High Point,BSth
+2025,Minnesota,B10
+2025,Oklahoma St.,B12
+2025,Nevada,MWC
+2025,UNLV,MWC
+2025,Georgia Tech,ACC
+2025,Oregon St.,WCC
+2025,St. Bonaventure,A10
+2025,Florida St.,ACC
+2025,Georgetown,BE
+2025,Arkansas St.,SB
+2025,Virginia,ACC
+2025,Notre Dame,ACC
+2025,Loyola Chicago,A10
+2025,Bradley,MVC
+2025,Akron,MAC
+2025,Lipscomb,ASun
+2025,UAB,Amer
+2025,Troy,SB
+2025,Providence,BE
+2025,New Mexico St.,CUSA
+2025,Washington St.,WCC
+2025,Syracuse,ACC
+2025,Saint Louis,A10
+2025,UNC Wilmington,CAA
+2025,Utah Valley,WAC
+2025,Florida Atlantic,Amer
+2025,DePaul,BE
+2025,North Alabama,ASun
+2025,St. Thomas,Sum
+2025,N.C. State,ACC
+2025,George Washington,A10
+2025,Northern Iowa,MVC
+2025,Washington,B10
+2025,Northern Colorado,BSky
+2025,Middle Tennessee,CUSA
+2025,California,ACC
+2025,North Dakota St.,Sum
+2025,Duquesne,A10
+2025,Kennesaw St.,CUSA
+2025,Cornell,Ivy
+2025,Nebraska Omaha,Sum
+2025,Kent St.,MAC
+2025,Cal St. Northridge,BW
+2025,South Dakota St.,Sum
+2025,Belmont,MVC
+2025,Illinois St.,MVC
+2025,Jacksonville St.,CUSA
+2025,Montana,BSky
+2025,Louisiana Tech,CUSA
+2025,Chattanooga,SC
+2025,South Alabama,SB
+2025,Samford,SC
+2025,Tulane,Amer
+2025,Seattle,WAC
+2025,Wichita St.,Amer
+2025,Furman,SC
+2025,Davidson,A10
+2025,UTEP,CUSA
+2025,Virginia Tech,ACC
+2025,Wofford,SC
+2025,Miami OH,MAC
+2025,UC Santa Barbara,BW
+2025,Loyola Marymount,WCC
+2025,Robert Morris,Horz
+2025,Texas A&M Corpus Chris,Slnd
+2025,UC Riverside,BW
+2025,San Jose St.,MWC
+2025,Bryant,AE
+2025,Radford,BSth
+2025,Sam Houston St.,CUSA
+2025,Cal Baptist,WAC
+2025,Temple,Amer
+2025,James Madison,SB
+2025,Western Kentucky,CUSA
+2025,Rhode Island,A10
+2025,Charleston,CAA
+2025,Murray St.,MVC
+2025,Milwaukee,Horz
+2025,Appalachian St.,SB
+2025,Florida Gulf Coast,ASun
+2025,East Tennessee St.,SC
+2025,Towson,CAA
+2025,Nicholls St.,Slnd
+2025,Winthrop,BSth
+2025,UNC Greensboro,SC
+2025,Marshall,SB
+2025,Boston College,ACC
+2025,Cleveland St.,Horz
+2025,Lamar,Slnd
+2025,Purdue Fort Wayne,Horz
+2025,Dartmouth,Ivy
+2025,Eastern Kentucky,ASun
+2025,Cal Poly,BW
+2025,Rice,Amer
+2025,Southern Illinois,MVC
+2025,UTSA,Amer
+2025,East Carolina,Amer
+2025,Portland St.,BSky
+2025,Miami FL,ACC
+2025,Drexel,CAA
+2025,Ohio,MAC
+2025,Montana St.,BSky
+2025,South Carolina St.,MEAC
+2025,Wyoming,MWC
+2025,Jacksonville,ASun
+2025,Illinois Chicago,MVC
+2025,Queens,ASun
+2025,Oakland,Horz
+2025,Central Connecticut,NEC
+2025,Norfolk St.,MEAC
+2025,Northeastern,CAA
+2025,Southeast Missouri St.,OVC
+2025,Pepperdine,WCC
+2025,Merrimack,MAAC
+2025,Abilene Christian,WAC
+2025,Brown,Ivy
+2025,South Florida,Amer
+2025,Indiana St.,MVC
+2025,Hampton,CAA
+2025,Idaho St.,BSky
+2025,Princeton,Ivy
+2025,Missouri St.,MVC
+2025,Southeastern Louisiana,Slnd
+2025,La Salle,A10
+2025,Texas St.,SB
+2025,Quinnipiac,MAAC
+2025,Massachusetts,A10
+2025,Youngstown St.,Horz
+2025,Bucknell,Pat
+2025,Southern,SWAC
+2025,Fordham,A10
+2025,Seton Hall,BE
+2025,SIU Edwardsville,OVC
+2025,Valparaiso,MVC
+2025,Wright St.,Horz
+2025,William & Mary,CAA
+2025,Central Michigan,MAC
+2025,Campbell,CAA
+2025,Richmond,A10
+2025,Northwestern St.,Slnd
+2025,UNC Asheville,BSth
+2025,Hofstra,CAA
+2025,Elon,CAA
+2025,UMKC,Sum
+2025,Longwood,BSth
+2025,Hawaii,BW
+2025,Tennessee St.,OVC
+2025,Vermont,AE
+2025,Maine,AE
+2025,Delaware,CAA
+2025,UT Rio Grande Valley,Slnd
+2025,South Dakota,Sum
+2025,Harvard,Ivy
+2025,UT Arlington,WAC
+2025,Tulsa,Amer
+2025,North Dakota,Sum
+2025,Iona,MAAC
+2025,American,Pat
+2025,UC Davis,BW
+2025,Incarnate Word,Slnd
+2025,Georgia St.,SB
+2025,Northern Arizona,BSky
+2025,Sacred Heart,MAAC
+2025,Georgia Southern,SB
+2025,Northern Kentucky,Horz
+2025,Portland,WCC
+2025,Idaho,BSky
+2025,Toledo,MAC
+2025,Little Rock,OVC
+2025,Cal St. Bakersfield,BW
+2025,Presbyterian,BSth
+2025,Jackson St.,SWAC
+2025,Fresno St.,MWC
+2025,Manhattan,MAAC
+2025,Monmouth,CAA
+2025,Evansville,MVC
+2025,Charlotte,Amer
+2025,Mount St. Mary's,MAAC
+2025,UMass Lowell,AE
+2025,North Florida,ASun
+2025,FIU,CUSA
+2025,Houston Christian,Slnd
+2025,Gardner Webb,BSth
+2025,Denver,Sum
+2025,Siena,MAAC
+2025,Eastern Michigan,MAC
+2025,Colgate,Pat
+2025,Ball St.,MAC
+2025,Alabama St.,SWAC
+2025,Bowling Green,MAC
+2025,Albany,AE
+2025,Mercer,SC
+2025,Eastern Washington,BSky
+2025,Pacific,WCC
+2025,LIU,NEC
+2025,Western Michigan,MAC
+2025,Texas Southern,SWAC
+2025,Austin Peay,ASun
+2025,Marist,MAAC
+2025,Tarleton St.,WAC
+2025,Stephen F. Austin,Slnd
+2025,Navy,Pat
+2025,Tennessee Martin,OVC
+2025,Air Force,MWC
+2025,Tennessee Tech,OVC
+2025,Weber St.,BSky
+2025,San Diego,WCC
+2025,Old Dominion,SB
+2025,Lafayette,Pat
+2025,Saint Peter's,MAAC
+2025,Bethune Cookman,SWAC
+2025,Oral Roberts,Sum
+2025,Utah Tech,WAC
+2025,Columbia,Ivy
+2025,Lehigh,Pat
+2025,Saint Francis,NEC
+2025,Howard,MEAC
+2025,Penn,Ivy
+2025,Fairleigh Dickinson,NEC
+2025,Louisiana,SB
+2025,Southern Miss,SB
+2025,Rider,MAAC
+2025,Charleston Southern,BSth
+2025,Long Beach St.,BW
+2025,Loyola MD,Pat
+2025,VMI,SC
+2025,Army,Pat
+2025,Delaware St.,MEAC
+2025,IU Indy,Horz
+2025,Eastern Illinois,OVC
+2025,Binghamton,AE
+2025,Boston University,Pat
+2025,UMBC,AE
+2025,Lindenwood,OVC
+2025,North Carolina Central,MEAC
+2025,Morehead St.,OVC
+2025,Alcorn St.,SWAC
+2025,Grambling St.,SWAC
+2025,Coastal Carolina,SB
+2025,Southern Utah,WAC
+2025,Florida A&M,SWAC
+2025,Niagara,MAAC
+2025,Stonehill,NEC
+2025,Holy Cross,Pat
+2025,Green Bay,Horz
+2025,Stony Brook,CAA
+2025,Texas A&M Commerce,Slnd
+2025,Mercyhurst,NEC
+2025,USC Upstate,BSth
+2025,Fairfield,MAAC
+2025,Southern Indiana,OVC
+2025,Morgan St.,MEAC
+2025,Bellarmine,ASun
+2025,North Carolina A&T,CAA
+2025,Wagner,NEC
+2025,Western Carolina,SC
+2025,Western Illinois,OVC
+2025,West Georgia,ASun
+2025,Louisiana Monroe,SB
+2025,Buffalo,MAC
+2025,Detroit Mercy,Horz
+2025,Le Moyne,NEC
+2025,Sacramento St.,BSky
+2025,Northern Illinois,MAC
+2025,New Orleans,Slnd
+2025,Central Arkansas,ASun
+2025,Stetson,ASun
+2025,NJIT,AE
+2025,Cal St. Fullerton,BW
+2025,Canisius,MAAC
+2025,New Hampshire,AE
+2025,Prairie View A&M,SWAC
+2025,Alabama A&M,SWAC
+2025,Maryland Eastern Shore,MEAC
+2025,The Citadel,SC
+2025,Chicago St.,NEC
+2025,Coppin St.,MEAC
+2025,Arkansas Pine Bluff,SWAC
+2025,Mississippi Valley St.,SWAC
+2026,Duke,ACC
+2026,Michigan,B10
+2026,Florida,SEC
+2026,Arizona,B12
+2026,Houston,B12
+2026,Illinois,B10
+2026,Connecticut,BE
+2026,Purdue,B10
+2026,Iowa St.,B12
+2026,Michigan St.,B10
+2026,Texas Tech,B12
+2026,Gonzaga,WCC
+2026,Tennessee,SEC
+2026,Louisville,ACC
+2026,Vanderbilt,SEC
+2026,Alabama,SEC
+2026,Virginia,ACC
+2026,Nebraska,B10
+2026,Kansas,B12
+2026,Arkansas,SEC
+2026,St. John's,BE
+2026,Wisconsin,B10
+2026,Ohio St.,B10
+2026,Saint Mary's,WCC
+2026,Iowa,B10
+2026,North Carolina,ACC
+2026,UCLA,B10
+2026,Santa Clara,WCC
+2026,Indiana,B10
+2026,Cincinnati,B12
+2026,Villanova,BE
+2026,Texas A&M,SEC
+2026,Kentucky,SEC
+2026,Clemson,ACC
+2026,Utah St.,MWC
+2026,Miami FL,ACC
+2026,Georgia,SEC
+2026,N.C. State,ACC
+2026,BYU,B12
+2026,Saint Louis,A10
+2026,Texas,SEC
+2026,SMU,ACC
+2026,San Diego St.,MWC
+2026,Auburn,SEC
+2026,Missouri,SEC
+2026,Oklahoma,SEC
+2026,Baylor,B12
+2026,TCU,B12
+2026,Boise St.,MWC
+2026,Virginia Tech,ACC
+2026,New Mexico,MWC
+2026,VCU,A10
+2026,South Florida,Amer
+2026,Washington,B10
+2026,Grand Canyon,MWC
+2026,Minnesota,B10
+2026,UCF,B12
+2026,Arizona St.,B12
+2026,Florida St.,ACC
+2026,Tulsa,Amer
+2026,West Virginia,B12
+2026,Stanford,ACC
+2026,Seton Hall,BE
+2026,Akron,MAC
+2026,California,ACC
+2026,Northwestern,B10
+2026,Wake Forest,ACC
+2026,USC,B10
+2026,Northern Iowa,MVC
+2026,LSU,SEC
+2026,Butler,BE
+2026,Providence,BE
+2026,Colorado,B12
+2026,Marquette,BE
+2026,Belmont,MVC
+2026,Dayton,A10
+2026,Syracuse,ACC
+2026,Stephen F. Austin,Slnd
+2026,McNeese St.,Slnd
+2026,Nevada,MWC
+2026,Oklahoma St.,B12
+2026,Georgetown,BE
+2026,George Washington,A10
+2026,Miami OH,MAC
+2026,Mississippi,SEC
+2026,Creighton,BE
+2026,Wichita St.,Amer
+2026,Utah Valley,WAC
+2026,Colorado St.,MWC
+2026,Hofstra,CAA
+2026,Yale,Ivy
+2026,High Point,BSth
+2026,Oregon,B10
+2026,Saint Joseph's,A10
+2026,Davidson,A10
+2026,Wyoming,MWC
+2026,Xavier,BE
+2026,Cal Baptist,WAC
+2026,Mississippi St.,SEC
+2026,Notre Dame,ACC
+2026,DePaul,BE
+2026,South Carolina,SEC
+2026,Kansas St.,B12
+2026,Pittsburgh,ACC
+2026,Sam Houston St.,CUSA
+2026,Seattle,WCC
+2026,Pacific,WCC
+2026,Illinois Chicago,MVC
+2026,Illinois St.,MVC
+2026,UC Irvine,BW
+2026,St. Thomas,Sum
+2026,UNLV,MWC
+2026,North Dakota St.,Sum
+2026,George Mason,A10
+2026,Maryland,B10
+2026,Liberty,CUSA
+2026,Utah,B12
+2026,UT Rio Grande Valley,Slnd
+2026,Hawaii,BW
+2026,UC San Diego,BW
+2026,Rutgers,B10
+2026,Florida Atlantic,Amer
+2026,UC Santa Barbara,BW
+2026,UNC Wilmington,CAA
+2026,San Francisco,WCC
+2026,Washington St.,WCC
+2026,Duquesne,A10
+2026,Memphis,Amer
+2026,Wright St.,Horz
+2026,Montana St.,BSky
+2026,Southern Illinois,MVC
+2026,Fresno St.,MWC
+2026,Murray St.,MVC
+2026,Bradley,MVC
+2026,UAB,Amer
+2026,Toledo,MAC
+2026,Northern Colorado,BSky
+2026,Boston College,ACC
+2026,Troy,SB
+2026,Penn St.,B10
+2026,Temple,Amer
+2026,Idaho,BSky
+2026,Central Arkansas,ASun
+2026,Rhode Island,A10
+2026,Navy,Pat
+2026,Middle Tennessee,CUSA
+2026,Arkansas St.,SB
+2026,Eastern Washington,BSky
+2026,Cornell,Ivy
+2026,Portland St.,BSky
+2026,North Texas,Amer
+2026,Bowling Green,MAC
+2026,Merrimack,MAAC
+2026,Penn,Ivy
+2026,Loyola Marymount,WCC
+2026,Robert Morris,Horz
+2026,Harvard,Ivy
+2026,Austin Peay,ASun
+2026,William & Mary,CAA
+2026,Valparaiso,MVC
+2026,Kent St.,MAC
+2026,UC Davis,BW
+2026,Georgia Tech,ACC
+2026,Richmond,A10
+2026,Cal St. Northridge,BW
+2026,Western Kentucky,CUSA
+2026,Kennesaw St.,CUSA
+2026,Oregon St.,WCC
+2026,Montana,BSky
+2026,St. Bonaventure,A10
+2026,Monmouth,CAA
+2026,Winthrop,BSth
+2026,Towson,CAA
+2026,Fordham,A10
+2026,Massachusetts,MAC
+2026,FIU,CUSA
+2026,Charlotte,Amer
+2026,Northern Kentucky,Horz
+2026,Oakland,Horz
+2026,Green Bay,Horz
+2026,UT Arlington,WAC
+2026,Appalachian St.,SB
+2026,UMBC,AE
+2026,Texas A&M Corpus Chris,Slnd
+2026,Utah Tech,WAC
+2026,Campbell,CAA
+2026,Charleston,CAA
+2026,East Tennessee St.,SC
+2026,Furman,SC
+2026,Detroit Mercy,Horz
+2026,Portland,WCC
+2026,Siena,MAAC
+2026,South Alabama,SB
+2026,Youngstown St.,Horz
+2026,Jacksonville St.,CUSA
+2026,Drexel,CAA
+2026,Queens,ASun
+2026,New Mexico St.,CUSA
+2026,Howard,MEAC
+2026,New Orleans,Slnd
+2026,Missouri St.,CUSA
+2026,Marist,MAAC
+2026,Cal St. Fullerton,BW
+2026,Columbia,Ivy
+2026,Weber St.,BSky
+2026,La Salle,A10
+2026,Mercer,SC
+2026,Indiana St.,MVC
+2026,Louisiana Tech,CUSA
+2026,Tulane,Amer
+2026,James Madison,SB
+2026,Marshall,SB
+2026,Rice,Amer
+2026,Drake,MVC
+2026,San Diego,WCC
+2026,Tennessee St.,OVC
+2026,Tarleton St.,WAC
+2026,Quinnipiac,MAAC
+2026,Bethune Cookman,SWAC
+2026,Buffalo,MAC
+2026,Western Carolina,SC
+2026,South Dakota St.,Sum
+2026,Cal Poly,BW
+2026,Ohio,MAC
+2026,Southern Miss,SB
+2026,Stony Brook,CAA
+2026,San Jose St.,MWC
+2026,Texas St.,SB
+2026,Georgia Southern,SB
+2026,Coastal Carolina,SB
+2026,Samford,SC
+2026,LIU,NEC
+2026,Lipscomb,ASun
+2026,Denver,Sum
+2026,Boston University,Pat
+2026,Old Dominion,SB
+2026,Eastern Michigan,MAC
+2026,Saint Peter's,MAAC
+2026,Florida Gulf Coast,ASun
+2026,Radford,BSth
+2026,Nebraska Omaha,Sum
+2026,American,Pat
+2026,Iona,MAAC
+2026,Southern,SWAC
+2026,Long Beach St.,BW
+2026,Colgate,Pat
+2026,Central Michigan,MAC
+2026,Princeton,Ivy
+2026,Southeast Missouri St.,OVC
+2026,Charleston Southern,BSth
+2026,Nicholls St.,Slnd
+2026,Lamar,Slnd
+2026,UNC Asheville,BSth
+2026,Vermont,AE
+2026,Fairfield,MAAC
+2026,SIU Edwardsville,OVC
+2026,UC Riverside,BW
+2026,East Carolina,Amer
+2026,Tennessee Martin,OVC
+2026,Southern Utah,WAC
+2026,Elon,CAA
+2026,Pepperdine,WCC
+2026,Idaho St.,BSky
+2026,Abilene Christian,WAC
+2026,Wofford,SC
+2026,Purdue Fort Wayne,Horz
+2026,Dartmouth,Ivy
+2026,North Dakota,Sum
+2026,Longwood,BSth
+2026,Lindenwood,OVC
+2026,Sacramento St.,BSky
+2026,UTEP,CUSA
+2026,Milwaukee,Horz
+2026,Incarnate Word,Slnd
+2026,Mount St. Mary's,MAAC
+2026,Delaware,CUSA
+2026,South Dakota,Sum
+2026,Ball St.,MAC
+2026,Mercyhurst,NEC
+2026,Presbyterian,BSth
+2026,Western Michigan,MAC
+2026,Loyola Chicago,A10
+2026,Jacksonville,ASun
+2026,Louisiana,SB
+2026,Brown,Ivy
+2026,UNC Greensboro,SC
+2026,Morehead St.,OVC
+2026,Arkansas Pine Bluff,SWAC
+2026,Lehigh,Pat
+2026,IU Indy,Horz
+2026,Florida A&M,SWAC
+2026,Northeastern,CAA
+2026,Sacred Heart,MAAC
+2026,West Georgia,ASun
+2026,East Texas A&M,Slnd
+2026,Southeastern Louisiana,Slnd
+2026,Grambling St.,SWAC
+2026,Alabama A&M,SWAC
+2026,Bellarmine,ASun
+2026,Eastern Kentucky,ASun
+2026,Hampton,CAA
+2026,Oral Roberts,Sum
+2026,Evansville,MVC
+2026,USC Upstate,BSth
+2026,Texas Southern,SWAC
+2026,Northwestern St.,Slnd
+2026,North Carolina A&T,CAA
+2026,Stetson,ASun
+2026,Central Connecticut,NEC
+2026,Alabama St.,SWAC
+2026,Chattanooga,SC
+2026,Houston Christian,Slnd
+2026,Le Moyne,NEC
+2026,Prairie View A&M,SWAC
+2026,Georgia St.,SB
+2026,Cleveland St.,Horz
+2026,Wagner,NEC
+2026,Northern Arizona,BSky
+2026,Albany,AE
+2026,UMass Lowell,AE
+2026,NJIT,AE
+2026,Lafayette,Pat
+2026,Loyola MD,Pat
+2026,Tennessee Tech,OVC
+2026,Little Rock,OVC
+2026,Bucknell,Pat
+2026,Cal St. Bakersfield,BW
+2026,North Florida,ASun
+2026,Norfolk St.,MEAC
+2026,New Haven,NEC
+2026,Eastern Illinois,OVC
+2026,Holy Cross,Pat
+2026,Niagara,MAAC
+2026,Manhattan,MAAC
+2026,Stonehill,NEC
+2026,Jackson St.,SWAC
+2026,Fairleigh Dickinson,NEC
+2026,UTSA,Amer
+2026,North Alabama,ASun
+2026,Air Force,MWC
+2026,Army,Pat
+2026,Chicago St.,NEC
+2026,Northern Illinois,MAC
+2026,Canisius,MAAC
+2026,Southern Indiana,OVC
+2026,Alcorn St.,SWAC
+2026,The Citadel,SC
+2026,Maine,AE
+2026,New Hampshire,AE
+2026,Louisiana Monroe,SB
+2026,Saint Francis,NEC
+2026,Morgan St.,MEAC
+2026,North Carolina Central,MEAC
+2026,South Carolina St.,MEAC
+2026,Bryant,AE
+2026,Maryland Eastern Shore,MEAC
+2026,Binghamton,AE
+2026,Rider,MAAC
+2026,VMI,SC
+2026,UMKC,Sum
+2026,Gardner Webb,BSth
+2026,Delaware St.,MEAC
+2026,Coppin St.,MEAC
+2026,Western Illinois,OVC
+2026,Mississippi Valley St.,SWAC
