@@ -78,7 +78,6 @@ from engine.betting_models import (
     consensus_moneyline,
 )
 
-
 def format_american(odds: float) -> str:
     """Format American odds for display: +150, -110. Returns "—" for missing/NaN/invalid."""
     if odds is None or pd.isna(odds):
@@ -1901,8 +1900,6 @@ def _filter_value_plays_not_started(df: pd.DataFrame, debug: bool = False) -> tu
     if debug:
         _log(f"[_filter_value_plays_not_started] result: n_started={n_started} kept={len(kept_indices)} total={len(df)}")
     return filtered, n_started
-
-
 value_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, _odds_meta, _cache_err = _load_value_plays_cache()
 _filter_debug = os.environ.get("DEBUG_VALUE_PLAYS_FILTER", "").strip() == "1"
 value_plays_df, _n_value_plays_already_started = _filter_value_plays_not_started(value_plays_df, debug=_filter_debug)
@@ -2226,6 +2223,111 @@ def _potd_from_historical_csv(df_today: pd.DataFrame) -> dict:
     return result
 
 
+def _potd_from_value_plays(
+    value_df: pd.DataFrame,
+    existing: Optional[dict] = None,
+) -> dict:
+    """Ensure NCAAB Pick 1 / Pick 2 are populated from today's value plays (top 2 by Value %, different games).
+
+    This is used when cache only has one POTD or none; we always want two cards
+    when there are at least two NCAAB value plays available.
+    """
+    picks = dict(existing or {"NCAAB Pick 1": None, "NCAAB Pick 2": None})
+    if value_df is None or value_df.empty:
+        return picks
+    df = value_df.copy()
+    # NCAAB only
+    df = df[df["League"].astype(str).str.upper() == "NCAAB"]
+    if df.empty or "Value (%)" not in df.columns:
+        return picks
+    # One row per Event, highest Value (%) per game
+    df["_abs_edge"] = df["Value (%)"].abs()
+    best_per_game = (
+        df.sort_values("_abs_edge", ascending=False)
+        .groupby("Event")
+        .head(1)
+        .reset_index(drop=True)
+    )
+    if best_per_game.empty:
+        return picks
+
+    def _row_to_potd(row: pd.Series, label: str) -> dict:
+        selection = str(row.get("Selection", "")).strip()
+        try:
+            edge_pct = float(row.get("Value (%)", 0) or 0.0)
+        except (TypeError, ValueError):
+            edge_pct = 0.0
+        edge_pct = max(0.0, min(15.0, edge_pct))
+        point_val = row.get("point")
+        if point_val is None or (isinstance(point_val, float) and pd.isna(point_val)):
+            point_val = row.get("Point")
+        reason = (
+            row.get("reason")
+            or row.get("reasoning_summary")
+            or f"Our model sees {edge_pct:.1f}% expected value on {selection}."
+        )
+        return {
+            "League": label,
+            "Event": str(row.get("Event", "")).strip(),
+            "Selection": selection,
+            "Market": str(row.get("Market", "")).strip(),
+            "Odds": row.get("Odds"),
+            "Value (%)": edge_pct,
+            "point": point_val,
+            "Recommended Stake": row.get("Recommended Stake", 0),
+            "Start Time": row.get("Start Time", ""),
+            "commence_time": row.get("commence_time", ""),
+            "Injury Alert": row.get("Injury Alert", "—"),
+            "high_variance": bool(row.get("high_variance", False)),
+            "home_team": row.get("home_team", "—"),
+            "away_team": row.get("away_team", "—"),
+            "model_prob": row.get("model_prob", 0.5),
+            "confidence_tier": row.get("confidence_tier", "Medium"),
+            "reason": reason,
+        }
+
+    # Helper: get event string safely from pick dict
+    def _event_of(p: Optional[dict]) -> Optional[str]:
+        return str(p.get("Event")).strip() if isinstance(p, dict) and p.get("Event") else None
+
+    event_p1_existing = _event_of(picks.get("NCAAB Pick 1"))
+    event_p2_existing = _event_of(picks.get("NCAAB Pick 2"))
+
+    # Fill Pick 1 if missing, avoiding any existing Pick 2 event
+    if picks.get("NCAAB Pick 1") is None and len(best_per_game) >= 1:
+        if event_p2_existing:
+            candidates = best_per_game[best_per_game["Event"].astype(str).str.strip() != event_p2_existing]
+            if not candidates.empty:
+                picks["NCAAB Pick 1"] = _row_to_potd(candidates.iloc[0], "NCAAB Pick 1")
+        if picks.get("NCAAB Pick 1") is None:
+            picks["NCAAB Pick 1"] = _row_to_potd(best_per_game.iloc[0], "NCAAB Pick 1")
+
+    # Fill Pick 2 if missing, using next-best different game from Pick 1
+    if picks.get("NCAAB Pick 2") is None and len(best_per_game) >= 2:
+        event_p1 = _event_of(picks.get("NCAAB Pick 1"))
+        remaining = (
+            best_per_game[best_per_game["Event"].astype(str).str.strip() != event_p1]
+            if event_p1
+            else best_per_game
+        )
+        if not remaining.empty:
+            picks["NCAAB Pick 2"] = _row_to_potd(remaining.iloc[0], "NCAAB Pick 2")
+
+    # If both picks exist but happen to reference the same game (e.g. cache + backfill collision),
+    # force Pick 2 to use the next-best different game when available.
+    if (
+        isinstance(picks.get("NCAAB Pick 1"), dict)
+        and isinstance(picks.get("NCAAB Pick 2"), dict)
+        and _event_of(picks["NCAAB Pick 1"]) == _event_of(picks["NCAAB Pick 2"])
+        and len(best_per_game) >= 2
+    ):
+        event_p1 = _event_of(picks["NCAAB Pick 1"])
+        remaining = best_per_game[best_per_game["Event"].astype(str).str.strip() != event_p1]
+        if not remaining.empty:
+            picks["NCAAB Pick 2"] = _row_to_potd(remaining.iloc[0], "NCAAB Pick 2")
+    return picks
+
+
 def _human_readable_potd_reason(
     home: str, away: str, pred_margin: Optional[float], market_spread: Optional[float], pick_side: str
 ) -> str:
@@ -2340,6 +2442,9 @@ _normalized_slate = _historical_full_df["Date"].astype(str).apply(_normalize_dat
 _historical_picks_df = _historical_full_df[_normalized_slate == _selected_slate_date].copy() if not _historical_full_df.empty else pd.DataFrame()
 if potd_picks.get("NCAAB Pick 1") is None and potd_picks.get("NCAAB Pick 2") is None and not _historical_picks_df.empty:
     potd_picks = _potd_from_historical_csv(_historical_picks_df)
+
+# Always backfill missing NCAAB Pick 1 / 2 from today's value plays (top 2 by edge).
+potd_picks = _potd_from_value_plays(value_plays_df, existing=potd_picks)
 
 # Archive today's plays to play_history so Mark Results and Play of the Day History can show them tomorrow.
 # This covers: (1) all value plays from cache (e.g. Vanderbilt Moneyline), (2) POTD from cache or historical CSV (Iowa St, Alabama).
