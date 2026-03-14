@@ -1105,6 +1105,11 @@ def run_pipeline_to_cache(
     """
     Run the full value-plays pipeline and write results to cache_path (JSON).
     Creates data/cache dir if needed. On error, writes a minimal cache with error field.
+
+    NCAAB: Value plays and POTD are read exclusively from the existing cache written by
+    predict_games.py. This pipeline does NOT run get_spread_predicted_margin or
+    build_ncaab_feature_row_from_team_stats for NCAAB — that would use an incomplete
+    feature row and produce impossible edges. Run predict_games.py first to populate the cache.
     """
     if app_root is None:
         app_root = Path(__file__).resolve().parent.parent
@@ -1114,6 +1119,7 @@ def run_pipeline_to_cache(
     def _write_fallback(error_message: str) -> None:
         payload = {
             "value_plays": [],
+            "totals_plays": [],
             "potd_picks": {"NCAAB Pick 1": None, "NCAAB Pick 2": None},
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "odds_source_meta": {},
@@ -1122,6 +1128,28 @@ def run_pipeline_to_cache(
         }
         with open(cache_path, "w") as f:
             json.dump(payload, f, indent=2)
+
+    # Load existing cache for NCAAB (written by predict_games.py). Dashboard uses only this for NCAAB.
+    cached_ncaab_value_plays: list[dict] = []
+    cached_totals_plays: list[dict] = []
+    cached_potd_picks: dict = {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
+    cached_flagged_count = 0
+    if cache_path.exists():
+        try:
+            with open(cache_path) as f:
+                existing = json.load(f)
+            all_cached = existing.get("value_plays") or []
+            cached_ncaab_value_plays = [
+                p for p in all_cached
+                if str(p.get("League", "")).strip().upper() == "NCAAB"
+            ]
+            cached_totals_plays = existing.get("totals_plays") or []
+            cached_potd_picks = existing.get("potd_picks") or cached_potd_picks
+            cached_flagged_count = int(existing.get("value_plays_flagged_count", 0))
+            if verbose and cached_ncaab_value_plays:
+                print(f"NCAAB: Using {len(cached_ncaab_value_plays)} value plays from cache (predict_games.py). Not running pipeline prediction for NCAAB.")
+        except Exception:
+            pass
 
     try:
         # NCAAB: ESPN primary, Rundown supplement (merge by team match for multiple bookmakers)
@@ -1213,54 +1241,19 @@ def run_pipeline_to_cache(
                         print(f"[verbose] Could not load master schedule for no-odds check: {e}")
 
         vp_frames: list[pd.DataFrame] = []
-        value_plays_flagged_count = 0
+        value_plays_flagged_count = cached_flagged_count  # NCAAB: from cache (predict_games); no pipeline prediction
         debug_failed_underdogs: list = []
         verbose_stats: Optional[dict] = {} if verbose else None
-        for league_name in ("NCAAB",):
-            ev_for_league = NCAAB_SPREAD_MIN_EDGE_PCT if league_name == "NCAAB" else min_ev
-            sub = (
-                live_odds_df[live_odds_df["league"] == league_name].copy()
-                if "league" in live_odds_df.columns and not live_odds_df.empty
-                else pd.DataFrame()
-            )
-            if sub.empty:
-                continue
-            agg = _aggregate_odds_best_line_avg_implied(sub)
-            if verbose and verbose_stats is not None and not agg.empty and "event_id" in agg.columns:
-                verbose_stats["ncaab_events_after_odds_parsing"] = agg["event_id"].nunique()
-            vp, flagged = _live_odds_to_value_plays(
-                agg if not agg.empty else sub,
-                bankroll=bankroll,
-                kelly_frac=kelly_frac,
-                min_ev_pct=ev_for_league,
-                max_ev_pct=EV_EPSILON_MAX_PCT,
-                include_high_risk=include_high_risk,
-                pace_stats=pace_stats,
-                b2b_teams=b2b_teams,
-                as_of_date=as_of_date,
-                feature_matrix=feature_matrix,
-                min_bookmakers_override=min_books_override,
-                debug_failed_underdogs=debug_failed_underdogs,
-                verbose_stats=verbose_stats if verbose else None,
-            )
-            if not vp.empty:
-                vp_frames.append(vp)
-            value_plays_flagged_count += flagged
+        # NCAAB value plays come only from cache (predict_games.py). Do not run _live_odds_to_value_plays for NCAAB.
+        if cached_ncaab_value_plays:
+            vp_frames.append(pd.DataFrame(cached_ncaab_value_plays))
 
         if verbose and verbose_stats:
             n_before = n_ncaab_before_future
             n_after_future = n_ncaab_after_future
-            n_after_odds = verbose_stats.get("ncaab_events_after_odds_parsing") or verbose_stats.get("ncaab_events_in_agg") or 0
-            n_with_features = len(verbose_stats.get("ncaab_events_with_features_set") or set())
-            print("\n--- NCAAB filter steps (Rundown API 87 → pipeline) ---")
-            print(f"  (0) NCAAB events in odds df (Rundown; before pipeline filters): {n_before}")
-            print(f"  (1) After future-only filter (start within next 12h):           {n_after_future}  (dropped {n_before - n_after_future})")
-            print(f"  (2) After odds parsing (aggregated lines):                      {n_after_odds}  (dropped {n_after_future - n_after_odds})")
-            print(f"  (3) After feature matrix match:                                {n_with_features}  (dropped {n_after_odds - n_with_features})")
+            print("\n--- NCAAB value plays (from cache, predict_games.py) ---")
+            print(f"  NCAAB events in odds df: {n_before}. After 12h window: {n_after_future}. Value plays: {len(cached_ncaab_value_plays)} (cache).")
             print("---\n")
-            _print_verbose_ncaab_h2h_edges(verbose_stats)
-            _print_verbose_spread_stats(verbose_stats)
-            _print_verbose_auburn_alabama(live_odds_df, verbose_stats)
 
         value_plays_df = (
             pd.concat(vp_frames, ignore_index=True)
@@ -1354,7 +1347,8 @@ def run_pipeline_to_cache(
         except Exception:
             pass
 
-        potd_picks = select_play_of_the_day(value_plays_df, live_odds_df, min_edge_pct=POTD_MIN_EDGE_PCT)
+        # NCAAB POTD from cache (predict_games.py); do not re-select from pipeline
+        potd_picks = cached_potd_picks
         for label in ("NCAAB Pick 1", "NCAAB Pick 2"):
             p = potd_picks.get(label)
             if not p:
@@ -1448,6 +1442,7 @@ def run_pipeline_to_cache(
 
         payload = {
             "value_plays": _json_sanitize(value_plays_list),
+            "totals_plays": _json_sanitize(cached_totals_plays),
             "potd_picks": potd_serializable,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "odds_source_meta": meta,

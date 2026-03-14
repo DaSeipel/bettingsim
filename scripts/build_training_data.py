@@ -381,6 +381,7 @@ def build_training_data() -> pd.DataFrame:
         feat["days_rest_away"] = float(days_rest_away)
 
         feat["actual_margin"] = int(g["home_score"]) - int(g["away_score"])
+        feat["actual_total"] = int(g["home_score"]) + int(g["away_score"])
         feat["date"] = g["date"].strftime("%Y-%m-%d") if hasattr(g["date"], "strftime") else str(g["date"])
         feat["home_team"] = home_team_name
         feat["away_team"] = away_team_name
@@ -424,7 +425,7 @@ def build_training_data() -> pd.DataFrame:
     extra_cols = ["home_hca", "is_neutral", "is_conference_tourney", "is_ncaa_tourney", "seed_diff", "days_rest_home", "days_rest_away"]
     order = id_cols + home_cols + away_cols + diff_cols + extra_cols
     order += FORM_COLS + FORM_DIFF_COLS
-    order += ["actual_margin"]
+    order += ["actual_margin", "actual_total"]
     # Flag that current version uses full-season team stats (not point-in-time)
     df["uses_full_season_stats"] = True
     order = [c for c in order if c in df.columns]
@@ -443,9 +444,9 @@ def main() -> None:
     TRAINING_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(TRAINING_DATA_PATH, index=False)
     print(f"Saved {len(df)} rows to {TRAINING_DATA_PATH}")
-    feats = [c for c in df.columns if c not in ("date", "season", "home_team", "away_team", "actual_margin")]
+    feats = [c for c in df.columns if c not in ("date", "season", "home_team", "away_team", "actual_margin", "actual_total")]
     print(f"  Features ({len(feats)}): {feats}")
-    print(f"  Target: actual_margin (mean={df['actual_margin'].mean():.2f})")
+    print(f"  Target: actual_margin (mean={df['actual_margin'].mean():.2f}), actual_total (mean={df['actual_total'].mean():.1f})")
 
 
 if __name__ == "__main__":

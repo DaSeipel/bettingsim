@@ -27,6 +27,10 @@ ODDS_DIR = APP_ROOT / "data" / "odds"
 NCAAB_DIR = APP_ROOT / "data" / "ncaab"
 MODELS_DIR = APP_ROOT / "data" / "models"
 NCAAB_SPREAD_MODEL_PATH = MODELS_DIR / "xgboost_spread_ncaab.pkl"
+NCAAB_TOTALS_MODEL_PATH = MODELS_DIR / "xgboost_totals_ncaab.pkl"
+TOTALS_EDGE_THRESHOLD = 5.0  # Totals markets are tighter; need larger edge for meaningful value play
+# When False, totals picks are not written to the cache (hidden on dashboard pending further model calibration).
+SHOW_TOTALS_PICKS = False
 CURRENT_FORM_PATH = NCAAB_DIR / "current_form_2026.csv"
 TEAM_HCA_PATH = NCAAB_DIR / "team_hca_by_season.csv"
 CONF_HCA_PATH = NCAAB_DIR / "conf_hca_by_season.csv"
@@ -44,10 +48,12 @@ FORM_FEATURE_COLS = [
     "last5_margin_diff", "last10_margin_diff", "last5_winpct_diff",
 ]
 
-# Odds CSV / display name -> name used in team stats (KenPom / team_stats_history)
+# Odds CSV / display name -> name used in team stats (KenPom / Torvik TEAM)
 ODDS_TO_STATS_NAME: dict[str, str] = {
     "FGCU": "Florida Gulf Coast",
+    "NC Central": "North Carolina Central",
     "Central Ark": "Central Arkansas",
+    "Maryland-Eastern Shore": "Maryland Eastern Shore",
     "NW State": "Northwestern St.",
     "Nicholls": "Nicholls St.",
     "W. Carolina": "Western Carolina",
@@ -91,6 +97,11 @@ MODEL_WEIGHT = 0.7  # weight for model; (1 - MODEL_WEIGHT) for market. blended =
 
 # Calibrated cover-probability params (from data/models/cover_prob_params.json)
 COVER_PROB_PARAMS_PATH = MODELS_DIR / "cover_prob_params.json"
+# Kelly stake: -110 juice -> decimal odds 1.909; use 25% fractional Kelly; stake % clamped [0.5, 5.0]
+DECIMAL_ODDS_110 = 1.909
+KELLY_FRACTION_PCT = 0.25
+SUGGESTED_STAKE_PCT_MIN = 0.5
+SUGGESTED_STAKE_PCT_MAX = 5.0
 
 
 def _load_ncaab_model_feature_columns() -> list[str]:
@@ -118,6 +129,51 @@ def _load_current_form() -> pd.DataFrame:
         return pd.read_csv(CURRENT_FORM_PATH)
     except Exception:
         return pd.DataFrame(columns=["team", "last5_margin", "last10_margin", "last5_winpct"])
+
+
+def _load_totals_model() -> tuple[object, list[str], float] | None:
+    """Load xgboost_totals_ncaab.pkl; return (model, feature_columns, bias_correction) or None."""
+    if not NCAAB_TOTALS_MODEL_PATH.exists():
+        return None
+    try:
+        import joblib
+        payload = joblib.load(NCAAB_TOTALS_MODEL_PATH)
+        model = payload.get("model")
+        cols = payload.get("feature_columns")
+        if model is None or not cols:
+            return None
+        bias = float(payload.get("bias_correction", 0.0))
+        return (model, list(cols), bias)
+    except Exception:
+        return None
+
+
+def _build_totals_feature_row(feature_row: pd.Series, feature_columns: list[str]) -> dict[str, float] | None:
+    """Build feature dict for totals model from spread feature_row. Fills missing with 0."""
+    def _f(val) -> float:
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return 0.0
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+    idx = getattr(feature_row, "index", None)
+    get = (lambda k: feature_row[k] if idx is not None and k in idx else feature_row.get(k)) if hasattr(feature_row, "get") else (lambda k: 0.0)
+    out = {}
+    out["home_ADJ_T"] = _f(get("home_ADJ_T"))
+    out["away_ADJ_T"] = _f(get("away_ADJ_T"))
+    out["home_ADJOE"] = _f(get("home_ADJOE"))
+    out["home_ADJDE"] = _f(get("home_ADJDE"))
+    out["away_ADJOE"] = _f(get("away_ADJOE"))
+    out["away_ADJDE"] = _f(get("away_ADJDE"))
+    out["tempo_diff"] = _f(get("tempo_diff")) if "tempo_diff" in (feature_columns or []) else (out["home_ADJ_T"] - out["away_ADJ_T"])
+    out["combined_tempo"] = out["home_ADJ_T"] + out["away_ADJ_T"]
+    out["combined_offense"] = out["home_ADJOE"] + out["away_ADJOE"]
+    out["combined_defense"] = out["home_ADJDE"] + out["away_ADJDE"]
+    out["is_neutral"] = 1.0 if _f(get("is_neutral")) else 0.0
+    out["is_conference_tourney"] = 1.0 if _f(get("is_conference_tourney")) else 0.0
+    out["is_ncaa_tourney"] = 1.0 if _f(get("is_ncaa_tourney")) else 0.0
+    return out
 
 
 def _load_cover_prob_params() -> dict | None:
@@ -276,8 +332,10 @@ def _enrich_feature_row_for_ncaab_model(
     conf_hca: dict,
     team_conf: dict,
     hca_2026_computed: dict | None,
+    game_date: str | None = None,
+    last_game_dates: dict | None = None,
 ) -> None:
-    """Add BARTHAG_diff, ADJOE_diff, ADJDE_diff, tempo_diff, home_hca, is_neutral, and form columns to feature_row in place."""
+    """Add BARTHAG_diff, ADJOE_diff, ADJDE_diff, tempo_diff, home_hca, is_neutral, form, is_conference_tourney, is_ncaa_tourney, days_rest_home, days_rest_away to feature_row in place."""
     def _f(val: float | None) -> float:
         return float(val) if val is not None and not (isinstance(val, float) and pd.isna(val)) else 0.0
     h_b = _f(feature_row.get("home_BARTHAG"))
@@ -323,6 +381,39 @@ def _enrich_feature_row_for_ncaab_model(
         feature_row["seed_diff"] = a_seed_val - h_seed_val
     else:
         feature_row["seed_diff"] = 0.0
+    # Tournament flags from game_date (March 1–15 = conference tourney; March 16–April 10 = NCAA)
+    if game_date:
+        try:
+            parts = game_date.split("-")
+            if len(parts) >= 3:
+                month, day = int(parts[1]), int(parts[2])
+                feature_row["is_conference_tourney"] = 1.0 if (month == 3 and 1 <= day <= 15) else 0.0
+                feature_row["is_ncaa_tourney"] = 1.0 if ((month == 3 and day >= 16) or (month == 4 and day <= 10)) else 0.0
+            else:
+                feature_row["is_conference_tourney"] = 0.0
+                feature_row["is_ncaa_tourney"] = 0.0
+        except (ValueError, IndexError):
+            feature_row["is_conference_tourney"] = 0.0
+            feature_row["is_ncaa_tourney"] = 0.0
+    else:
+        feature_row["is_conference_tourney"] = 0.0
+        feature_row["is_ncaa_tourney"] = 0.0
+    # Days rest (model expects days_rest_home, days_rest_away; 0–14 cap)
+    def _days_rest(team: str) -> float:
+        if not last_game_dates or not team or not game_date:
+            return 0.0
+        prev = last_game_dates.get(team.strip())
+        if prev is None:
+            return 0.0
+        try:
+            gd = datetime.strptime(game_date, "%Y-%m-%d").date()
+            d = prev.date() if hasattr(prev, "date") else pd.Timestamp(prev).date()
+            delta = (gd - d).days
+            return float(min(14, max(0, delta)))
+        except Exception:
+            return 0.0
+    feature_row["days_rest_home"] = _days_rest(home_team)
+    feature_row["days_rest_away"] = _days_rest(away_team)
 
 
 def _get_latest_odds_path() -> Path | None:
@@ -629,11 +720,35 @@ def main() -> None:
     if missing:
         print(f"Missing columns {missing}. Required: {REQUIRED_COLUMNS}. File: {path}", file=sys.stderr)
         sys.exit(1)
+    # Raw odds CSV: Spread is from Home_Team perspective — negative = home favored, positive = away favored
+    print("--- Raw odds CSV (Home_Team, Away_Team, Spread) — Spread = home perspective: neg = home favored ---")
+    print(f"File: {path}")
+    for _, row in df.iterrows():
+        h = row.get("Home_Team", "")
+        a = row.get("Away_Team", "")
+        s = row.get("Spread", "")
+        print(f"  {h} | {a} | Spread: {s}")
+    print()
     # Critical: ensure prediction feature row matches NCAAB model feature_columns
     model_feature_columns = _load_ncaab_model_feature_columns()
     _ensure_ncaab_model_feature_alignment(model_feature_columns)
+    # Try to load XGBoost spread model for predictions (otherwise fall back to BARTHAG)
+    spread_model_available = False
+    if NCAAB_SPREAD_MODEL_PATH.exists():
+        try:
+            import joblib as _jl
+            _payload = _jl.load(NCAAB_SPREAD_MODEL_PATH)
+            if _payload.get("model") is not None and _payload.get("feature_columns"):
+                spread_model_available = True
+        except Exception:
+            pass
+    if spread_model_available:
+        print("Spread model: Using XGBoost spread model (data/models/xgboost_spread_ncaab.pkl)")
+    else:
+        print("Spread model: Falling back to BARTHAG formula (model not found or invalid: data/models/xgboost_spread_ncaab.pkl)")
     form_df = _load_current_form()
     cover_prob_params = _load_cover_prob_params()
+    totals_model_payload = _load_totals_model()
     team_hca, conf_hca, team_conf = _load_hca_lookups()
     hca_2026_computed = _compute_2026_hca_from_games()
     from engine.utils import game_season_from_date, effective_kenpom_season
@@ -645,6 +760,7 @@ def main() -> None:
         build_ncaab_feature_row_from_team_stats,
         consensus_spread,
         consensus_totals,
+        get_spread_predicted_margin,
     )
     from engine.engine import get_team_power_ratings, get_nba_team_pace_stats, NBA_LEAGUE_AVG_PACE, NBA_LEAGUE_AVG_OFF_RATING
     from engine.espn_odds import get_ncaab_start_times_for_date
@@ -688,6 +804,8 @@ def main() -> None:
             spread = float(row.get("Spread", 0))
         except (TypeError, ValueError):
             spread = 0.0
+        if home_raw == "Michigan" and away_raw == "Wisconsin":
+            print(f"DEBUG: Michigan vs Wisconsin — Spread read from CSV: {spread} (expected -12.5 if home favored)")
         try:
             total = float(row.get("Over_Under", 0))
         except (TypeError, ValueError):
@@ -719,8 +837,10 @@ def main() -> None:
             _enrich_feature_row_for_ncaab_model(
                 feature_row, home, away, is_neutral, season,
                 form_df, team_hca, conf_hca, team_conf, hca_2026_computed,
+                game_date=game_date,
+                last_game_dates=last_game_dates,
             )
-        # BARTHAG: extract for margin (must be before we use them for pred_margin)
+        # BARTHAG: extract for margin (used for fallback and for Michigan vs Wisconsin debug)
         h_b, a_b = None, None
         if feature_row is not None:
             idx = getattr(feature_row, "index", None)
@@ -730,16 +850,50 @@ def main() -> None:
             else:
                 h_b = feature_row.get("home_BARTHAG")
                 a_b = feature_row.get("away_BARTHAG")
-        # Pure BARTHAG-based prediction (no XGBoost): pred_margin = (home_BARTHAG - away_BARTHAG) * scale
         market_spread = float(spread)
-        pred_margin = None
+        barthag_margin = None
         if h_b is not None and pd.notna(h_b) and a_b is not None and pd.notna(a_b):
             try:
-                pred_margin = (float(h_b) - float(a_b)) * BARTHAG_TO_POINTS_SCALE
+                barthag_margin = (float(h_b) - float(a_b)) * BARTHAG_TO_POINTS_SCALE
                 if is_neutral:
-                    pred_margin -= NEUTRAL_SITE_ADJUSTMENT_PTS  # add ~3 pts to away team
+                    barthag_margin -= NEUTRAL_SITE_ADJUSTMENT_PTS
             except (TypeError, ValueError):
                 pass
+        # XGB path: use model when available and feature row is valid; else fall back to BARTHAG
+        pred_margin = None
+        margin_source = "BARTHAG"
+        fallback_reason = ""
+        xgb_margin_raw = None
+        if spread_model_available and feature_row is not None:
+            xgb_margin_raw = get_spread_predicted_margin(
+                feature_row, market_spread, "ncaab", home_team=home, away_team=away
+            )
+            if xgb_margin_raw is not None:
+                pred_margin = float(xgb_margin_raw)  # model has is_neutral in features, no extra adj
+                margin_source = "XGB"
+            else:
+                fallback_reason = "XGB returned None (missing features or model error)"
+        else:
+            if not spread_model_available:
+                fallback_reason = "XGB model not loaded"
+            elif feature_row is None:
+                fallback_reason = "no feature row"
+            else:
+                fallback_reason = "model not available"
+        if pred_margin is None and barthag_margin is not None:
+            pred_margin = barthag_margin
+            if not fallback_reason:
+                fallback_reason = "BARTHAG fallback (no XGB)"
+        # Per-game path and Michigan vs Wisconsin: print both margins when applicable
+        if home_raw == "Michigan" and away_raw == "Wisconsin":
+            print(f"  [Michigan vs Wisconsin] XGB pred margin: {xgb_margin_raw:+.2f}" if xgb_margin_raw is not None else "  [Michigan vs Wisconsin] XGB pred margin: N/A")
+            print(f"  [Michigan vs Wisconsin] BARTHAG pred margin: {barthag_margin:+.2f}" if barthag_margin is not None else "  [Michigan vs Wisconsin] BARTHAG pred margin: N/A")
+            print(f"  [Michigan vs Wisconsin] Used: {margin_source}  (pred_margin = {pred_margin:+.2f})")
+        else:
+            if margin_source == "BARTHAG" and fallback_reason:
+                print(f"  [{away} @ {home}] BARTHAG — {fallback_reason}")
+            elif margin_source == "XGB":
+                print(f"  [{away} @ {home}] XGB")
         # Market blending: blend with market-implied margin (home perspective: margin = -spread)
         market_implied_margin = -market_spread
         blended_margin = None
@@ -793,6 +947,13 @@ def main() -> None:
             spread_prob = spread_cover_prob_from_margins(margin_for_edge, market_spread, we_pick_favorite)
         over_prob, tot_ok = consensus_totals(feature_row, total, True, total, "ncaab", 0.5) if feature_row is not None and total else (0.5, True)
         under_prob = 1.0 - over_prob if total else 0.5
+        # Kelly stake from P(cover): full Kelly = (p * decimal_odds - 1) / (decimal_odds - 1); use 25% fractional, cap stake 0.5–5%
+        p_cover_for_kelly = (calibrated_p_cover if pick_spread == "Home" else (1.0 - calibrated_p_cover)) if calibrated_p_cover is not None else spread_prob
+        denom = DECIMAL_ODDS_110 - 1.0
+        kelly_fraction_raw = (p_cover_for_kelly * DECIMAL_ODDS_110 - 1.0) / denom if denom and denom > 0 else 0.0
+        kelly_fraction_raw = max(0.0, kelly_fraction_raw)
+        kelly_fraction = kelly_fraction_raw * KELLY_FRACTION_PCT
+        suggested_stake_pct = max(SUGGESTED_STAKE_PCT_MIN, min(SUGGESTED_STAKE_PCT_MAX, kelly_fraction * 100.0))
         # Confidence bands: use calibrated P(cover) when available; else fall back to edge-based bands
         if calibrated_p_cover is not None:
             if calibrated_p_cover >= 0.65:
@@ -862,6 +1023,7 @@ def main() -> None:
             "Market_Spread": market_spread,
             "Over_Under": total,
             "Pred_Margin": pred_margin,
+            "Margin_Source": margin_source,
             "Blended_Margin": blended_margin,
             "Edge": edge_pts,
             "Calibrated_P_Cover": calibrated_p_cover,
@@ -877,7 +1039,53 @@ def main() -> None:
             "Reliability_Flag": reliability_flag,
             "start_time": start_time,
             "Is_Neutral": is_neutral,
+            "Kelly_Fraction": kelly_fraction,
+            "Suggested_Stake_Pct": suggested_stake_pct,
+            "_feature_row": feature_row,
         })
+    # Totals model: predicted total and edge vs market; recommend Over/Under if |edge| > 3
+    if totals_model_payload is not None and results:
+        totals_model, totals_feature_columns, totals_bias_correction = totals_model_payload
+        import numpy as np
+        for r in results:
+            total = r.get("Over_Under")
+            fr = r.get("_feature_row")
+            if fr is None or total is None or not total:
+                r["Predicted_Total"] = None
+                r["Totals_Edge"] = None
+                r["Pick_Total_Value"] = None
+                continue
+            totals_feat = _build_totals_feature_row(fr, totals_feature_columns)
+            if not totals_feat:
+                r["Predicted_Total"] = None
+                r["Totals_Edge"] = None
+                r["Pick_Total_Value"] = None
+                continue
+            X = np.array([[totals_feat[c] for c in totals_feature_columns]], dtype=np.float64)
+            try:
+                pred_raw = float(totals_model.predict(X)[0])
+                pred_total = pred_raw - totals_bias_correction
+            except Exception:
+                r["Predicted_Total"] = None
+                r["Totals_Edge"] = None
+                r["Pick_Total_Value"] = None
+                continue
+            totals_edge = pred_total - float(total)
+            r["Predicted_Total"] = pred_total
+            r["Totals_Edge"] = totals_edge
+            if totals_edge > TOTALS_EDGE_THRESHOLD:
+                r["Pick_Total_Value"] = "Over"
+            elif totals_edge < -TOTALS_EDGE_THRESHOLD:
+                r["Pick_Total_Value"] = "Under"
+            else:
+                r["Pick_Total_Value"] = None
+        for r in results:
+            r.pop("_feature_row", None)
+    else:
+        for r in results:
+            r["Predicted_Total"] = None
+            r["Totals_Edge"] = None
+            r["Pick_Total_Value"] = None
     value_plays_raw = [r for r in results if r["Is_Value_Play"]]
     value_plays = value_plays_raw
     filtered_mismatch = 0
@@ -909,8 +1117,10 @@ def main() -> None:
         print(f"Final Home vs Away ratio: {n_home} / {n_away}  ({pct_home:.0f}% Home).")
     value_plays_set = {(r["Home"], r["Away"]) for r in value_plays} if value_plays else set()
     high_confidence = [r for r in results if r.get("Confidence") == "High" and not r.get("Reliability_Flag")]
+    n_xgb = sum(1 for r in results if r.get("Margin_Source") == "XGB")
+    n_barthag = sum(1 for r in results if r.get("Margin_Source") == "BARTHAG")
     print(f"Loaded: {path.name} ({len(results)} games)  |  Value plays (|edge| > {VALUE_PLAY_THRESHOLD} pts): {len(value_plays_raw)}  |  After diversity: {len(value_plays)}  |  High confidence: {len(high_confidence)}")
-    print(f"Games using KenPom (BARTHAG): {used_kenpom}  |  Fallback (Stats N/A): {used_fallback}")
+    print(f"Spread predictions: {n_xgb} XGB, {n_barthag} BARTHAG  |  KenPom stats: {used_kenpom}  |  Fallback (Stats N/A): {used_fallback}")
     print(f"Market blend: {'ON' if USE_MARKET_BLEND else 'OFF'}  (model weight={MODEL_WEIGHT}, edge uses {'blended' if USE_MARKET_BLEND else 'raw'} margin)\n")
     # Team name lookup: odds file name -> matched name used for stats (verify no wrong matches)
     print("Team name lookup (odds -> stats) — ALL games from odds file")
@@ -976,6 +1186,76 @@ def main() -> None:
         else:
             print(f"{game:<38} | {h_str:>9} | {a_str:>9} | {spread_s:>7} | {pred_s:>6} | {edge_s:>6} | {pick}")
     print("-" * 140)
+    # Spread sign check: flag games where BARTHAG disagrees with spread sign (likely CSV sign error)
+    # Convention: Spread = home perspective. Negative = home favored, positive = away favored.
+    # Flag if: (home has higher BARTHAG but spread > 0) or (away has higher BARTHAG but spread < 0)
+    spread_sign_flags = []
+    for r in results:
+        h_b = r.get("Home_BARTHAG")
+        a_b = r.get("Away_BARTHAG")
+        spread = r.get("Market_Spread")
+        if h_b is None or a_b is None or spread is None:
+            continue
+        home_better = h_b > a_b
+        away_better = a_b > h_b
+        if home_better and spread > 0:
+            spread_sign_flags.append({
+                "game": f"{r['Away']} @ {r['Home']}",
+                "home": r["Home"],
+                "away": r["Away"],
+                "spread": spread,
+                "home_barthag": h_b,
+                "away_barthag": a_b,
+                "reason": "Home has higher BARTHAG but spread is positive (home listed as underdog) — likely sign error",
+            })
+        elif away_better and spread < 0:
+            spread_sign_flags.append({
+                "game": f"{r['Away']} @ {r['Home']}",
+                "home": r["Home"],
+                "away": r["Away"],
+                "spread": spread,
+                "home_barthag": h_b,
+                "away_barthag": a_b,
+                "reason": "Away has higher BARTHAG but spread is negative (home listed as favored) — likely sign error",
+            })
+    # Full diagnostic table: Home, Away, Spread, XGB_Margin, Edge, Pick_Direction (favorites vs underdogs)
+    print("\n--- Full diagnostic: Home | Away | Spread | XGB_Margin | Edge | Pick_Direction ---")
+    print(f"{'Home':<22} | {'Away':<22} | {'Spread':>7} | {'XGB_Margin':>10} | {'Edge':>6} | Pick")
+    print("-" * 95)
+    for r in results:
+        home = str(r.get("Home", ""))[:22]
+        away = str(r.get("Away", ""))[:22]
+        spread = r.get("Market_Spread")
+        spread_s = f"{spread:+.1f}" if spread is not None else "—"
+        xgb_m = r.get("Pred_Margin")
+        xgb_s = f"{xgb_m:+.1f}" if xgb_m is not None else "—"
+        edge = r.get("Edge")
+        edge_s = f"{edge:+.1f}" if edge is not None else "—"
+        pick = r.get("Pick_Spread", "Skip")
+        print(f"{home:<22} | {away:<22} | {spread_s:>7} | {xgb_s:>10} | {edge_s:>6} | {pick}")
+    print("-" * 95)
+    # Favorites: spread < 0 means home favored. Model projects favorite to cover when pred_margin matches sign and |pred| > |spread|
+    n_home_fav = sum(1 for r in results if r.get("Market_Spread") is not None and r["Market_Spread"] < 0)
+    n_fav_cover_pick = sum(1 for r in results if (r.get("Pick_Spread") == "Home" and r.get("Market_Spread") is not None and r["Market_Spread"] < 0) or (r.get("Pick_Spread") == "Away" and r.get("Market_Spread") is not None and r["Market_Spread"] > 0))
+    print(f"  (Home favored in {n_home_fav} games. Picks on favorite (Home when spread<0, Away when spread>0): {n_fav_cover_pick})")
+    print()
+
+    if spread_sign_flags:
+        print("\n*** SPREAD SIGN CONVENTION CHECK — Likely CSV sign errors (fix before rerun) ***")
+        print("Convention: Spread column = Home perspective. Negative = home favored, positive = away favored.")
+        print("-" * 95)
+        for f in spread_sign_flags:
+            print(f"  {f['game']}")
+            print(f"    Spread (from CSV): {f['spread']:+.1f}   Home BARTHAG: {f['home_barthag']:.3f}   Away BARTHAG: {f['away_barthag']:.3f}")
+            print(f"    → {f['reason']}")
+        print("-" * 95)
+        print("Summary — games to fix in CSV (flip spread sign):")
+        for f in spread_sign_flags:
+            suggested = -f["spread"] if f["spread"] != 0 else 0
+            print(f"  {f['home']} vs {f['away']}: current Spread {f['spread']:+.1f} → should be {suggested:+.1f}")
+        print()
+    else:
+        print("\nSpread sign check: no games flagged (BARTHAG and spread sign consistent).\n")
     # Debug: games where away has better BARTHAG — show pred_margin and pick
     _away_better_home_pick_games = [
         ("Colgate", "Lehigh"),
@@ -1050,16 +1330,23 @@ def main() -> None:
     print(f"\nSUCCESS: [{n_saved}] picks saved to historical_betting_performance.csv for {game_date}.")
     print(f"FINAL HOME/AWAY RATIO: {n_home_final} Home / {n_away_final} Away  ({pct_home_final:.0f}% Home).")
 
-    # Write value plays to dashboard cache so "All Value Plays" section populates from manual odds
-    _write_value_plays_cache(value_plays, path, game_date)
+    # Totals value plays: |Totals_Edge| > 3
+    totals_plays = sorted(
+        [r for r in results if r.get("Pick_Total_Value") in ("Over", "Under")],
+        key=lambda x: abs(x.get("Totals_Edge") or 0),
+        reverse=True,
+    )
+    # Write value plays (spread + totals) to dashboard cache
+    _write_value_plays_cache(value_plays, totals_plays, path, game_date)
 
 
 def _write_value_plays_cache(
     value_plays: list[dict],
+    totals_plays: list[dict],
     odds_path: Path,
     game_date: str,
 ) -> None:
-    """Write value plays to data/cache/value_plays_cache.json so the dashboard 'All Value Plays' section populates from manual odds.
+    """Write value plays (spread and totals) to data/cache/value_plays_cache.json.
     Always overwrites the entire file with this run's plays only (never appends)."""
     cache_dir = APP_ROOT / "data" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1135,6 +1422,11 @@ def _write_value_plays_cache(
                 start_time_display = "Today"
         else:
             start_time_display = "Today"
+        suggested_pct = r.get("Suggested_Stake_Pct")
+        try:
+            suggested_pct = float(suggested_pct) if suggested_pct is not None else None
+        except (TypeError, ValueError):
+            suggested_pct = None
         value_plays_list.append({
             "League": "NCAAB",
             "Event": f"{away} @ {home}",
@@ -1144,7 +1436,11 @@ def _write_value_plays_cache(
             "Value (%)": round(value_pct, 2),
             "point": point_picked,
             "Point": point_picked,
+            "Edge_pts": round(edge_pts_f, 1) if edge_pts_f is not None else None,
+            "Spread_Prob": round(float(p_cover), 3) if isinstance(p_cover, (int, float)) else None,
             "Recommended Stake": None,
+            "Suggested_Stake_Pct": round(suggested_pct, 2) if suggested_pct is not None else None,
+            "Kelly_Fraction": round(r.get("Kelly_Fraction", 0), 6) if r.get("Kelly_Fraction") is not None else None,
             "Injury Alert": "—",
             "Start Time": start_time_display,
             "start_time": start_time_iso,
@@ -1154,15 +1450,83 @@ def _write_value_plays_cache(
             "reason": reason,
             "reasoning_summary": reason,
         })
-    # POTD: top 2 by abs(Edge) descending (value_plays_list is already sorted that way)
-    potd_picks = {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
+
+    totals_plays_list = []
+    if SHOW_TOTALS_PICKS:
+        for r in totals_plays:
+            home = str(r.get("Home", "")).strip()
+            away = str(r.get("Away", "")).strip()
+            pick_tot = str(r.get("Pick_Total_Value", "")).strip()  # "Over" or "Under"
+            if pick_tot not in ("Over", "Under"):
+                continue
+            edge_t = r.get("Totals_Edge")
+            try:
+                edge_t_f = float(edge_t) if edge_t is not None else 0.0
+            except (TypeError, ValueError):
+                edge_t_f = 0.0
+            value_pct_t = min(15.0, abs(edge_t_f) / 3.0)
+            over_under = r.get("Over_Under")
+            try:
+                ou_f = float(over_under) if over_under is not None else None
+            except (TypeError, ValueError):
+                ou_f = None
+            pred_total = r.get("Predicted_Total")
+            try:
+                pred_f = float(pred_total) if pred_total is not None else None
+            except (TypeError, ValueError):
+                pred_f = None
+            reason_t = f"Model projects total {pred_f:.1f} pts (line {ou_f:.1f}) — edge {edge_t_f:+.1f} pts. Take {pick_tot}."
+            start_time_iso = r.get("start_time")
+            if start_time_iso and str(start_time_iso).strip():
+                try:
+                    s = str(start_time_iso).replace("Z", "+00:00")
+                    dt = datetime.fromisoformat(s)
+                    if dt.tzinfo:
+                        dt_et = dt.astimezone(ZoneInfo("America/New_York"))
+                        start_time_display = dt_et.strftime("%b %d, %I:%M %p ET")
+                    else:
+                        start_time_display = dt.strftime("%b %d, %I:%M %p")
+                except (ValueError, TypeError):
+                    start_time_display = "Today"
+            else:
+                start_time_display = "Today"
+            totals_plays_list.append({
+                "League": "NCAAB Totals",
+                "Event": f"{away} @ {home}",
+                "Selection": pick_tot,
+                "Market": "Total",
+                "Odds": -110,
+                "Value (%)": round(value_pct_t, 2),
+                "point": ou_f,
+                "Point": ou_f,
+                "Over_Under": ou_f,
+                "Predicted_Total": pred_f,
+                "Totals_Edge": round(edge_t_f, 2),
+                "Injury Alert": "—",
+                "Start Time": start_time_display,
+                "start_time": start_time_iso,
+                "home_team": home,
+                "away_team": away,
+                "confidence_tier": "Medium",
+                "reason": reason_t,
+                "reasoning_summary": reason_t,
+            })
+
+    # POTD: top 2 spread by abs(Edge); top 2 totals by abs(Totals_Edge) when SHOW_TOTALS_PICKS
+    potd_picks = {"NCAAB Pick 1": None, "NCAAB Pick 2": None, "NCAAB Totals Pick 1": None, "NCAAB Totals Pick 2": None}
     for i, vp in enumerate(value_plays_list[:2]):
         pick = vp.copy()
         pick["League"] = f"NCAAB Pick {i + 1}"
         potd_picks[f"NCAAB Pick {i + 1}"] = pick
+    if SHOW_TOTALS_PICKS:
+        for i, tp in enumerate(totals_plays_list[:2]):
+            pick = tp.copy()
+            pick["League"] = f"NCAAB Totals Pick {i + 1}"
+            potd_picks[f"NCAAB Totals Pick {i + 1}"] = pick
 
     payload = {
         "value_plays": value_plays_list,
+        "totals_plays": totals_plays_list,
         "potd_picks": potd_picks,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "odds_source_meta": {"source": "manual_odds", "odds_file": odds_path.name},
@@ -1170,7 +1534,7 @@ def _write_value_plays_cache(
     }
     with open(cache_path, "w") as f:
         json.dump(payload, f, indent=2)
-    print(f"Wrote {len(value_plays_list)} value plays to {cache_path.relative_to(APP_ROOT)} (cache overwritten with this run only).")
+    print(f"Wrote {len(value_plays_list)} spread + {len(totals_plays_list)} totals plays to {cache_path.relative_to(APP_ROOT)} (cache overwritten with this run only).")
 
 
 def _save_historical_performance(
@@ -1185,6 +1549,7 @@ def _save_historical_performance(
     columns = [
         "Date", "Odds_File", "Home", "Away", "Home_BARTHAG", "Away_BARTHAG", "Market_Spread", "Pred_Margin", "Pick_Spread",
         "Confidence_Level", "Edge_Points", "Has_Rebound_Advantage", "Spread_Prob", "Over_Under", "Pick_Total",
+        "Kelly_Fraction", "Suggested_Stake_Pct",
     ]
     # Use 2026 in Odds_File display name to match stats year (e.g. March_07_2026_Odds.csv)
     try:
@@ -1210,6 +1575,8 @@ def _save_historical_performance(
             "Spread_Prob": r["Spread_Prob"],
             "Over_Under": r["Over_Under"],
             "Pick_Total": r["Pick_Total"],
+            "Kelly_Fraction": r.get("Kelly_Fraction"),
+            "Suggested_Stake_Pct": r.get("Suggested_Stake_Pct"),
         })
     if not rows:
         return 0

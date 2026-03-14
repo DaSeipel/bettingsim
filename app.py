@@ -1804,9 +1804,9 @@ def _vp_log(msg: str, data: dict):
         pass
 # #endregion
 
-# Value plays and POTD: always load from cache (written by scripts/run_pipeline_to_cache.py). No pipeline in-app.
-def _load_value_plays_cache() -> tuple[pd.DataFrame, dict, pd.DataFrame, int, dict, Optional[str]]:
-    """Load from data/cache/value_plays_cache.json. Returns (value_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, odds_source_meta, error_message or None)."""
+# Value plays and POTD: always load from cache. NCAAB written by predict_games.py; run_pipeline_to_cache.py preserves it (no duplicate NCAAB prediction). No pipeline in-app.
+def _load_value_plays_cache() -> tuple[pd.DataFrame, pd.DataFrame, dict, pd.DataFrame, int, dict, Optional[str]]:
+    """Load from data/cache/value_plays_cache.json. Returns (value_plays_df, totals_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, odds_source_meta, error_message or None)."""
     # #region agent log
     import time
     _log_path = Path(__file__).resolve().parent / ".cursor" / "debug-874db2.log"
@@ -1822,22 +1822,24 @@ def _load_value_plays_cache() -> tuple[pd.DataFrame, dict, pd.DataFrame, int, di
     cache_path = Path(__file__).resolve().parent / "data" / "cache" / "value_plays_cache.json"
     if not cache_path.exists():
         _dbg("cache file missing", {"cache_path": str(cache_path), "exists": False}, "H1")
-        return empty_df, {"NCAAB Pick 1": None, "NCAAB Pick 2": None}, empty_live, 0, {}, None
+        return empty_df, empty_df.copy(), {"NCAAB Pick 1": None, "NCAAB Pick 2": None}, empty_live, 0, {}, None
     _dbg("cache file exists", {"cache_path": str(cache_path), "exists": True}, "H1")
     try:
         with open(cache_path) as f:
             data = json.load(f)
     except Exception as e:
         _dbg("cache read exception", {"error": str(e), "type": type(e).__name__}, "H4")
-        return empty_df, {"NCAAB Pick 1": None, "NCAAB Pick 2": None}, empty_live, 0, {}, None
+        return empty_df, empty_df.copy(), {"NCAAB Pick 1": None, "NCAAB Pick 2": None}, empty_live, 0, {}, None
     value_plays_list = data.get("value_plays") or []
     value_plays_df = pd.DataFrame(value_plays_list) if value_plays_list else empty_df
-    _dbg("cache parsed", {"top_level_keys": list(data.keys()), "value_plays_len": len(value_plays_list), "df_empty": value_plays_df.empty, "df_columns": list(value_plays_df.columns) if not value_plays_df.empty else [], "cache_error": data.get("error")}, "H2")
+    totals_plays_list = data.get("totals_plays") or []
+    totals_plays_df = pd.DataFrame(totals_plays_list) if totals_plays_list else pd.DataFrame()
+    _dbg("cache parsed", {"top_level_keys": list(data.keys()), "value_plays_len": len(value_plays_list), "totals_plays_len": len(totals_plays_list), "df_empty": value_plays_df.empty, "cache_error": data.get("error")}, "H2")
     potd_picks = data.get("potd_picks") or {"NCAAB Pick 1": None, "NCAAB Pick 2": None}
     value_plays_flagged_count = int(data.get("value_plays_flagged_count", 0))
     odds_source_meta = data.get("odds_source_meta") or {}
     cache_error = data.get("error")
-    return value_plays_df, potd_picks, empty_live, value_plays_flagged_count, odds_source_meta, cache_error
+    return value_plays_df, totals_plays_df, potd_picks, empty_live, value_plays_flagged_count, odds_source_meta, cache_error
 
 
 def _filter_value_plays_not_started(df: pd.DataFrame, debug: bool = False) -> tuple[pd.DataFrame, int]:
@@ -1900,7 +1902,7 @@ def _filter_value_plays_not_started(df: pd.DataFrame, debug: bool = False) -> tu
     if debug:
         _log(f"[_filter_value_plays_not_started] result: n_started={n_started} kept={len(kept_indices)} total={len(df)}")
     return filtered, n_started
-value_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, _odds_meta, _cache_err = _load_value_plays_cache()
+value_plays_df, totals_plays_df, potd_picks, live_odds_df, value_plays_flagged_count, _odds_meta, _cache_err = _load_value_plays_cache()
 _filter_debug = os.environ.get("DEBUG_VALUE_PLAYS_FILTER", "").strip() == "1"
 value_plays_df, _n_value_plays_already_started = _filter_value_plays_not_started(value_plays_df, debug=_filter_debug)
 st.session_state["odds_source_meta"] = _odds_meta
@@ -2732,148 +2734,93 @@ with tab_overview:
 
     st.divider()
 
-    # ——— All Value Plays (card list, filters, low-volume warning) ———
+    # ——— All Value Plays (spread only; totals picks hidden pending further model calibration) ———
     st.subheader("All Value Plays")
-    st.caption("Today's best NCAAB value plays sorted by edge. Powered by KenPom BARTHAG ratings.")
+    st.caption("Today's best NCAAB value plays sorted by edge. Powered by XGBoost multi-feature model.")
     if _n_value_plays_already_started > 0:
-        remaining = len(value_plays_df) if not value_plays_df.empty else 0
-        st.caption(f"**{_n_value_plays_already_started}** play(s) already started — showing **{remaining}** remaining.")
-    if (odds_api_key or "").strip():
-        if st.button("Refresh", key="overview_refresh", help="Run the value-plays pipeline and reload cache; page will rerun so new data is visible"):
-            _script = Path(__file__).resolve().parent / "scripts" / "run_pipeline_to_cache.py"
-            env = os.environ.copy()
-            env["ODDS_API_KEY"] = (odds_api_key or "").strip()
-            try:
-                subprocess.run(
-                    [sys.executable, str(_script)],
-                    cwd=str(Path(__file__).resolve().parent),
-                    env=env,
-                    timeout=300,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired:
-                st.error("Pipeline timed out after 5 minutes.")
-            except Exception as e:
-                st.error(f"Pipeline error: {e}")
-            # Force full rerun so cache and historical CSV are re-read and UI updates
-            st.rerun()
+        n_total = len(value_plays_df) if not value_plays_df.empty else 0
+        st.caption(f"**{_n_value_plays_already_started}** play(s) already started — showing **{n_total}** remaining.")
     if value_plays_flagged_count > 0:
         st.warning(f"**Potential Data Error:** {value_plays_flagged_count} play(s) had Value % ≥ 15% and were excluded.")
 
-    # Filter row: NCAAB only; min edge slider (2–15%, default 2). When showing slate from CSV, slider still filters.
-    filter_col1, filter_col2, _ = st.columns([1, 1, 2])
-    with filter_col1:
-        league_filter = "NCAAB"  # NCAAB only; NBA code kept in backend
-        st.caption("League: **NCAAB**")
-    with filter_col2:
-        min_edge = st.slider(
-            "Min edge %",
-            min_value=2.0,
-            max_value=15.0,
-            value=2.0,
-            step=0.5,
-            key="vp_min_edge",
-            help="Only show plays with edge above this threshold.",
-        )
-
-    # Overview tables filter by sidebar "Select Slate Date": show _historical_picks_df when available
-    if not _historical_picks_df.empty:
-        _disp = _historical_picks_df.copy()
-        _disp["Event"] = _disp.apply(lambda r: f"{str(r.get('Away', '')).strip()} @ {str(r.get('Home', '')).strip()}", axis=1)
-        # Selection = actual team name (from cache/CSV: Home or Away per Pick_Spread)
-        _disp["Selection"] = _disp.apply(
-            lambda r: str(r.get("Home", "")).strip() if str(r.get("Pick_Spread", "")).strip() == "Home" else str(r.get("Away", "")).strip(),
-            axis=1,
-        )
-        # Pick = team name + spread from picked team's perspective, e.g. "South Florida -16.5"
-        def _pick_with_spread(r):
-            sel = str(r.get("Selection", "")).strip()
-            ms = r.get("Market_Spread")
-            if ms is None or (isinstance(ms, float) and pd.isna(ms)):
-                return sel
-            try:
-                spread = float(ms)
-            except (TypeError, ValueError):
-                return sel
-            # Spread from picked team: home line if Home pick, else -home (away line)
-            pick_spread = spread if str(r.get("Pick_Spread", "")).strip() == "Home" else -spread
-            return f"{sel} {pick_spread:+.1f}"
-        _disp["Pick"] = _disp.apply(_pick_with_spread, axis=1)
-        if "Edge_Points" in _disp.columns:
-            _disp["Value (%)"] = (_disp["Edge_Points"].abs() / 3.0).clip(0, 15)
-        _disp = _disp[_disp["Value (%)"] >= min_edge] if "Value (%)" in _disp.columns else _disp
-        # Edge pts rounded to 1 decimal for display
-        if "Edge_Points" in _disp.columns:
-            _disp = _disp.copy()
-            _disp["Edge_Points"] = _disp["Edge_Points"].round(1)
-        _cols_show = ["Event", "Pick", "Edge_Points", "Confidence_Level"]
-        _cols_show = [c for c in _cols_show if c in _disp.columns]
-        if _cols_show:
-            st.caption(f"Slate for **{_selected_slate_date}** — {len(_disp)} play(s) (min edge {min_edge}%).")
-            st.dataframe(_disp[_cols_show].rename(columns={"Edge_Points": "Edge pts", "Confidence_Level": "Confidence"}), use_container_width=True, hide_index=True)
-    elif not value_plays_df.empty:
-        # Filter by min edge and league; one best play per game; then correlated filter (max 10, no team twice)
-        # March Madness mode: NCAAB plays must have at least 5% edge
-        base_edge_ok = value_plays_df["Value (%)"] > min_edge
-        if march_madness_mode:
-            ncaab_min_ok = (value_plays_df["League"].astype(str).str.strip().str.upper() != "NCAAB") | (value_plays_df["Value (%)"] >= 5.0)
-            eligible = value_plays_df[base_edge_ok & ncaab_min_ok].copy()
-        else:
-            eligible = value_plays_df[base_edge_ok].copy()
-        eligible = eligible[eligible["League"] == "NCAAB"]
-        best_per_game = (
-            eligible.sort_values("Value (%)", ascending=False)
-            .groupby("Event")
-            .head(1)
-            .reset_index(drop=True)
-        )
-        value_plays_list = _filter_correlated_plays(best_per_game, max_plays=MAX_TOP_PLAYS_NO_CORRELATION)
-        if len(value_plays_list) < 3:
-            st.warning("**Low volume day** — fewer than 3 qualifying plays. Consider lowering the min edge or check back later.")
-        st.caption("**Consensus filter:** Only plays where ≥2 of 3 sub-models agree on direction are shown. **Correlated plays:** Same team in multiple games today is de-duplicated (highest edge per team). Max 10 plays, no team repeated.")
-        for _, row in value_plays_list.iterrows():
-            st.markdown(_render_value_play_card_html(row, march_madness_mode=march_madness_mode), unsafe_allow_html=True)
-            # Bet outcome: look up clv_tracker row and show Mark W / Mark L or current result
-            _commence = row.get("commence_time") or ""
-            _pt = row.get("point")
-            if _pt is not None and pd.notna(_pt):
+    # Spread only; totals picks are hidden pending further model calibration (see predict_games.py SHOW_TOTALS_PICKS).
+    def _row_event(r):
+        return str(r.get("Event", "")).strip() or "—"
+    def _row_pick(r, market: str):
+        sel = str(r.get("Selection", "")).strip()
+        pt = r.get("point") if "point" in r else r.get("Point") or r.get("Over_Under")
+        if pt is None or (isinstance(pt, float) and pd.isna(pt)):
+            return sel or "—"
+        try:
+            p = float(pt)
+        except (TypeError, ValueError):
+            return f"{sel} {pt}" if sel else str(pt)
+        if market == "Total":
+            return f"{sel} {p:.1f}"
+        return f"{sel} {p:+.1f}"
+    def _row_spread_line(r, market: str):
+        pt = r.get("point") if "point" in r else r.get("Point") or r.get("Over_Under")
+        if pt is None or (isinstance(pt, float) and pd.isna(pt)):
+            return "—"
+        try:
+            p = float(pt)
+        except (TypeError, ValueError):
+            return str(pt)
+        return f"{p:+.1f}" if market == "Spread" else f"{p:.1f}"
+    def _row_edge(r, market: str):
+        if market == "Spread":
+            e = r.get("Edge_pts")
+            if e is not None and not (isinstance(e, float) and pd.isna(e)):
                 try:
-                    _pt = float(_pt)
+                    return round(float(e), 1)
                 except (TypeError, ValueError):
-                    _pt = None
-            _clv = get_clv_row_for_play(
-                home_team=str(row.get("home_team", "")),
-                away_team=str(row.get("away_team", "")),
-                commence_time=str(_commence),
-                market_type=str(row.get("Market", "")).strip().lower() or "h2h",
-                selection=str(row.get("Selection", "")),
-                point=_pt,
-            )
-            if _clv and _clv.get("id"):
-                _cid = _clv["id"]
-                _result = _clv.get("result")
-                if _result in ("W", "L"):
-                    st.caption(f"**Result:** {_result}")
-                else:
-                    _col_w, _col_l, _ = st.columns([1, 1, 3])
-                    with _col_w:
-                        if st.button("Mark W", key=f"mark_w_{_cid}", help="Record this play as a win"):
-                            mark_bet_result(_cid, "W")
-                            st.rerun()
-                    with _col_l:
-                        if st.button("Mark L", key=f"mark_l_{_cid}", help="Record this play as a loss"):
-                            mark_bet_result(_cid, "L")
-                            st.rerun()
-            st.divider()
+                    pass
+            v = r.get("Value (%)")
+            if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                try:
+                    return round(float(v) * 3.0, 1)  # approximate from Value %
+                except (TypeError, ValueError):
+                    pass
+            return "—"
+        e = r.get("Totals_Edge")
+        if e is not None and not (isinstance(e, float) and pd.isna(e)):
+            try:
+                return round(float(e), 1)
+            except (TypeError, ValueError):
+                pass
+        return "—"
+    def _row_confidence(r):
+        return str(r.get("confidence_tier", "")).strip() or "—"
+
+    rows = []
+    if not value_plays_df.empty and "Event" in value_plays_df.columns:
+        for _, r in value_plays_df.iterrows():
+            if str(r.get("League", "")).strip().upper() != "NCAAB":
+                continue
+            edge_val = _row_edge(r, "Spread")
+            abs_edge = abs(edge_val) if isinstance(edge_val, (int, float)) else 0.0
+            rows.append({
+                "Event": _row_event(r),
+                "Pick": _row_pick(r, "Spread"),
+                "Spread/Line": _row_spread_line(r, "Spread"),
+                "Edge (pts)": edge_val,
+                "Confidence": _row_confidence(r),
+                "_abs_edge": abs_edge,
+            })
+    # Totals plays are not shown (hidden pending further model calibration).
+
+    if rows:
+        combined = pd.DataFrame(rows).sort_values("_abs_edge", ascending=False).drop(columns=["_abs_edge"])
+        st.dataframe(combined, use_container_width=True, hide_index=True)
     else:
         if (odds_api_key or "").strip():
-            st.info("No value plays from live odds today, or no events. Try again later or use Refresh.")
+            st.info("No value plays from cache today. Run **scripts/predict_games.py** (or the pipeline) to generate plays.")
         else:
-            st.info("Set Odds API key in the sidebar to load today's NCAAB value plays.")
+            st.info("Set Odds API key in the sidebar or run **scripts/predict_games.py** with an odds CSV to load value plays.")
 
 with tab_ncaab:
     st.subheader("NCAAB")
-    st.caption("Today's NCAAB value plays ranked by edge. Picks powered by KenPom BARTHAG ratings.")
+    st.caption("Today's NCAAB value plays ranked by edge. Picks powered by XGBoost multi-feature model.")
     if _n_value_plays_already_started > 0:
         remaining = len(value_plays_df[value_plays_df["League"] == "NCAAB"]) if not value_plays_df.empty and "League" in value_plays_df.columns else 0
         st.caption(f"**{_n_value_plays_already_started}** play(s) already started — showing **{remaining}** remaining.")
