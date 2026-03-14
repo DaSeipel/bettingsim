@@ -37,6 +37,8 @@ KENPOM_STAT_COLUMNS = [
     "TOR", "TORD", "ORB", "DRB", "FTR", "FTRD",
     "ADJ_T", "SEED",
 ]
+# March multiplier columns (Veteran Edge, Closer FT, 3P variance) — kept in table for bracket_analysis
+MARCH_COLUMNS = ["free_throw_pct", "three_point_pct", "roster_experience_years"]
 
 
 def _kenpom_column_name(prefix: str, stat: str) -> str:
@@ -51,8 +53,9 @@ def load_csv_into_ncaab_team_season_stats(csv_path: Path, db_path: Path) -> pd.D
     df = pd.read_csv(csv_path)
     # Ensure season is int
     df["season"] = df["season"].astype(int)
-    # Keep only columns we need for the table and merge
+    # Keep columns for table: KenPom stats + March multiplier columns (schema for bracket_analysis)
     keep = ["season", "TEAM"] + [c for c in KENPOM_STAT_COLUMNS if c in df.columns]
+    keep += [c for c in MARCH_COLUMNS if c in df.columns]
     df = df[[c for c in keep if c in df.columns]].copy()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)

@@ -32,6 +32,9 @@ COLUMN_RENAME = {
     "adjt": "ADJ_T",
 }
 
+# March multiplier columns (Tournament Success: Veteran Edge, Closer FT, 3P variance)
+MARCH_COLUMNS = ["free_throw_pct", "three_point_pct", "roster_experience_years"]
+
 # Canonical columns (same order as team_stats_2025 for compatibility)
 CANONICAL_COLUMNS = [
     "season",
@@ -60,7 +63,7 @@ CANONICAL_COLUMNS = [
     "WAB",
     "POSTSEASON",
     "SEED",
-]
+] + MARCH_COLUMNS
 
 
 def fetch_barttorvik_2026() -> pd.DataFrame:
@@ -101,6 +104,21 @@ def fetch_barttorvik_2026() -> pd.DataFrame:
             df[col] = float("nan") if col != "POSTSEASON" else ""
     if "POSTSEASON" in df.columns and df["POSTSEASON"].dtype != object:
         df["POSTSEASON"] = df["POSTSEASON"].fillna("").astype(str)
+
+    # Map to March multiplier columns (for bracket_analysis.py Veteran Edge, Closer Factor)
+    if "FTR" in df.columns:
+        df["free_throw_pct"] = df["FTR"].apply(
+            lambda x: float(x) * 100.0 if pd.notna(x) and float(x) <= 1 else (float(x) if pd.notna(x) else float("nan"))
+        )
+    else:
+        df["free_throw_pct"] = float("nan")
+    if "3P_O" in df.columns:
+        df["three_point_pct"] = df["3P_O"].apply(
+            lambda x: float(x) * 100.0 if pd.notna(x) and float(x) <= 1 else (float(x) if pd.notna(x) else float("nan"))
+        )
+    else:
+        df["three_point_pct"] = float("nan")
+    df["roster_experience_years"] = float("nan")  # filled by update_ncaab_march_stats.py from lookup
 
     cols = [c for c in CANONICAL_COLUMNS if c in df.columns]
     return df[cols].copy()

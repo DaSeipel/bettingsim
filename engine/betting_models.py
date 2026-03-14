@@ -1011,6 +1011,9 @@ def build_ncaab_feature_row_from_team_stats(
     row["away_games_in_last_5_days"] = 0
     row["home_is_b2b"] = 0
     row["away_is_b2b"] = 0
+    # NOTE: March multiplier data (free_throw_pct, three_point_pct, roster_experience_years) is NOT
+    # added here. It is only read in engine/bracket_analysis.py via load_march_stats() so that
+    # get_spread_predicted_margin and predict_spread_prob remain pure for daily/historical use.
     # Enrich with most recent team_stats_history (e.g. ROff, RDef, last_5_wins) for prediction and training-ready features
     _merge_team_stats_history_into_row(row, home_team, away_team, game_date, home_key=home_key, away_key=away_key)
     return pd.Series(row)

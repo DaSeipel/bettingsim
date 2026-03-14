@@ -64,6 +64,7 @@ from engine.clv_tracker import (
 from engine.play_history import archive_value_plays, delete_play, load_play_history, update_play_result
 from engine.auto_result_job import run_auto_result
 from engine.ncaab_march_context import add_ncaab_march_context_to_df, is_after_selection_sunday
+from engine.bracket_analysis import run_bracket_analysis
 from engine.betting_models import (
     load_feature_matrix_for_inference,
     get_feature_row_for_game,
@@ -2714,7 +2715,7 @@ if _unresolved_stale > 0:
     )
     st.markdown(_slim_alert_html, unsafe_allow_html=True)
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
-tab_overview, tab_ncaab, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(["Overview", "NCAAB", "NBA (Coming Soon)", "Mark Results", "Record", "Manual Odds", "Game Lookup"])
+tab_overview, tab_ncaab, tab_march, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(["Overview", "NCAAB", "March", "NBA (Coming Soon)", "Mark Results", "Record", "Manual Odds", "Game Lookup"])
 
 with tab_overview:
     st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
@@ -2910,6 +2911,78 @@ with tab_ncaab:
             st.info("No NCAAB games for today from the Odds API, or no value plays with 3% ≤ Value % < 15%. Try again later or use Refresh.")
         else:
             st.info("Set Odds API key in the sidebar to load today's NCAAB games and value plays.")
+
+with tab_march:
+    st.subheader("2026 NCAA Bracket Analysis")
+    st.caption("Analyze the tournament bracket for sleepers, Final 4 probabilities (10k Monte Carlo), and first-round spread value (Walters plays). Uses the XGBoost spread model.")
+    st.markdown("---")
+    st.markdown("**Inputs**")
+    bracket_input = st.text_area(
+        "Bracket (first-round matchups)",
+        value="",
+        height=120,
+        placeholder="CSV: TeamA, SeedA, TeamB, SeedB [, MarketSpread]\nExample:\nPurdue, 1, Montana St, 16, -24.5\nTennessee, 2, St. Peter's, 15, -18\n... (32 games)",
+        key="march_bracket_csv",
+    )
+    rankings_input = st.text_area(
+        "Power rankings (model vs public)",
+        value="",
+        height=120,
+        placeholder="CSV: Team, Seed, ModelRank (1 = best)\nExample:\nPurdue, 1, 2\nUConn, 1, 1\nTennessee, 2, 5\n...",
+        key="march_power_rankings_csv",
+    )
+    n_sims = st.number_input("Monte Carlo iterations", min_value=1000, max_value=50000, value=10000, step=1000, key="march_n_sims")
+    run_analysis = st.button("Run Bracket Analysis", key="march_run_btn")
+    if run_analysis and bracket_input.strip() and rankings_input.strip():
+        with st.spinner(f"Running {n_sims:,} bracket simulations and analysis..."):
+            out = run_bracket_analysis(
+                bracket_input.strip(),
+                rankings_input.strip(),
+                n_sims=int(n_sims),
+            )
+        for err in out.get("errors", []):
+            st.error(err)
+        st.markdown("---")
+        st.markdown("**Top 5 Value Sleepers**")
+        st.caption("Value Delta = (Official Seed Rank) − (Model Rank). Higher = undervalued by the committee.")
+        sleepers = out.get("value_sleepers", [])
+        if sleepers:
+            sleeper_df = pd.DataFrame(sleepers)
+            if "march_factors" in sleeper_df.columns:
+                sleeper_df = sleeper_df.rename(columns={"march_factors": "March Factors"})
+            st.dataframe(sleeper_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No sleepers computed. Check bracket and power rankings formats (Team, Seed, ModelRank).")
+        st.markdown("**Final 4 probabilities**")
+        st.caption(f"Share of {out.get('n_sims', n_sims):,} simulations in which each team reached the Final Four.")
+        f4 = out.get("final4_probabilities", [])
+        if f4:
+            f4_df = pd.DataFrame(f4)
+            st.dataframe(f4_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Run analysis with 32 first-round matchups to get Final 4 probabilities.")
+        st.markdown("**Glitch teams**")
+        st.caption("Seed #7 or lower, Final 4 rate >5%, and Top 50 in at least 2 of: FT%, 3P%, Experience.")
+        glitch = out.get("glitch_teams", [])
+        if glitch:
+            glitch_df = pd.DataFrame(glitch)
+            st.dataframe(glitch_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No glitch teams (seed 7+ with >5% Final 4 rate) in this run.")
+        st.markdown("**Walters play**")
+        st.caption("First-round matchups where the model spread differs from the market spread by 3+ points (top 3).")
+        walters = out.get("walters_plays", [])
+        if walters:
+            walters_df = pd.DataFrame(walters)
+            st.dataframe(walters_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Add a MarketSpread column to your bracket CSV for first-round games to see Walters plays.")
+    elif run_analysis:
+        st.warning("Paste both **Bracket** and **Power rankings** CSV, then run again.")
+    if march_madness_mode:
+        st.success("March Madness mode is on — 5% min edge, tournament-eligible only.")
+    else:
+        st.info("Turn on **March Madness mode** in the sidebar to filter for tournament-eligible games and see seed context on plays.")
 
 with tab_mark_results:
     st.subheader("Mark Results")
