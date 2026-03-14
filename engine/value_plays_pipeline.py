@@ -77,8 +77,8 @@ POTD_MIN_EDGE_PCT = 4.0
 POTD_HIGH_CONFIDENCE_EDGE_PCT = 8.0
 POTD_LARGE_SPREAD_POINTS = 12.0
 POTD_LARGE_SPREAD_EDGE_PENALTY = 0.30
-ARCHIVE_MIN_EDGE_PCT = 6.0
-ARCHIVE_MAX_PLAYS_PER_DAY = 10
+ARCHIVE_MIN_EDGE_PCT = 0.0
+ARCHIVE_MAX_PLAYS_PER_DAY = 999
 # NCAAB: min edge 2%. Spreads only: require 3 <= |line_error| <= 20 (moneylines have no line error filter)
 NCAAB_SPREAD_MIN_EDGE_PCT = 2.0
 SPREAD_LINE_ERROR_MIN_PTS = 3.0
@@ -1341,8 +1341,8 @@ def run_pipeline_to_cache(
                 print(f"NCAAB games with odds (ESPN + Rundown merge): {n_with_odds}. After 12h window: {n_after_12h}. Value plays generated: {len(value_plays_df)}.")
 
         try:
-            to_archive = value_plays_df[value_plays_df["Value (%)"] >= ARCHIVE_MIN_EDGE_PCT].copy()
-            to_archive = to_archive.sort_values("Value (%)", ascending=False).head(ARCHIVE_MAX_PLAYS_PER_DAY)
+            to_archive = value_plays_df.copy()
+            to_archive = to_archive.sort_values("Value (%)", ascending=False)
             archive_value_plays(to_archive, as_of_date=as_of_date)
         except Exception:
             pass

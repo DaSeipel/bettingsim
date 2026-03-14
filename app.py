@@ -164,9 +164,9 @@ HIGH_RISK_ODDS_AMERICAN = 500
 POTD_HIGH_CONFIDENCE_EDGE_PCT = 8.0
 # Minimum edge % to qualify as Play of the Day (and for archive)
 POTD_MIN_EDGE_PCT = 6.0
-# Archive: only save plays with edge >= this and cap total per day
-ARCHIVE_MIN_EDGE_PCT = 6.0
-ARCHIVE_MAX_PLAYS_PER_DAY = 10
+# Archive: save all generated value plays so they appear on Mark Results (no min edge, no cap)
+ARCHIVE_MIN_EDGE_PCT = 0.0
+ARCHIVE_MAX_PLAYS_PER_DAY = 999
 # Large spread filter: |spread| > this gets 30% edge penalty for POTD selection and "High Variance" badge
 POTD_LARGE_SPREAD_POINTS = 14.0
 POTD_LARGE_SPREAD_EDGE_PENALTY = 0.30
@@ -2454,8 +2454,8 @@ if not STRIP_DOWN_MODE:
     try:
         _req = ["League", "Event", "Selection", "Market", "Odds", "Value (%)", "model_prob", "home_team", "away_team"]
         if not value_plays_df.empty and all(c in value_plays_df.columns for c in _req):
-            _to_archive = value_plays_df[value_plays_df["Value (%)"].fillna(0) >= ARCHIVE_MIN_EDGE_PCT].copy()
-            _to_archive = _to_archive.sort_values("Value (%)", ascending=False).head(ARCHIVE_MAX_PLAYS_PER_DAY)
+            _to_archive = value_plays_df.copy()
+            _to_archive = _to_archive.sort_values("Value (%)", ascending=False)
             if not _to_archive.empty:
                 archive_value_plays(_to_archive, as_of_date=date.today())
         _potd_rows = []
@@ -2577,6 +2577,24 @@ if not _historical_picks_df.empty:
     _summary = {"date_str": _date_str, "total_plays": _n_slate, "n_nba": 0, "n_ncaab": _n_slate, "top_edge_label": _top_edge_slate}
 else:
     _summary = _summary_bar_values(value_plays_df)
+    # Top edge must reflect the true max over all value plays and POTD (not just diversified subset)
+    _vp_edges = []
+    if not value_plays_df.empty and "Value (%)" in value_plays_df.columns:
+        _vp_edges = value_plays_df["Value (%)"].abs().tolist()
+    _potd_edges = []
+    for _k in ("NCAAB Pick 1", "NCAAB Pick 2"):
+        _c = potd_picks.get(_k)
+        if _c and isinstance(_c, dict):
+            _v = _c.get("Value (%)")
+            if _v is not None:
+                try:
+                    _potd_edges.append(abs(float(_v)))
+                except (TypeError, ValueError):
+                    pass
+    _all_edges = _vp_edges + _potd_edges
+    if _all_edges:
+        _true_top_pct = max(_all_edges)
+        _summary = {**_summary, "top_edge_label": f"{_true_top_pct:.1f}%"}
 if _summary["total_plays"] == 0 and (potd_picks.get("NCAAB Pick 1") or potd_picks.get("NCAAB Pick 2")):
     _n_potd = (1 if potd_picks.get("NCAAB Pick 1") else 0) + (1 if potd_picks.get("NCAAB Pick 2") else 0)
     _potd_edges = []
