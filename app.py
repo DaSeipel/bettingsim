@@ -1975,6 +1975,29 @@ def _remove_play_from_historical_csv(date_generated: str, home_team: str, away_t
 
 
 # ----- Game Lookup tab helpers -----
+def _load_latest_odds_slate() -> pd.DataFrame:
+    """Load the most recent CSV in data/odds/ (by mtime). Returns DataFrame with home_team, away_team, market_spread for Game Lookup."""
+    odds_dir = _APP_ROOT / "data" / "odds"
+    if not odds_dir.exists():
+        return pd.DataFrame()
+    csvs = list(odds_dir.glob("*.csv"))
+    if not csvs:
+        return pd.DataFrame()
+    latest = max(csvs, key=lambda p: p.stat().st_mtime)
+    try:
+        df = pd.read_csv(latest)
+    except Exception:
+        return pd.DataFrame()
+    # Normalize columns: Home_Team, Away_Team, Spread -> home_team, away_team, market_spread
+    if "Home_Team" not in df.columns or "Away_Team" not in df.columns:
+        return pd.DataFrame()
+    out = pd.DataFrame()
+    out["home_team"] = df["Home_Team"].astype(str).str.strip()
+    out["away_team"] = df["Away_Team"].astype(str).str.strip()
+    out["market_spread"] = pd.to_numeric(df.get("Spread"), errors="coerce") if "Spread" in df.columns else None
+    return out
+
+
 def _load_team_stats_2026() -> pd.DataFrame:
     """Load data/ncaab/team_stats_2026.csv. Returns empty DataFrame if missing."""
     path = _APP_ROOT / "data" / "ncaab" / "team_stats_2026.csv"
@@ -2023,15 +2046,24 @@ def _value_play_matches_query(row: pd.Series, query: str) -> bool:
     return False
 
 
+def _normalize_team_name_for_lookup(name: str) -> str:
+    """Normalize so 'Wichita St.' and 'Wichita State' match (and similar St. / State)."""
+    s = (name or "").strip().lower()
+    s = s.replace(" st.", " state").replace(" st ", " state ")
+    return s
+
+
 def _find_team_in_stats(team_stats_df: pd.DataFrame, query: str) -> Optional[pd.Series]:
-    """Return first row from team_stats_2026 where TEAM matches or contains query (case-insensitive)."""
+    """Return first row from team_stats_2026 where TEAM matches or contains query (case-insensitive). Normalizes St./State so 'Wichita State' matches 'Wichita St.'"""
     if team_stats_df.empty or "TEAM" not in team_stats_df.columns:
         return None
-    q = (query or "").strip().lower()
+    q = _normalize_team_name_for_lookup(query)
     if not q:
         return None
     for _, row in team_stats_df.iterrows():
-        team = str(row.get("TEAM", "")).strip().lower()
+        team = _normalize_team_name_for_lookup(str(row.get("TEAM", "")))
+        if not team:
+            continue
         if q == team or q in team or team in q:
             return row
     return None
@@ -2041,11 +2073,12 @@ def _find_game_for_team(
     team_query: str,
     value_plays_df: pd.DataFrame,
     historical_picks_df: pd.DataFrame,
+    today_odds_df: Optional[pd.DataFrame] = None,
 ) -> Optional[tuple[str, dict]]:
     """
     Find today's (or selected slate) game involving the given team.
-    Returns ('cache', row_dict) or ('historical', row_dict) or None.
-    row_dict has home_team, away_team, spread, pred_margin, edge, confidence, pick, etc.
+    Returns ('cache', row_dict) or ('historical', row_dict) or ('odds', row_dict) or None.
+    row_dict has home_team, away_team, market_spread, pred_margin, edge, confidence, pick, etc.
     """
     q = (team_query or "").strip().lower()
     if not q:
@@ -2121,9 +2154,30 @@ def _find_game_for_team(
                     "confidence_tier": str(row.get("Confidence_Level", "Medium")).strip() or "Medium",
                     "pick_spread": pick,
                     "recommended_pick": selection,
-                    "home_barthag": h_b,
-                    "away_barthag": a_b,
+                    "home_barthag": row.get("home_barthag") if "home_barthag" in row.index else None,
+                    "away_barthag": row.get("away_barthag") if "away_barthag" in row.index else None,
                     "reason": reason,
+                })
+    # 3) Today's odds (latest data/odds/*.csv): so any team in the slate can be found
+    if today_odds_df is not None and not today_odds_df.empty and "home_team" in today_odds_df.columns and "away_team" in today_odds_df.columns:
+        for _, row in today_odds_df.iterrows():
+            home = str(row.get("home_team", "")).strip()
+            away = str(row.get("away_team", "")).strip()
+            if _team_match_query(home, team_query) or _team_match_query(away, team_query):
+                try:
+                    spread = float(row.get("market_spread")) if row.get("market_spread") is not None and pd.notna(row.get("market_spread")) else None
+                except (TypeError, ValueError):
+                    spread = None
+                return ("odds", {
+                    "home_team": home,
+                    "away_team": away,
+                    "market_spread": spread,
+                    "pred_margin": None,
+                    "edge_points": None,
+                    "confidence_tier": "—",
+                    "pick_spread": "—",
+                    "recommended_pick": "—",
+                    "reason": "Game from today's odds slate; no model pick for this matchup.",
                 })
     return None
 
@@ -2334,7 +2388,7 @@ def _potd_from_value_plays(
 def _human_readable_potd_reason(
     home: str, away: str, pred_margin: Optional[float], market_spread: Optional[float], pick_side: str
 ) -> str:
-    """Human-readable POTD reason: 'Model projects X to win by ~N pts. Market needs Y — take Z ±Y.'"""
+    """Human-readable POTD reason: 'Model projects X to win by ~N pts. Market needs Y — take Z ±Y.' When we pick the underdog, avoid saying the favorite wins by more than the spread."""
     try:
         pred = float(pred_margin) if pred_margin is not None else None
     except (TypeError, ValueError):
@@ -2348,13 +2402,8 @@ def _human_readable_potd_reason(
     abs_spread = abs(ms)
     pick_home = pick_side.strip().upper() == "HOME"
     selection = home if pick_home else away
-    # Projection: who does model say wins and by how much?
-    if pred >= 0:
-        proj = f"Model projects {home} to win by ~{int(round(pred))} pts."
-    else:
-        proj = f"Model projects {away} to win by ~{int(round(abs(pred)))} pts."
-    # Take line: from picked team's perspective
     home_favored = ms < 0
+    # Take line: from picked team's perspective
     if pick_home and home_favored:
         take = f"take {selection} -{abs_spread:.1f}"
     elif pick_home and not home_favored:
@@ -2363,6 +2412,21 @@ def _human_readable_potd_reason(
         take = f"take {selection} +{abs_spread:.1f}"
     else:
         take = f"take {selection} -{abs_spread:.1f}"
+    # Picking underdog = we take the +spread side (home +spread when home underdog, away +spread when away underdog)
+    picking_underdog = (pick_home and not home_favored) or (not pick_home and home_favored)
+    if picking_underdog and pred is not None:
+        # If model projects favorite to win by more than the spread, don't say that — it contradicts taking the underdog
+        if pred >= 0 and home_favored and pred > abs_spread:
+            proj = f"Model projects a closer game than the spread — take {selection} +{abs_spread:.1f}."
+            return proj
+        if pred < 0 and not home_favored and abs(pred) > abs_spread:
+            proj = f"Model projects a closer game than the spread — take {selection} +{abs_spread:.1f}."
+            return proj
+    # Projection: who does model say wins and by how much?
+    if pred >= 0:
+        proj = f"Model projects {home} to win by ~{int(round(pred))} pts."
+    else:
+        proj = f"Model projects {away} to win by ~{int(round(abs(pred)))} pts."
     return f"{proj} Market needs {abs_spread:.1f} — {take}."
 
 
@@ -3509,9 +3573,10 @@ with tab_game_lookup:
     else:
         _rank_map = {}
     search_query = st.text_input("Team name", placeholder="e.g. Duke or Michigan", key="game_lookup_team")
+    _today_odds_df = _load_latest_odds_slate()
     found_game = None
     if search_query and search_query.strip():
-        found_game = _find_game_for_team(search_query.strip(), value_plays_df, _historical_picks_df)
+        found_game = _find_game_for_team(search_query.strip(), value_plays_df, _historical_picks_df, _today_odds_df)
     if found_game:
         source, game = found_game
         home_team = game["home_team"]
