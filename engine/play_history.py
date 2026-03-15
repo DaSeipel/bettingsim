@@ -98,6 +98,11 @@ def archive_value_plays(
             if point is not None and not pd.isna(point):
                 try:
                     spread_or_total = float(point)
+                    # NCAAB Spread: store line from picked side's perspective (away pick with negative = home spread stored by mistake → flip)
+                    if sport == "NCAAB" and bet_type == "Spread" and spread_or_total < 0:
+                        sel, ht, at = recommended_side.strip().lower(), home_team.strip().lower(), away_team.strip().lower()
+                        if sel and at and (sel == at or sel in at or at in sel):
+                            spread_or_total = -spread_or_total
                 except (TypeError, ValueError):
                     spread_or_total = None
             else:
@@ -185,7 +190,10 @@ def update_play_result(
         if row is None:
             return False
         stake, odds_american = row[0], row[1]
-        stake = float(stake) if stake is not None and not (isinstance(stake, float) and pd.isna(stake)) else 0.0
+        try:
+            stake = float(stake) if stake is not None and str(stake).strip() != "" and not (isinstance(stake, float) and pd.isna(stake)) else 0.0
+        except (TypeError, ValueError):
+            stake = 0.0
         if result == "P":
             actual_payout = 0.0
         elif result == "W":

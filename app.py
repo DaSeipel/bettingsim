@@ -2987,6 +2987,9 @@ with tab_march:
 with tab_mark_results:
     st.subheader("Mark Results")
     st.caption("Mark Win / Loss / Push for plays with **Pending** results only (ignores slate date). You can see Saturday pending games while viewing Sunday's slate.")
+    if st.button("🔄 Refresh pending plays", help="Reload play history from the database (clears 30‑min cache so new or updated plays appear)"):
+        _load_play_history_cached.clear()
+        st.rerun()
     _today = date.today()
     _yesterday = _today - timedelta(days=1)
     _mr_from = _today - timedelta(days=90)  # load last 90 days to find pending
@@ -3043,13 +3046,37 @@ with tab_mark_results:
 
             def _mr_bet_str(r: pd.Series) -> str:
                 bt = str(r.get("bet_type", ""))
-                side = str(r.get("recommended_side", ""))
+                side = str(r.get("recommended_side", "")).strip()
                 line = r.get("spread_or_total")
+                home, away = str(r.get("home_team", "")).strip(), str(r.get("away_team", "")).strip()
                 if line is None or pd.isna(line) or line == -999:
                     return f"{bt} · {side}".strip()
                 line = float(line)
                 if "Over" in bt or "Under" in bt or "total" in bt.lower():
                     return f"{bt} · {side} {line:.1f}".strip()
+                # Spread: show picked team and that team's line (e.g. "St. John's +3.0" not "Connecticut -3.0")
+                if "Spread" in bt or "spread" in bt.lower():
+                    def _side_matches(s: str, team: str) -> bool:
+                        if not s or not team:
+                            return False
+                        return s.lower() == team.lower() or s.lower() in team.lower() or team.lower() in s.lower()
+                    if _side_matches(side, home):
+                        display_line = line
+                        team = away if display_line > 0 else home
+                    elif _side_matches(side, away):
+                        team, display_line = away, (-line if line < 0 else line)
+                    elif side.lower() in ("home", "away"):
+                        team = home if side.lower() == "home" else away
+                        display_line = (-line if side.lower() == "away" and line < 0 else line)
+                    else:
+                        team, display_line = side, line
+                    # Final fix: home team with positive spread => show away team (pick was underdog, e.g. St. John's +3)
+                    if display_line > 0 and away and _side_matches(team, home):
+                        team, display_line = away, display_line
+                    # When DB stored favorite (away) but pick was home underdog: show home +line (e.g. St. John's +3)
+                    if display_line > 0 and home and _side_matches(team, away):
+                        team, display_line = home, display_line
+                    return f"{bt} · {team} {display_line:+.1f}".strip()
                 return f"{bt} · {side} {line:+.1f}".strip()
 
             for _, row in _mr_list.iterrows():
@@ -3163,15 +3190,24 @@ with tab_play_history:
         def _roi_and_units(df: pd.DataFrame) -> tuple[float, float, float, float, float]:
             if df.empty:
                 return 0.0, 0.0, 0, 0, 0, 0.0
-            staked = df["recommended_stake"].replace([None, 0], float("nan")).sum()
-            staked = 0.0 if pd.isna(staked) or staked == 0 else float(staked)
-            payout = df["actual_payout"].fillna(0).sum()
+            stake_vals = pd.to_numeric(df["recommended_stake"], errors="coerce").fillna(0)
+            staked = float(stake_vals.sum())
+            staked = 0.0 if staked == 0 else staked
+            payout_vals = pd.to_numeric(df["actual_payout"], errors="coerce").fillna(0)
+            payout = float(payout_vals.sum())
             roi = (payout / staked * 100) if staked else 0.0
             units = 0.0
             for _, r in df.iterrows():
                 s, pa = r.get("recommended_stake"), r.get("actual_payout")
-                if s and pd.notna(s) and float(s) != 0 and pa is not None and pd.notna(pa):
-                    units += float(pa) / float(s)
+                try:
+                    s_f = float(pd.to_numeric(s, errors="coerce") or 0)
+                    if s_f == 0 or pa is None or pd.isna(pa):
+                        continue
+                    pa_f = float(pd.to_numeric(pa, errors="coerce"))
+                    if not pd.isna(pa_f):
+                        units += pa_f / s_f
+                except (TypeError, ValueError):
+                    pass
             w = (df["result_clean"] == "W").sum()
             l = (df["result_clean"] == "L").sum()
             p = (df["result_clean"] == "P").sum()
@@ -3284,13 +3320,35 @@ with tab_play_history:
 
         def _bet_str(r: pd.Series) -> str:
             bt = str(r.get("bet_type", ""))
-            side = str(r.get("recommended_side", ""))
+            side = str(r.get("recommended_side", "")).strip()
             line = r.get("spread_or_total")
+            home, away = str(r.get("home_team", "")).strip(), str(r.get("away_team", "")).strip()
             if line is None or pd.isna(line) or line == -999:
                 return f"{bt} · {side}".strip()
             line = float(line)
             if "Over" in bt or "Under" in bt or "total" in bt.lower():
                 return f"{bt} · {side} {line:.1f}".strip()
+            # Spread: show picked team and that team's line (e.g. "St. John's +3.0")
+            if "Spread" in bt or "spread" in bt.lower():
+                def _ph_side_matches(s: str, team: str) -> bool:
+                    if not s or not team:
+                        return False
+                    return s.lower() == team.lower() or s.lower() in team.lower() or team.lower() in s.lower()
+                if _ph_side_matches(side, home):
+                    display_line = line
+                    team = away if display_line > 0 else home
+                elif _ph_side_matches(side, away):
+                    team, display_line = away, (-line if line < 0 else line)
+                elif side.lower() in ("home", "away"):
+                    team = home if side.lower() == "home" else away
+                    display_line = (-line if side.lower() == "away" and line < 0 else line)
+                else:
+                    team, display_line = side, line
+                if display_line > 0 and away and _ph_side_matches(team, home):
+                    team, display_line = away, display_line
+                if display_line > 0 and home and _ph_side_matches(team, away):
+                    team, display_line = home, display_line
+                return f"{bt} · {team} {display_line:+.1f}".strip()
             return f"{bt} · {side} {line:+.1f}".strip()
 
         dates_desc = sorted(top_per_day["date_generated"].unique(), reverse=True)
