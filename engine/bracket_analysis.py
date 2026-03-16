@@ -34,6 +34,19 @@ GLITCH_F4_PCT_MIN = 5.0
 GLITCH_TOP_N_CATEGORIES = 50
 GLITCH_MIN_CATEGORIES = 2
 
+# Tier calibration: when |ModelRank_A - ModelRank_B| > this, apply strength weight to margin
+TIER_RANK_DIFF_THRESHOLD = 100
+TIER_ANCHOR_RANK_DIFF_FOR_22 = 50   # when 1-4 vs 13-16 and rank_diff > this, use 22-pt floor (else 10)
+TIER_MULTIPLIER_FAVORS_BETTER = 1.8  # expand margin when it already favors the better-ranked team
+TIER_MULTIPLIER_FAVORS_WORSE = 0.6   # shrink margin when it favors the worse-ranked team
+# Anchor: 1-4 seed vs 13-16 seed — predicted margin floor for the favorite (unless underdog is glitch)
+ANCHOR_MIN_ELITE_VS_LOW = 10.0       # minimum margin when rank_diff <= TIER_ANCHOR_RANK_DIFF_FOR_22
+ANCHOR_MIN_ELITE_VS_LOW_BIG_TIER = 22.0  # when rank_diff > TIER_ANCHOR_RANK_DIFF_FOR_22 (strong tier gap)
+# Walters: only show plays with delta in this range; delta > 15 flagged as data error
+WALTERS_DELTA_MIN = 2.0
+WALTERS_DELTA_MAX = 7.0
+WALTERS_DATA_ERROR_THRESHOLD = 15.0
+
 # Alias map: common bracket/rankings names -> canonical name used in ncaab_team_season_stats (and DB).
 # Enables "Saint Mary's" / "UConn" etc. to pull the correct stats.
 BRACKET_TEAM_ALIAS_MAP: dict[str, str] = {
@@ -82,6 +95,11 @@ BRACKET_TEAM_ALIAS_MAP: dict[str, str] = {
     "New Mexico St": "New Mexico State",
     "Murray St.": "Murray State",
     "Murray St": "Murray State",
+    # Bracket cross-reference (bracket_2026.csv vs ncaab_team_season_stats)
+    "CA Baptist": "Cal Baptist",
+    "Hawai'i": "Hawaii",
+    "N Dakota St.": "North Dakota St.",
+    "Long Island": "LIU",
 }
 
 
@@ -115,15 +133,25 @@ def parse_bracket_csv(text: str) -> list[dict]:
             team_a = team_b = None
             seed_a = seed_b = None
             market_spread = None
+            # Format: Region, SeedA, TeamA, SeedB, TeamB [, MarketSpread] (when first col is region name)
+            if len(parts) >= 5 and parts[0] in ("East", "West", "South", "Midwest"):
+                try:
+                    seed_a = int(float(parts[1]))
+                    seed_b = int(float(parts[3]))
+                    team_a = parts[2]
+                    team_b = parts[4]
+                except (ValueError, IndexError, TypeError):
+                    pass
             # Format: TeamA, SeedA, TeamB, SeedB [, MarketSpread]
-            try:
-                seed_a = int(float(parts[1]))
-                seed_b = int(float(parts[3]))
-                team_a = parts[0]
-                team_b = parts[2]
-            except (ValueError, IndexError, TypeError):
-                pass
-            # Format: Region, SeedA, TeamA, SeedB, TeamB [, MarketSpread]
+            if (team_a is None or team_b is None) and len(parts) >= 4:
+                try:
+                    seed_a = int(float(parts[1]))
+                    seed_b = int(float(parts[3]))
+                    team_a = parts[0]
+                    team_b = parts[2]
+                except (ValueError, IndexError, TypeError):
+                    pass
+            # Format: Region, SeedA, TeamA, SeedB, TeamB (fallback when first format didn't parse)
             if (team_a is None or team_b is None) and len(parts) >= 5:
                 try:
                     seed_a = int(float(parts[1]))
@@ -353,6 +381,75 @@ def get_win_prob_for_matchup(
     return margin_to_win_prob(float(margin))
 
 
+def _potential_glitch_teams(
+    r1_matchups: list[dict],
+    rank_ft: Optional[dict],
+    rank_3p: Optional[dict],
+    rank_exp: Optional[dict],
+    alias_map: Optional[dict[str, str]] = None,
+) -> set[str]:
+    """Canonical names of teams that are seed 7+ and Top 50 in at least 2 of FT%, 3P%, Experience (for anchor exception)."""
+    team_to_seed = {}
+    for m in r1_matchups:
+        team_to_seed[resolve_team_name(m["team_a"], alias_map)] = m["seed_a"]
+        team_to_seed[resolve_team_name(m["team_b"], alias_map)] = m["seed_b"]
+    out = set()
+    for team_c, seed in team_to_seed.items():
+        if seed is None or seed < 7:
+            continue
+        n = 0
+        if rank_ft and rank_ft.get(team_c, 999) <= GLITCH_TOP_N_CATEGORIES:
+            n += 1
+        if rank_3p and rank_3p.get(team_c, 999) <= GLITCH_TOP_N_CATEGORIES:
+            n += 1
+        if rank_exp and rank_exp.get(team_c, 999) <= GLITCH_TOP_N_CATEGORIES:
+            n += 1
+        if n >= GLITCH_MIN_CATEGORIES:
+            out.add(team_c)
+    return out
+
+
+def _apply_tier_and_anchor(
+    raw_margin: float,
+    ta_c: str,
+    tb_c: str,
+    model_rank_by_canonical: dict[str, int],
+    team_to_seed: dict[str, int],
+    potential_glitch: set[str],
+) -> float:
+    """
+    Apply tier-adjustment and anchor to raw model margin (team_a - team_b).
+    When |ModelRank_A - ModelRank_B| > 100, scale margin; when 1-4 seed vs 13-16 seed, enforce minimum margin for favorite unless underdog is glitch.
+    """
+    margin = float(raw_margin)
+    rank_a = model_rank_by_canonical.get(ta_c, 999)
+    rank_b = model_rank_by_canonical.get(tb_c, 999)
+    seed_a = team_to_seed.get(ta_c)
+    seed_b = team_to_seed.get(tb_c)
+    rank_diff = abs(rank_a - rank_b)
+
+    # Tier adjustment: when rank diff > 100, scale margin
+    if rank_diff > TIER_RANK_DIFF_THRESHOLD:
+        better_favored = (margin > 0 and rank_a < rank_b) or (margin < 0 and rank_a > rank_b)
+        if better_favored:
+            margin *= TIER_MULTIPLIER_FAVORS_BETTER
+        else:
+            margin *= TIER_MULTIPLIER_FAVORS_WORSE
+
+    # Anchor: 1-4 vs 13-16 — margin cannot be less than floor for the favorite unless underdog is glitch
+    def _low_seed(seed): return seed is not None and 13 <= seed <= 16
+    def _elite_seed(seed): return seed is not None and 1 <= seed <= 4
+    floor_small = ANCHOR_MIN_ELITE_VS_LOW
+    floor_big = ANCHOR_MIN_ELITE_VS_LOW_BIG_TIER if rank_diff > TIER_ANCHOR_RANK_DIFF_FOR_22 else floor_small
+
+    if _elite_seed(seed_a) and _low_seed(seed_b) and tb_c not in potential_glitch:
+        margin = max(margin, floor_big)
+    elif _elite_seed(seed_b) and _low_seed(seed_a) and ta_c not in potential_glitch:
+        margin = min(margin, -floor_big)
+
+    return margin
+
+
 def _is_elite_3p(team: str, team_stats: dict, rank_3p: dict) -> bool:
     """Top 10% of three_point_pct (by rank)."""
     n = len(rank_3p)
@@ -369,11 +466,18 @@ def _build_get_winner_with_march_factors(
     rank_3p: dict,
     margin_cache: dict,
     alias_map: Optional[dict[str, str]] = None,
+    model_rank_by_canonical: Optional[dict[str, int]] = None,
+    team_to_seed: Optional[dict[str, int]] = None,
+    potential_glitch: Optional[set] = None,
 ) -> Callable[[str, str, random.Random], str]:
     """
     Return a function winner(ta, tb, rng) that returns the winning team using cached margin + March factors.
-    Caches pred_margin by canonical (resolved) names so alias names pull correct stats. Returns original ta/tb.
+    Caches pred_margin by canonical (resolved) names. Applies tier adjustment and anchor when model_rank_by_canonical/team_to_seed provided.
     """
+    model_rank_by_canonical = model_rank_by_canonical or {}
+    team_to_seed = team_to_seed or {}
+    potential_glitch = potential_glitch or set()
+
     def _get_margin(ta: str, tb: str) -> Optional[float]:
         ta_c = resolve_team_name(ta, alias_map)
         tb_c = resolve_team_name(tb, alias_map)
@@ -384,6 +488,8 @@ def _build_get_winner_with_march_factors(
                 margin_cache[key] = None
                 return None
             m = get_spread_predicted_margin(row, 0.0, league="ncaab", home_team=ta_c, away_team=tb_c)
+            if m is not None and (model_rank_by_canonical or team_to_seed):
+                m = _apply_tier_and_anchor(m, ta_c, tb_c, model_rank_by_canonical, team_to_seed, potential_glitch)
             margin_cache[key] = m
         return margin_cache[key]
 
@@ -539,19 +645,22 @@ def get_glitch_teams(
     return sorted(glitch, key=lambda x: -x["final4_pct"])
 
 
-# --- Walters Play: first-round games where |model spread - market spread| >= 3 ---
+# --- Walters Play: first-round games where model spread vs market is in 2-7 pt range; delta > 15 = data error ---
 
 def get_walters_plays(
     r1_matchups: list[dict],
     get_model_spread: Callable[[str, str], Optional[float]],
     top_n: int = 3,
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
     """
-    First-round matchups where model spread differs from market spread by 3+ points.
-    Returns up to top_n, sorted by absolute difference (largest first).
-    Spread in team_a perspective: model_spread = team_a - team_b; market_spread from CSV (if present).
+    First-round matchups where model spread differs from market spread.
+    Returns (plays, data_errors):
+    - plays: diff_pts in [WALTERS_DELTA_MIN, WALTERS_DELTA_MAX] (2-7 pts), up to top_n, sorted by diff desc.
+    - data_errors: diff_pts > WALTERS_DATA_ERROR_THRESHOLD (15), flagged and excluded from plays.
+    Spread in team_a perspective: model_spread = team_a - team_b.
     """
     plays = []
+    data_errors = []
     for m in r1_matchups:
         market = m.get("market_spread")
         if market is None:
@@ -560,18 +669,21 @@ def get_walters_plays(
         if model is None:
             continue
         diff = abs(float(model) - float(market))
-        if diff >= 3.0:
-            plays.append({
-                "team_a": m["team_a"],
-                "team_b": m["team_b"],
-                "seed_a": m["seed_a"],
-                "seed_b": m["seed_b"],
-                "market_spread": round(float(market), 1),
-                "model_spread": round(float(model), 1),
-                "diff_pts": round(diff, 1),
-            })
+        rec = {
+            "team_a": m["team_a"],
+            "team_b": m["team_b"],
+            "seed_a": m["seed_a"],
+            "seed_b": m["seed_b"],
+            "market_spread": round(float(market), 1),
+            "model_spread": round(float(model), 1),
+            "diff_pts": round(diff, 1),
+        }
+        if diff > WALTERS_DATA_ERROR_THRESHOLD:
+            data_errors.append({**rec, "data_error": True})
+        elif WALTERS_DELTA_MIN <= diff <= WALTERS_DELTA_MAX:
+            plays.append(rec)
     plays.sort(key=lambda x: -x["diff_pts"])
-    return plays[:top_n]
+    return plays[:top_n], data_errors
 
 
 # --- Full analysis ---
@@ -605,6 +717,14 @@ def run_bracket_analysis(
     team_stats, rank_ft, rank_3p, rank_exp = load_march_stats(db)
     margin_cache = {}
 
+    # Tier calibration: model rank and seed by canonical name; potential glitch set for anchor exception
+    model_rank_by_canonical = {resolve_team_name(r["team"]): r["model_rank"] for r in rankings}
+    team_to_seed = {}
+    for m in bracket:
+        team_to_seed[resolve_team_name(m["team_a"])] = m["seed_a"]
+        team_to_seed[resolve_team_name(m["team_b"])] = m["seed_b"]
+    potential_glitch = _potential_glitch_teams(bracket, rank_ft, rank_3p, rank_exp, BRACKET_TEAM_ALIAS_MAP)
+
     value_sleepers = []
     if bracket and rankings:
         deltas = compute_value_deltas(rankings, bracket, alias_map=BRACKET_TEAM_ALIAS_MAP)
@@ -613,10 +733,20 @@ def run_bracket_analysis(
             tags = _march_tags_for_team(resolve_team_name(s["team"]), team_stats, rank_ft, rank_3p)
             s["march_factors"] = ", ".join(tags) if tags else "—"
 
-    get_winner = _build_get_winner_with_march_factors(db, game_date, team_stats, rank_ft, rank_3p, margin_cache, BRACKET_TEAM_ALIAS_MAP)
+    get_winner = _build_get_winner_with_march_factors(
+        db, game_date, team_stats, rank_ft, rank_3p, margin_cache, BRACKET_TEAM_ALIAS_MAP,
+        model_rank_by_canonical=model_rank_by_canonical,
+        team_to_seed=team_to_seed,
+        potential_glitch=potential_glitch,
+    )
 
     def get_model_spread(ta: str, tb: str) -> Optional[float]:
-        return get_model_spread_for_matchup(ta, tb, db_path=db, game_date=game_date, alias_map=BRACKET_TEAM_ALIAS_MAP)
+        raw = get_model_spread_for_matchup(ta, tb, db_path=db, game_date=game_date, alias_map=BRACKET_TEAM_ALIAS_MAP)
+        if raw is None:
+            return None
+        ta_c = resolve_team_name(ta)
+        tb_c = resolve_team_name(tb)
+        return _apply_tier_and_anchor(raw, ta_c, tb_c, model_rank_by_canonical, team_to_seed, potential_glitch)
 
     result_mc = {}
     final4_probabilities = []
@@ -633,13 +763,14 @@ def run_bracket_analysis(
             alias_map=BRACKET_TEAM_ALIAS_MAP,
         )
 
-    walters_plays = get_walters_plays(bracket, get_model_spread, top_n=3)
+    walters_plays, walters_data_errors = get_walters_plays(bracket, get_model_spread, top_n=3)
 
     return {
         "value_sleepers": value_sleepers,
         "final4_probabilities": final4_probabilities,
         "glitch_teams": glitch_teams,
         "walters_plays": walters_plays,
+        "walters_data_errors": walters_data_errors,
         "errors": errors,
         "n_bracket_games": len(bracket),
         "n_rankings": len(rankings),

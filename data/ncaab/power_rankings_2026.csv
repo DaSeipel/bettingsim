@@ -1,0 +1,366 @@
+Team,Seed,ModelRank
+Michigan,1,1
+Alabama,4,2
+Duke,1,3
+Arizona,1,4
+Florida,1,5
+Houston,2,6
+Illinois,3,7
+Purdue,2,8
+Connecticut,2,9
+Iowa State,2,10
+Texas Tech,5,11
+Michigan State,3,12
+Virginia,3,13
+Tennessee,6,14
+Vanderbilt,5,15
+Louisville,6,16
+St. John's,5,17
+Gonzaga,3,18
+Cornell,0,19
+IU Indy,0,20
+Arkansas St.,0,21
+Cal St. Northridge,0,22
+FIU,0,23
+Cal St. Fullerton,0,24
+Cal Poly,0,25
+Murray State,0,26
+William & Mary,0,27
+Arkansas,4,28
+Charleston Southern,0,29
+Sacramento St.,0,30
+Lindenwood,0,31
+Kennesaw St.,14,32
+Nebraska,4,33
+Prairie View A&M,0,34
+Queens,15,35
+Idaho St.,0,36
+Incarnate Word,0,37
+Morehead St.,0,38
+Bellarmine,0,39
+Denver,0,40
+Boston University,0,41
+Marist,0,42
+Stony Brook,0,43
+Texas St.,0,44
+Eastern Michigan,0,45
+Utah Tech,0,46
+Buffalo,0,47
+Northeastern,0,48
+UT Rio Grande Valley,0,49
+Boston College,0,50
+North Texas,0,51
+Navy,0,52
+Rhode Island,0,53
+Robert Morris,0,54
+Middle Tennessee,0,55
+Valparaiso,0,56
+Harvard,0,57
+Oregon St.,0,58
+Merrimack,0,59
+Towson,0,60
+Fordham,0,61
+Texas A&M Corpus Chris,0,62
+UT Arlington,0,63
+Siena,16,64
+Louisiana Tech,0,65
+UMBC,16,66
+Furman,15,67
+East Tennessee St.,0,68
+South Alabama,0,69
+Missouri St.,0,70
+Drexel,0,71
+Jacksonville St.,0,72
+James Madison,0,73
+Rice,0,74
+La Salle,0,75
+San Francisco,0,76
+UNC Wilmington,0,77
+UC Santa Barbara,0,78
+Montana St.,0,79
+Troy,13,80
+Temple,0,81
+Charlotte,0,82
+San Jose St.,0,83
+Wofford,0,84
+Western Michigan,0,85
+UNC Greensboro,0,86
+Sacred Heart,0,87
+Appalachian St.,0,88
+Green Bay,0,89
+Eastern Kentucky,0,90
+George Mason,0,91
+Liberty,0,92
+Florida Atlantic,0,93
+Memphis,0,94
+UAB,0,95
+Montana,0,96
+Western Kentucky,0,97
+Massachusetts,0,98
+Northern Kentucky,0,99
+New Orleans,0,100
+Tennessee St.,15,101
+Quinnipiac,0,102
+Tarleton St.,0,103
+Georgia Southern,0,104
+Lipscomb,0,105
+Southern,0,106
+Kent St.,0,107
+Winthrop,0,108
+Oakland,0,109
+Campbell,0,110
+Marshall,0,111
+Saint Peter's,0,112
+Princeton,0,113
+Lamar,0,114
+Vermont,0,115
+UNC Asheville,0,116
+SIU Edwardsville,0,117
+Tennessee Martin,0,118
+UTEP,0,119
+Loyola Chicago,0,120
+Ball St.,0,121
+Presbyterian,0,122
+Mercyhurst,0,123
+Louisiana,0,124
+Jacksonville,0,125
+Southeastern Louisiana,0,126
+UC San Diego,0,127
+Southern Illinois,0,128
+Fresno St.,0,129
+Idaho,15,130
+Central Arkansas,0,131
+Loyola Marymount,0,132
+Bowling Green,0,133
+Penn,10,134
+Portland St.,0,135
+Austin Peay,0,136
+UC Davis,0,137
+Monmouth,0,138
+Portland,0,139
+Detroit Mercy,0,140
+Charleston,0,141
+Youngstown St.,0,142
+New Mexico State,0,143
+Tulane,0,144
+Howard,0,145
+Indiana St.,0,146
+Columbia,0,147
+San Diego,0,148
+Drake,0,149
+South Dakota St.,0,150
+Southern Miss,0,151
+Bethune Cookman,0,152
+Western Carolina,0,153
+Ohio,0,154
+Coastal Carolina,0,155
+Samford,0,156
+LIU,0,157
+Old Dominion,0,158
+Florida Gulf Coast,0,159
+Nebraska Omaha,0,160
+Long Beach St.,0,161
+Duquesne,0,162
+Washington St.,0,163
+Wright St.,10,164
+Bradley,0,165
+Toledo,0,166
+Northern Colorado,0,167
+Penn State,0,168
+Eastern Washington,0,169
+St. Bonaventure,0,170
+Richmond,0,171
+Weber St.,0,172
+Mercer,0,173
+Hawaii,0,174
+Hampton,0,175
+Northwestern St.,0,176
+Delaware,0,177
+Rutgers,0,178
+Radford,0,179
+Southern Utah,0,180
+Dartmouth,0,181
+South Dakota,0,182
+Central Michigan,0,183
+American,0,184
+Iona,0,185
+Colgate,0,186
+Nicholls St.,0,187
+UC Riverside,0,188
+Southeast Missouri St.,0,189
+Pepperdine,0,190
+Abilene Christian,0,191
+Fairfield,0,192
+East Carolina,0,193
+Elon,0,194
+Purdue Fort Wayne,0,195
+North Dakota,0,196
+Longwood,0,197
+Milwaukee,0,198
+Mount St. Mary's,0,199
+Lehigh,16,200
+Brown,0,201
+Arkansas Pine Bluff,0,202
+Florida A&M,0,203
+East Texas A&M,0,204
+West Georgia,0,205
+Georgia Tech,0,206
+Oral Roberts,0,207
+Evansville,0,208
+USC Upstate,0,209
+Grambling St.,0,210
+Oklahoma State,0,211
+Georgia,8,212
+Alabama A&M,0,213
+Stetson,0,214
+Houston Christian,0,215
+Alabama St.,0,216
+Texas Southern,0,217
+Kansas State,0,218
+Providence,0,219
+North Carolina A&T,0,220
+Texas A&M,10,221
+Saint Louis,9,222
+South Florida,11,223
+Little Rock,0,224
+Central Connecticut,0,225
+Northern Arizona,0,226
+Albany,0,227
+Holy Cross,0,228
+North Alabama,0,229
+Fairleigh Dickinson,0,230
+Chicago St.,0,231
+The Citadel,0,232
+Niagara,0,233
+Cleveland St.,0,234
+UMass Lowell,0,235
+Cal St. Bakersfield,0,236
+North Carolina Central,0,237
+Jackson St.,0,238
+Louisiana Monroe,0,239
+Saint Francis,0,240
+Chattanooga,0,241
+Tennessee Tech,0,242
+Loyola MD,0,243
+Louisiana State,0,244
+McNeese St.,0,245
+Georgetown,0,246
+Wichita State,0,247
+Norfolk St.,0,248
+Manhattan,0,249
+UTSA,0,250
+Army,0,251
+Nevada,0,252
+Stephen F. Austin,0,253
+Oregon,0,254
+Hofstra,13,255
+Yale,0,256
+Wagner,0,257
+North Florida,0,258
+Northern Iowa,12,259
+Colorado State,0,260
+Kansas,4,261
+Wisconsin,5,262
+Eastern Illinois,0,263
+Ohio State,8,264
+Indiana,0,265
+Oklahoma,0,266
+Missouri,10,267
+Mississippi,0,268
+Southern California,0,269
+Akron,12,270
+George Washington,0,271
+Miami OH,0,272
+High Point,12,273
+Xavier,0,274
+Le Moyne,0,275
+Saint Joseph's,0,276
+Wake Forest,0,277
+California,0,278
+Butler,0,279
+Marquette,0,280
+Colorado,0,281
+Dayton,0,282
+Belmont,0,283
+Syracuse,0,284
+Creighton,0,285
+Utah Valley,0,286
+Morgan St.,0,287
+Seton Hall,0,288
+California Los Angeles,7,289
+St. Mary's,7,290
+Clemson,8,291
+Villanova,9,292
+Boise State,0,293
+Northwestern,0,294
+Georgia St.,0,295
+Lafayette,0,296
+NJIT,0,297
+Bucknell,0,298
+West Virginia,0,299
+Iowa,9,300
+Minnesota,0,301
+Air Force,0,302
+Alcorn St.,0,303
+New Haven,0,304
+Brigham Young,6,305
+Florida State,0,306
+New Mexico,0,307
+Canisius,0,308
+North Carolina,6,309
+Santa Clara,10,310
+Utah State,8,311
+Kentucky,7,312
+Cincinnati,0,313
+Miami FL,0,314
+North Carolina State,11,315
+Auburn,0,316
+Southern Methodist,11,317
+San Diego State,0,318
+Texas,0,319
+Baylor,0,320
+TCU,9,321
+Washington,0,322
+Virginia Tech,0,323
+Virginia Commonwealth,11,324
+Grand Canyon,0,325
+UCF,10,326
+Stanford,0,327
+Tulsa,0,328
+Arizona St.,0,329
+Northern Illinois,0,330
+Southern Indiana,0,331
+New Hampshire,0,332
+DePaul,0,333
+South Carolina,0,334
+Wyoming,0,335
+Notre Dame,0,336
+Cal Baptist,0,337
+Pittsburgh,0,338
+Davidson,0,339
+Pacific,0,340
+Mississippi St.,0,341
+Sam Houston St.,0,342
+Seattle,0,343
+UC Irvine,0,344
+Bryant,0,345
+Binghamton,0,346
+Illinois Chicago,0,347
+Maryland,0,348
+North Dakota St.,0,349
+Utah,0,350
+Stonehill,0,351
+Rider,0,352
+Maine,0,353
+Nevada Las Vegas,0,354
+VMI,0,355
+Illinois St.,0,356
+St. Thomas,0,357
+South Carolina St.,0,358
+Western Illinois,0,359
+Maryland Eastern Shore,0,360
+UMKC,0,361
+Coppin St.,0,362
+Mississippi Valley St.,0,363
+Delaware St.,0,364
+Gardner Webb,0,365

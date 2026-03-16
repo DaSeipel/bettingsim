@@ -3034,13 +3034,16 @@ with tab_march:
         else:
             st.info("No glitch teams (seed 7+ with >5% Final 4 rate) in this run.")
         st.markdown("**Walters play**")
-        st.caption("First-round matchups where the model spread differs from the market spread by 3+ points (top 3).")
+        st.caption("First-round matchups where model vs market spread delta is between 2 and 7 points (top 3). Delta > 15 pts excluded as data error.")
         walters = out.get("walters_plays", [])
         if walters:
             walters_df = pd.DataFrame(walters)
             st.dataframe(walters_df, use_container_width=True, hide_index=True)
         else:
             st.info("Add a MarketSpread column to your bracket CSV for first-round games to see Walters plays.")
+        walters_errors = out.get("walters_data_errors", [])
+        if walters_errors:
+            st.caption(f"Excluded as data error (delta > 15 pts): {len(walters_errors)} matchup(s).")
     elif run_analysis:
         st.warning("Paste both **Bracket** and **Power rankings** CSV, then run again.")
     if march_madness_mode:

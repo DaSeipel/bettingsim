@@ -935,6 +935,11 @@ def build_ncaab_feature_row_from_team_stats(
     Also merges most recent team_stats_history (ROff, RDef, last_5_wins, etc.) as of game_date for prediction and training-ready features.
     Returns a Series with NCAAB_KENPOM_SPREAD_FEATURE_COLUMNS + home_team_name, away_team_name, league;
     days_rest/b2b default to 0. Returns None if table missing or either team not found.
+
+    Note: We do not include SOS (Strength of Schedule) or NET ranking here; the NCAAB spread model
+    was trained on KenPom-style columns only. Bracket analysis (engine/bracket_analysis.py) uses
+    ModelRank from data/ncaab/power_rankings_2026.csv as a proxy for team quality and applies
+    tier adjustment and anchor logic there.
     """
     import sqlite3
     path = db_path or (Path(__file__).resolve().parent.parent / "data" / "espn.db")

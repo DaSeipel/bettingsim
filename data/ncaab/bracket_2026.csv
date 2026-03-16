@@ -1,0 +1,33 @@
+Region,SeedA,TeamA,SeedB,TeamB,MarketSpread
+East,1,Duke,16,Siena,-27.5
+East,8,Ohio State,9,TCU,-3.5
+East,5,St. John's,12,Northern Iowa,-9.5
+East,4,Kansas,13,CA Baptist,-13.5
+East,6,Louisville,11,South Florida,-6.5
+East,3,Michigan St.,14,N Dakota St.,-16.5
+East,7,UCLA,10,UCF,-6.5
+East,2,UConn,15,Furman,-19.5
+West,1,Arizona,16,Long Island,-29.5
+West,8,Utah St.,9,Villanova,-2.5
+West,5,Wisconsin,12,High Point,-11.5
+West,4,Arkansas,13,Hawai'i,-15.5
+West,6,BYU,11,NC State,-6.5
+West,3,Gonzaga,14,Kennesaw St.,-19.5
+West,7,Miami,10,Missouri,-1.5
+West,2,Purdue,15,Queens,-22.5
+South,1,Florida,16,Lehigh,-20.5
+South,8,Clemson,9,Iowa,-1.5
+South,5,Vanderbilt,12,McNeese,-11.5
+South,4,Nebraska,13,Troy,-14.5
+South,6,North Carolina,11,VCU,-2.5
+South,3,Illinois,10,Penn,-22.5
+South,7,Saint Mary's,10,Texas A&M,-2.5
+South,2,Houston,15,Idaho,-21.5
+Midwest,1,Michigan,16,UMBC,-25.5
+Midwest,8,Georgia,9,Saint Louis,-2.5
+Midwest,5,Texas Tech,12,Akron,-8.5
+Midwest,4,Alabama,13,Hofstra,-12.5
+Midwest,6,Tennessee,11,SMU,-8.5
+Midwest,3,Virginia,10,Wright St.,-17.5
+Midwest,7,Kentucky,10,Santa Clara,-3.5
+Midwest,2,Iowa State,15,Tennessee St.,-23.5
