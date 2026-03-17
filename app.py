@@ -3051,6 +3051,231 @@ with tab_march:
     else:
         st.info("Turn on **March Madness mode** in the sidebar to filter for tournament-eligible games and see seed context on plays.")
 
+    # --- Bracket Tracker (display + manual result tracking) ---
+    st.markdown("---")
+    st.subheader("Bracket Tracker")
+    st.caption("Track every 2026 NCAA tournament pick against actual results as games finish.")
+
+    bracket_path = Path("data/ncaab/bracket_display_2026.json")
+    if not bracket_path.exists():
+        st.info("Bracket file not found. Run the bracket fill + confidence scripts to generate `bracket_display_2026.json`.")
+    else:
+        try:
+            with open(bracket_path) as f:
+                bracket_data = json.load(f)
+        except Exception as e:
+            st.error(f"Error loading bracket: {e}")
+            bracket_data = None
+
+        if bracket_data and isinstance(bracket_data, dict):
+            games = bracket_data.get("games", [])
+        else:
+            games = []
+
+        if not games:
+            st.info("No games in bracket file. Regenerate the bracket display JSON and try again.")
+        else:
+            # CSS to match dark theme cards / badges
+            st.markdown(
+                """
+                <style>
+                .bt-card {
+                    border-radius: 10px;
+                    padding: 0.9rem 1.0rem;
+                    margin-bottom: 0.75rem;
+                    background: rgba(20, 24, 28, 0.9);
+                    border: 1px solid rgba(120,144,156,0.7);
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+                }
+                .bt-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 0.35rem;
+                    font-size: 0.85rem;
+                    color: rgba(236,239,241,0.9);
+                }
+                .bt-teams {
+                    display: flex;
+                    justify-content: space-between;
+                    font-size: 0.95rem;
+                    color: #eceff1;
+                    margin-bottom: 0.4rem;
+                }
+                .bt-team-name {
+                    font-weight: 600;
+                }
+                .bt-team-name--pick {
+                    font-weight: 800;
+                }
+                .bt-meta {
+                    font-size: 0.8rem;
+                    color: rgba(207,216,220,0.9);
+                    display: flex;
+                    justify-content: space-between;
+                    flex-wrap: wrap;
+                    gap: 0.4rem;
+                }
+                .bt-badge {
+                    display: inline-block;
+                    padding: 0.15rem 0.55rem;
+                    border-radius: 999px;
+                    font-size: 0.75rem;
+                    font-weight: 700;
+                    text-transform: uppercase;
+                    letter-spacing: 0.03em;
+                }
+                .bt-badge-lock { background: #1b5e20; color: #e8f5e9; }
+                .bt-badge-strong { background: #1565c0; color: #e3f2fd; }
+                .bt-badge-lean { background: #ef6c00; color: #fff3e0; }
+                .bt-badge-coin { background: #546e7a; color: #eceff1; }
+                .bt-badge-upset { background: #c62828; color: #ffebee; }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Session state for manual results: game_id -> winner team name
+            if "bracket_results" not in st.session_state:
+                st.session_state["bracket_results"] = {}
+            results = st.session_state["bracket_results"]
+
+            # Compute summary metrics
+            total_games = len(games)
+            correct = incorrect = pending = 0
+            upset_total = upset_resolved = upset_correct = 0
+
+            for g in games:
+                gid = f"{g.get('round')}_{g.get('region')}_{g.get('game_idx')}"
+                actual = results.get(gid)
+                pick = g.get("pick")
+                is_upset = bool(g.get("is_upset"))
+                if actual:
+                    if actual == pick:
+                        correct += 1
+                    else:
+                        incorrect += 1
+                    if is_upset:
+                        upset_resolved += 1
+                        if actual == pick:
+                            upset_correct += 1
+                else:
+                    pending += 1
+                if is_upset:
+                    upset_total += 1
+
+            col_c, col_i, col_p, col_u = st.columns(4)
+            with col_c:
+                st.metric("Correct picks", f"{correct}")
+            with col_i:
+                st.metric("Incorrect picks", f"{incorrect}")
+            with col_p:
+                st.metric("Pending", f"{pending}")
+            with col_u:
+                if upset_resolved:
+                    pct = 100.0 * upset_correct / max(upset_resolved, 1)
+                    st.metric("Upset accuracy", f"{pct:.1f}%", f"{upset_correct}/{upset_resolved}")
+                else:
+                    st.metric("Upset accuracy", "—", "0/0")
+
+            # Region tabs: East / West / South / Midwest / Final Four
+            region_tabs = st.tabs(["East", "West", "South", "Midwest", "Final Four"])
+            region_labels = ["East", "West", "South", "Midwest", "National"]
+
+            for tab, region in zip(region_tabs, region_labels):
+                with tab:
+                    if region == "National":
+                        region_games = [g for g in games if str(g.get("region")) == "National"]
+                    else:
+                        region_games = [g for g in games if str(g.get("region")) == region]
+
+                    if not region_games:
+                        st.info("No games in this region yet.")
+                        continue
+
+                    # Order by round then game index
+                    region_games = sorted(
+                        region_games,
+                        key=lambda g: (int(g.get("round", 0)), int(g.get("game_idx", 0))),
+                    )
+
+                    current_round = None
+                    for g in region_games:
+                        rname = g.get("round_name") or f"Round {g.get('round')}"
+                        if rname != current_round:
+                            if current_round is not None:
+                                st.markdown("")  # spacing
+                            st.markdown(f"**{rname}**")
+                            current_round = rname
+
+                        gid = f"{g.get('round')}_{g.get('region')}_{g.get('game_idx')}"
+                        team_a = g.get("team_a")
+                        team_b = g.get("team_b")
+                        pick = g.get("pick")
+                        seed_matchup = g.get("seed_matchup")
+                        tier = str(g.get("confidence_tier") or "Coin Flip")
+                        is_upset = bool(g.get("is_upset"))
+                        pa = float(g.get("win_pct_a", 0.0))
+                        pb = float(g.get("win_pct_b", 0.0))
+                        market_spread = g.get("market_spread")
+
+                        # Badge classes
+                        tier_key = tier.lower().replace(" ", "")
+                        badge_class = {
+                            "lock": "bt-badge-lock",
+                            "strong": "bt-badge-strong",
+                            "lean": "bt-badge-lean",
+                            "coinflip": "bt-badge-coin",
+                        }.get(tier_key, "bt-badge-coin")
+
+                        upset_badge = ""
+                        if is_upset:
+                            upset_badge = '<span class="bt-badge bt-badge-upset">Upset pick</span>'
+
+                        tier_badge = f'<span class="bt-badge {badge_class}">{tier}</span>'
+
+                        header_left = f"{g.get('region')} · Game {g.get('game_idx') + 1}"
+                        header_right_parts = []
+                        if seed_matchup:
+                            header_right_parts.append(seed_matchup)
+                        if market_spread is not None:
+                            header_right_parts.append(f"Mkt {float(market_spread):+0.1f}")
+                        header_right = " · ".join(header_right_parts)
+
+                        team_a_class = "bt-team-name bt-team-name--pick" if pick == team_a else "bt-team-name"
+                        team_b_class = "bt-team-name bt-team-name--pick" if pick == team_b else "bt-team-name"
+
+                        card_html = (
+                            '<div class="bt-card">'
+                            f'<div class="bt-header"><span>{header_left}</span><span>{header_right}</span></div>'
+                            '<div class="bt-teams">'
+                            f'<div><div class="{team_a_class}">{team_a}</div>'
+                            f'<div style="font-size:0.8rem;color:rgba(176,190,197,0.9);">Win {pa:0.1f}%</div></div>'
+                            f'<div style="text-align:right;"><div class="{team_b_class}">{team_b}</div>'
+                            f'<div style="font-size:0.8rem;color:rgba(176,190,197,0.9);">Win {pb:0.1f}%</div></div>'
+                            '</div>'
+                            f'<div class="bt-meta"><div>{tier_badge} {upset_badge}</div>'
+                            f'<div>Pick: <strong>{pick}</strong></div></div>'
+                            '</div>'
+                        )
+                        st.markdown(card_html, unsafe_allow_html=True)
+
+                        # Manual result selector
+                        options = ["Not played yet", team_a, team_b]
+                        default_val = results.get(gid) or "Not played yet"
+                        choice = st.radio(
+                            "Result",
+                            options,
+                            horizontal=True,
+                            key=f"bt_res_{gid}",
+                            index=options.index(default_val),
+                        )
+                        if choice == "Not played yet":
+                            results.pop(gid, None)
+                        else:
+                            results[gid] = choice
+
+
 with tab_mark_results:
     st.subheader("Mark Results")
     st.caption("Mark Win / Loss / Push for plays with **Pending** results only (ignores slate date). You can see Saturday pending games while viewing Sunday's slate.")
