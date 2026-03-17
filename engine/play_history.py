@@ -94,6 +94,11 @@ def archive_value_plays(
             market = str(row.get("Market", "")).strip().lower() or "h2h"
             bet_type = {"h2h": "Moneyline", "spreads": "Spread", "totals": "Over/Under"}.get(market, market)
             recommended_side = str(row.get("Selection", "")).strip() or "—"
+            # Always store team name, not "Home"/"Away", so cards show correct pick (e.g. Pennsylvania +9.5 not YALE +9.5)
+            if recommended_side.strip().lower() == "home" and home_team:
+                recommended_side = home_team
+            elif recommended_side.strip().lower() == "away" and away_team:
+                recommended_side = away_team
             point = row.get("point")
             if point is not None and not pd.isna(point):
                 try:

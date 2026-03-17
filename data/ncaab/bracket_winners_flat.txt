@@ -1,0 +1,74 @@
+Round of 64
+Duke
+Ohio State
+St. John's
+Kansas
+Louisville
+Michigan St.
+UCF
+UConn
+Arizona
+Villanova
+High Point
+Arkansas
+BYU
+Gonzaga
+Missouri
+Purdue
+Florida
+Iowa
+Vanderbilt
+Nebraska
+VCU
+Illinois
+Texas A&M
+Houston
+Michigan
+Saint Louis
+Texas Tech
+Alabama
+Tennessee
+Virginia
+Santa Clara
+Iowa State
+
+Round of 32
+Duke
+St. John's
+Michigan St.
+UConn
+Arizona
+Arkansas
+Gonzaga
+Purdue
+Florida
+Vanderbilt
+Illinois
+Houston
+Michigan
+Alabama
+Tennessee
+Iowa State
+
+Sweet 16
+Duke
+Michigan St.
+Arizona
+Gonzaga
+Florida
+Illinois
+Michigan
+Tennessee
+
+Elite 8
+Michigan St.
+Arizona
+Florida
+Michigan
+
+Final Four
+Michigan St.
+Michigan
+
+Championship
+Michigan

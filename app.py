@@ -3034,7 +3034,7 @@ with tab_march:
         else:
             st.info("No glitch teams (seed 7+ with >5% Final 4 rate) in this run.")
         st.markdown("**Walters play**")
-        st.caption("First-round matchups where model vs market spread delta is between 2 and 7 points (top 3). Delta > 15 pts excluded as data error.")
+        st.caption("First-round matchups where model vs market spread delta is between 2 and 7 points (top 3). Excluded only when model spread hit the 10- or 22-pt floor anchor.")
         walters = out.get("walters_plays", [])
         if walters:
             walters_df = pd.DataFrame(walters)
@@ -3043,7 +3043,7 @@ with tab_march:
             st.info("Add a MarketSpread column to your bracket CSV for first-round games to see Walters plays.")
         walters_errors = out.get("walters_data_errors", [])
         if walters_errors:
-            st.caption(f"Excluded as data error (delta > 15 pts): {len(walters_errors)} matchup(s).")
+            st.caption(f"Excluded (model hit floor anchor): {len(walters_errors)} matchup(s).")
     elif run_analysis:
         st.warning("Paste both **Bracket** and **Power rankings** CSV, then run again.")
     if march_madness_mode:
@@ -3121,7 +3121,7 @@ with tab_mark_results:
                 line = float(line)
                 if "Over" in bt or "Under" in bt or "total" in bt.lower():
                     return f"{bt} · {side} {line:.1f}".strip()
-                # Spread: show picked team and that team's line (e.g. "St. John's +3.0" not "Connecticut -3.0")
+                # Spread: show picked team and that team's line (e.g. "Pennsylvania +9.5" not "YALE +9.5" when pick was away underdog)
                 if "Spread" in bt or "spread" in bt.lower():
                     def _side_matches(s: str, team: str) -> bool:
                         if not s or not team:
@@ -3137,12 +3137,12 @@ with tab_mark_results:
                         display_line = (-line if side.lower() == "away" and line < 0 else line)
                     else:
                         team, display_line = side, line
-                    # Final fix: home team with positive spread => show away team (pick was underdog, e.g. St. John's +3)
+                    # When DB stored "Home" but line is underdog (+): show away underdog (e.g. Pennsylvania +9.5)
                     if display_line > 0 and away and _side_matches(team, home):
                         team, display_line = away, display_line
-                    # When DB stored favorite (away) but pick was home underdog: show home +line (e.g. St. John's +3)
-                    if display_line > 0 and home and _side_matches(team, away):
-                        team, display_line = home, display_line
+                    # Only when we're showing away favorite (-) but pick was home underdog: show home +line (do not overwrite away +line)
+                    if display_line < 0 and home and _side_matches(team, away) and side.lower() == "home" and line > 0:
+                        team, display_line = home, line
                     return f"{bt} · {team} {display_line:+.1f}".strip()
                 return f"{bt} · {side} {line:+.1f}".strip()
 
@@ -3395,7 +3395,7 @@ with tab_play_history:
             line = float(line)
             if "Over" in bt or "Under" in bt or "total" in bt.lower():
                 return f"{bt} · {side} {line:.1f}".strip()
-            # Spread: show picked team and that team's line (e.g. "St. John's +3.0")
+            # Spread: show picked team and that team's line (e.g. Pennsylvania +9.5)
             if "Spread" in bt or "spread" in bt.lower():
                 def _ph_side_matches(s: str, team: str) -> bool:
                     if not s or not team:
@@ -3413,8 +3413,8 @@ with tab_play_history:
                     team, display_line = side, line
                 if display_line > 0 and away and _ph_side_matches(team, home):
                     team, display_line = away, display_line
-                if display_line > 0 and home and _ph_side_matches(team, away):
-                    team, display_line = home, display_line
+                if display_line < 0 and home and _ph_side_matches(team, away) and side.lower() == "home" and line > 0:
+                    team, display_line = home, line
                 return f"{bt} · {team} {display_line:+.1f}".strip()
             return f"{bt} · {side} {line:+.1f}".strip()
 

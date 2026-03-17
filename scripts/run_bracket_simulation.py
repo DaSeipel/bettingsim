@@ -68,7 +68,7 @@ def main() -> int:
         print(w)
     errs = out.get("walters_data_errors", [])
     if errs:
-        print("\n--- Walters data errors (delta > 15 pts, excluded) ---")
+        print("\n--- Excluded (model spread hit 10- or 22-pt floor anchor) ---")
         for e in errs:
             print(e)
 
