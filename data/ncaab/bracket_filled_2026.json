@@ -20,8 +20,8 @@
       "game_idx": 1,
       "team_a": "Ohio State",
       "team_b": "TCU",
-      "win_pct_a": 74.3,
-      "win_pct_b": 25.7,
+      "win_pct_a": 74.1,
+      "win_pct_b": 25.9,
       "pick": "Ohio State"
     },
     {
@@ -75,8 +75,8 @@
       "game_idx": 6,
       "team_a": "UCLA",
       "team_b": "UCF",
-      "win_pct_a": 34.7,
-      "win_pct_b": 65.3,
+      "win_pct_a": 34.5,
+      "win_pct_b": 65.5,
       "pick": "UCF"
     },
     {
@@ -108,8 +108,8 @@
       "game_idx": 9,
       "team_a": "Utah St.",
       "team_b": "Villanova",
-      "win_pct_a": 32.9,
-      "win_pct_b": 67.1,
+      "win_pct_a": 33.6,
+      "win_pct_b": 66.4,
       "pick": "Villanova"
     },
     {
@@ -119,8 +119,8 @@
       "game_idx": 10,
       "team_a": "Wisconsin",
       "team_b": "High Point",
-      "win_pct_a": 43.2,
-      "win_pct_b": 56.8,
+      "win_pct_a": 43.3,
+      "win_pct_b": 56.7,
       "pick": "High Point"
     },
     {
@@ -141,8 +141,8 @@
       "game_idx": 12,
       "team_a": "BYU",
       "team_b": "NC State",
-      "win_pct_a": 50.0,
-      "win_pct_b": 50.0,
+      "win_pct_a": 50.5,
+      "win_pct_b": 49.5,
       "pick": "BYU"
     },
     {
@@ -152,8 +152,8 @@
       "game_idx": 13,
       "team_a": "Gonzaga",
       "team_b": "Kennesaw St.",
-      "win_pct_a": 97.3,
-      "win_pct_b": 2.7,
+      "win_pct_a": 97.4,
+      "win_pct_b": 2.6,
       "pick": "Gonzaga"
     },
     {
@@ -163,8 +163,8 @@
       "game_idx": 14,
       "team_a": "Miami",
       "team_b": "Missouri",
-      "win_pct_a": 36.7,
-      "win_pct_b": 63.3,
+      "win_pct_a": 37.3,
+      "win_pct_b": 62.7,
       "pick": "Missouri"
     },
     {
@@ -174,8 +174,8 @@
       "game_idx": 15,
       "team_a": "Purdue",
       "team_b": "Queens",
-      "win_pct_a": 97.5,
-      "win_pct_b": 2.5,
+      "win_pct_a": 97.2,
+      "win_pct_b": 2.8,
       "pick": "Purdue"
     },
     {
@@ -196,8 +196,8 @@
       "game_idx": 17,
       "team_a": "Clemson",
       "team_b": "Iowa",
-      "win_pct_a": 34.9,
-      "win_pct_b": 65.1,
+      "win_pct_a": 34.4,
+      "win_pct_b": 65.6,
       "pick": "Iowa"
     },
     {
@@ -207,8 +207,8 @@
       "game_idx": 18,
       "team_a": "Vanderbilt",
       "team_b": "McNeese",
-      "win_pct_a": 99.6,
-      "win_pct_b": 0.4,
+      "win_pct_a": 99.7,
+      "win_pct_b": 0.3,
       "pick": "Vanderbilt"
     },
     {
@@ -218,8 +218,8 @@
       "game_idx": 19,
       "team_a": "Nebraska",
       "team_b": "Troy",
-      "win_pct_a": 95.1,
-      "win_pct_b": 4.9,
+      "win_pct_a": 95.4,
+      "win_pct_b": 4.6,
       "pick": "Nebraska"
     },
     {
@@ -229,8 +229,8 @@
       "game_idx": 20,
       "team_a": "North Carolina",
       "team_b": "VCU",
-      "win_pct_a": 47.3,
-      "win_pct_b": 52.7,
+      "win_pct_a": 47.6,
+      "win_pct_b": 52.4,
       "pick": "VCU"
     },
     {
@@ -240,8 +240,8 @@
       "game_idx": 21,
       "team_a": "Illinois",
       "team_b": "Penn",
-      "win_pct_a": 97.2,
-      "win_pct_b": 2.8,
+      "win_pct_a": 97.0,
+      "win_pct_b": 3.0,
       "pick": "Illinois"
     },
     {
@@ -251,8 +251,8 @@
       "game_idx": 22,
       "team_a": "Saint Mary's",
       "team_b": "Texas A&M",
-      "win_pct_a": 11.8,
-      "win_pct_b": 88.2,
+      "win_pct_a": 11.5,
+      "win_pct_b": 88.5,
       "pick": "Texas A&M"
     },
     {
@@ -284,8 +284,8 @@
       "game_idx": 25,
       "team_a": "Georgia",
       "team_b": "Saint Louis",
-      "win_pct_a": 37.4,
-      "win_pct_b": 62.6,
+      "win_pct_a": 37.7,
+      "win_pct_b": 62.3,
       "pick": "Saint Louis"
     },
     {
@@ -328,8 +328,8 @@
       "game_idx": 29,
       "team_a": "Virginia",
       "team_b": "Wright St.",
-      "win_pct_a": 99.1,
-      "win_pct_b": 0.9,
+      "win_pct_a": 99.0,
+      "win_pct_b": 1.0,
       "pick": "Virginia"
     },
     {
@@ -383,8 +383,8 @@
       "game_idx": 2,
       "team_a": "Louisville",
       "team_b": "Michigan St.",
-      "win_pct_a": 41.7,
-      "win_pct_b": 58.3,
+      "win_pct_a": 41.1,
+      "win_pct_b": 58.9,
       "pick": "Michigan St."
     },
     {
@@ -416,8 +416,8 @@
       "game_idx": 5,
       "team_a": "High Point",
       "team_b": "Arkansas",
-      "win_pct_a": 0.2,
-      "win_pct_b": 99.8,
+      "win_pct_a": 0.1,
+      "win_pct_b": 99.9,
       "pick": "Arkansas"
     },
     {
@@ -427,8 +427,8 @@
       "game_idx": 6,
       "team_a": "BYU",
       "team_b": "Gonzaga",
-      "win_pct_a": 49.3,
-      "win_pct_b": 50.7,
+      "win_pct_a": 49.2,
+      "win_pct_b": 50.8,
       "pick": "Gonzaga"
     },
     {
@@ -460,8 +460,8 @@
       "game_idx": 9,
       "team_a": "Vanderbilt",
       "team_b": "Nebraska",
-      "win_pct_a": 59.7,
-      "win_pct_b": 40.3,
+      "win_pct_a": 60.2,
+      "win_pct_b": 39.8,
       "pick": "Vanderbilt"
     },
     {
@@ -482,8 +482,8 @@
       "game_idx": 11,
       "team_a": "Texas A&M",
       "team_b": "Houston",
-      "win_pct_a": 0.2,
-      "win_pct_b": 99.8,
+      "win_pct_a": 0.1,
+      "win_pct_b": 99.9,
       "pick": "Houston"
     },
     {
@@ -504,8 +504,8 @@
       "game_idx": 13,
       "team_a": "Texas Tech",
       "team_b": "Alabama",
-      "win_pct_a": 47.8,
-      "win_pct_b": 52.2,
+      "win_pct_a": 47.5,
+      "win_pct_b": 52.5,
       "pick": "Alabama"
     },
     {
@@ -515,8 +515,8 @@
       "game_idx": 14,
       "team_a": "Tennessee",
       "team_b": "Virginia",
-      "win_pct_a": 54.9,
-      "win_pct_b": 45.1,
+      "win_pct_a": 55.1,
+      "win_pct_b": 44.9,
       "pick": "Tennessee"
     },
     {
@@ -526,8 +526,8 @@
       "game_idx": 15,
       "team_a": "Santa Clara",
       "team_b": "Iowa State",
-      "win_pct_a": 0.1,
-      "win_pct_b": 99.9,
+      "win_pct_a": 0.0,
+      "win_pct_b": 100.0,
       "pick": "Iowa State"
     },
     {
@@ -537,8 +537,8 @@
       "game_idx": 0,
       "team_a": "Duke",
       "team_b": "St. John's",
-      "win_pct_a": 54.7,
-      "win_pct_b": 45.3,
+      "win_pct_a": 55.2,
+      "win_pct_b": 44.8,
       "pick": "Duke"
     },
     {
@@ -548,8 +548,8 @@
       "game_idx": 1,
       "team_a": "Michigan St.",
       "team_b": "UConn",
-      "win_pct_a": 59.2,
-      "win_pct_b": 40.8,
+      "win_pct_a": 58.9,
+      "win_pct_b": 41.1,
       "pick": "Michigan St."
     },
     {
@@ -559,8 +559,8 @@
       "game_idx": 2,
       "team_a": "Arizona",
       "team_b": "Arkansas",
-      "win_pct_a": 53.8,
-      "win_pct_b": 46.2,
+      "win_pct_a": 54.0,
+      "win_pct_b": 46.0,
       "pick": "Arizona"
     },
     {
@@ -581,8 +581,8 @@
       "game_idx": 4,
       "team_a": "Florida",
       "team_b": "Vanderbilt",
-      "win_pct_a": 53.6,
-      "win_pct_b": 46.4,
+      "win_pct_a": 53.9,
+      "win_pct_b": 46.1,
       "pick": "Florida"
     },
     {
@@ -592,8 +592,8 @@
       "game_idx": 5,
       "team_a": "Illinois",
       "team_b": "Houston",
-      "win_pct_a": 55.6,
-      "win_pct_b": 44.4,
+      "win_pct_a": 55.7,
+      "win_pct_b": 44.3,
       "pick": "Illinois"
     },
     {
@@ -603,8 +603,8 @@
       "game_idx": 6,
       "team_a": "Michigan",
       "team_b": "Alabama",
-      "win_pct_a": 55.3,
-      "win_pct_b": 44.7,
+      "win_pct_a": 56.3,
+      "win_pct_b": 43.7,
       "pick": "Michigan"
     },
     {
@@ -614,8 +614,8 @@
       "game_idx": 7,
       "team_a": "Tennessee",
       "team_b": "Iowa State",
-      "win_pct_a": 57.8,
-      "win_pct_b": 42.2,
+      "win_pct_a": 57.5,
+      "win_pct_b": 42.5,
       "pick": "Tennessee"
     },
     {
@@ -625,8 +625,8 @@
       "game_idx": 0,
       "team_a": "Duke",
       "team_b": "Michigan St.",
-      "win_pct_a": 44.7,
-      "win_pct_b": 55.3,
+      "win_pct_a": 45.0,
+      "win_pct_b": 55.0,
       "pick": "Michigan St."
     },
     {
@@ -636,8 +636,8 @@
       "game_idx": 1,
       "team_a": "Arizona",
       "team_b": "Gonzaga",
-      "win_pct_a": 52.1,
-      "win_pct_b": 47.9,
+      "win_pct_a": 53.1,
+      "win_pct_b": 46.9,
       "pick": "Arizona"
     },
     {
@@ -647,8 +647,8 @@
       "game_idx": 2,
       "team_a": "Florida",
       "team_b": "Illinois",
-      "win_pct_a": 53.1,
-      "win_pct_b": 46.9,
+      "win_pct_a": 53.5,
+      "win_pct_b": 46.5,
       "pick": "Florida"
     },
     {
@@ -658,8 +658,8 @@
       "game_idx": 3,
       "team_a": "Michigan",
       "team_b": "Tennessee",
-      "win_pct_a": 61.3,
-      "win_pct_b": 38.7,
+      "win_pct_a": 63.1,
+      "win_pct_b": 36.9,
       "pick": "Michigan"
     },
     {
@@ -669,8 +669,8 @@
       "game_idx": 0,
       "team_a": "Michigan St.",
       "team_b": "Florida",
-      "win_pct_a": 54.3,
-      "win_pct_b": 45.7,
+      "win_pct_a": 54.8,
+      "win_pct_b": 45.2,
       "pick": "Michigan St."
     },
     {
@@ -680,8 +680,8 @@
       "game_idx": 1,
       "team_a": "Arizona",
       "team_b": "Michigan",
-      "win_pct_a": 45.0,
-      "win_pct_b": 55.0,
+      "win_pct_a": 44.7,
+      "win_pct_b": 55.3,
       "pick": "Michigan"
     },
     {
@@ -691,8 +691,8 @@
       "game_idx": 0,
       "team_a": "Michigan St.",
       "team_b": "Michigan",
-      "win_pct_a": 40.0,
-      "win_pct_b": 60.0,
+      "win_pct_a": 41.9,
+      "win_pct_b": 58.1,
       "pick": "Michigan"
     }
   ],
