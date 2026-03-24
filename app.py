@@ -1974,6 +1974,37 @@ def _remove_play_from_historical_csv(date_generated: str, home_team: str, away_t
     return n
 
 
+def _sync_result_to_historical_csv(date_generated: str, home_team: str, away_team: str, result: str) -> bool:
+    """Write ATS_Result back to historical_betting_performance.csv so CSV and SQLite stay in sync."""
+    if not HISTORICAL_BETTING_CSV_PATH.exists():
+        return False
+    result_map = {"W": "Win", "L": "Loss", "P": "Push"}
+    csv_result = result_map.get(result)
+    if csv_result is None:
+        return False
+    try:
+        df = pd.read_csv(HISTORICAL_BETTING_CSV_PATH)
+    except Exception:
+        return False
+    if df.empty or "Date" not in df.columns:
+        return False
+    if "ATS_Result" not in df.columns:
+        df["ATS_Result"] = ""
+    date_norm = _normalize_date_to_iso(date_generated) or str(date_generated).strip()
+    home = str(home_team or "").strip()
+    away = str(away_team or "").strip()
+    mask = (
+        (df["Date"].astype(str).str.strip() == date_norm)
+        & (df["Home"].astype(str).str.strip() == home)
+        & (df["Away"].astype(str).str.strip() == away)
+    )
+    if mask.any():
+        df.loc[mask, "ATS_Result"] = csv_result
+        df.to_csv(HISTORICAL_BETTING_CSV_PATH, index=False)
+        return True
+    return False
+
+
 # ----- Game Lookup tab helpers -----
 def _load_latest_odds_slate() -> pd.DataFrame:
     """Load the most recent CSV in data/odds/ (by mtime). Returns DataFrame with home_team, away_team, market_spread for Game Lookup."""
@@ -3578,6 +3609,54 @@ with tab_play_history:
             unsafe_allow_html=True,
         )
 
+        # ── Quick-entry results form ──
+        _pending = _history[_history["result_clean"].isna() & _history["sport"].astype(str).str.strip().str.upper().str.startswith("NCAAB")]
+        if not _pending.empty:
+            _pending = _pending.drop_duplicates(subset=["play_id"]).sort_values(["date_generated", "play_id"], ascending=[False, False])
+
+            def _fmt_pending(r):
+                d = pd.to_datetime(r["date_generated"]).strftime("%b %d")
+                a = str(r.get("away_team", "")).strip()
+                h = str(r.get("home_team", "")).strip()
+                side = str(r.get("recommended_side", "")).strip()
+                line = r.get("spread_or_total")
+                line_str = f" {float(line):+.1f}" if line is not None and not pd.isna(line) and line != -999 else ""
+                tag = " [T]" if str(r.get("sport", "")).strip() == "NCAAB Tournament" else ""
+                return f"{d} | {a} @ {h} | {side}{line_str}{tag}"
+
+            _pending_options = {_fmt_pending(row): int(row["play_id"]) for _, row in _pending.iterrows()}
+
+            with st.expander("Mark Results", expanded=bool(len(_pending_options) > 0)):
+                _sel = st.selectbox("Pending picks", list(_pending_options.keys()), label_visibility="collapsed")
+                if _sel:
+                    _sel_pid = _pending_options[_sel]
+                    _sel_row = _pending[_pending["play_id"] == _sel_pid].iloc[0]
+                    c_w, c_l, c_p, _ = st.columns([1, 1, 1, 3])
+                    with c_w:
+                        if st.button("Win", key="qr_w", type="primary"):
+                            update_play_result(_sel_pid, "W")
+                            _sync_result_to_historical_csv(
+                                _sel_row["date_generated"], _sel_row["home_team"], _sel_row["away_team"], "W"
+                            )
+                            _load_play_history_cached.clear()
+                            st.rerun()
+                    with c_l:
+                        if st.button("Loss", key="qr_l"):
+                            update_play_result(_sel_pid, "L")
+                            _sync_result_to_historical_csv(
+                                _sel_row["date_generated"], _sel_row["home_team"], _sel_row["away_team"], "L"
+                            )
+                            _load_play_history_cached.clear()
+                            st.rerun()
+                    with c_p:
+                        if st.button("Push", key="qr_p"):
+                            update_play_result(_sel_pid, "P")
+                            _sync_result_to_historical_csv(
+                                _sel_row["date_generated"], _sel_row["home_team"], _sel_row["away_team"], "P"
+                            )
+                            _load_play_history_cached.clear()
+                            st.rerun()
+
         # Monthly performance chart: W-L by date (green wins, red losses)
         if not resolved.empty and "date_generated" in resolved.columns:
             def _daily_wl(g):
@@ -3692,9 +3771,9 @@ with tab_play_history:
                 f'<div>{badge}</div></div>',
                 unsafe_allow_html=True,
             )
+            mk = row.get("_matchup_key", "")
+            pids_in_group = _history_ref.loc[_history_ref["_matchup_key"] == mk, "play_id"].astype(int).tolist() if mk else [int(row.get("play_id", 0))]
             if result is None or pd.isna(result):
-                mk = row.get("_matchup_key", "")
-                pids_in_group = _history_ref.loc[_history_ref["_matchup_key"] == mk, "play_id"].astype(int).tolist() if mk else [int(row.get("play_id", 0))]
                 c1, c2, c3, _gap, c4, _ = st.columns([1, 1, 1, 1.5, 0.7, 1.8])
                 with c1:
                     if st.button("Win", key=f"ph_w_{row.get('play_id')}_{sport_label}", help="Mark win"):
@@ -3716,6 +3795,23 @@ with tab_play_history:
                         st.rerun()
                 with c4:
                     if st.button("Del", key=f"ph_del_{row.get('play_id')}_{sport_label}", help="Delete this play"):
+                        first_row_data = None
+                        for _pid in pids_in_group:
+                            deleted = delete_play(_pid)
+                            if deleted and first_row_data is None:
+                                first_row_data = deleted
+                        if first_row_data:
+                            _remove_play_from_historical_csv(
+                                first_row_data["date_generated"],
+                                first_row_data["home_team"],
+                                first_row_data["away_team"],
+                            )
+                        _load_play_history_cached.clear()
+                        st.rerun()
+            else:
+                _, c_del, _ = st.columns([5, 1, 0.5])
+                with c_del:
+                    if st.button("Delete", key=f"ph_del_{row.get('play_id')}_{sport_label}", help="Remove this play and update record"):
                         first_row_data = None
                         for _pid in pids_in_group:
                             deleted = delete_play(_pid)
