@@ -3443,7 +3443,8 @@ with tab_mark_results:
 
 with tab_play_history:
     st.subheader("Record")
-    st.caption("Two NCAAB picks per day (Pick 1 & Pick 2, last 30 days).")
+    _record_view = st.radio("View", ["All Picks", "Regular Season", "March Madness"], horizontal=True, label_visibility="collapsed")
+    st.caption("NCAAB daily picks & NCAA Tournament value plays (last 30 days).")
     _from = date.today() - timedelta(days=30)
     # Load fresh from DB on every render (no cache) so Mark Results / Delete updates appear immediately
     _history = load_play_history(from_date=_from, to_date=date.today())
@@ -3472,11 +3473,26 @@ with tab_play_history:
             return f"{d}|{s}|{h}|{a}|{bt}|{side}"
         _history["_matchup_key"] = _history.apply(_canonical_matchup_key, axis=1)
         _history = _history.drop_duplicates(subset=["_matchup_key"], keep="last")
-        top_per_day = _history.loc[_history.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
-        top_per_day = top_per_day[top_per_day["sport"].astype(str).str.strip().isin(("NCAAB Pick 1", "NCAAB Pick 2"))]
-        resolved = _history[_history["result_clean"].notna()]
-        # Include all NCAAB plays (NCAAB, NCAAB Pick 1, NCAAB Pick 2) so Mark Results updates show in KPI and chart
-        resolved = resolved[resolved["sport"].astype(str).str.strip().str.upper().str.startswith("NCAAB")]
+        _sport_col = _history["sport"].astype(str).str.strip()
+
+        _potd_picks = _history.loc[_history.groupby(["date_generated", "sport"])["my_edge_pct"].idxmax()].reset_index(drop=True)
+        _potd_picks = _potd_picks[_potd_picks["sport"].astype(str).str.strip().isin(("NCAAB Pick 1", "NCAAB Pick 2"))]
+        _tourney_picks = _history[_sport_col == "NCAAB Tournament"].copy()
+
+        if _record_view == "Regular Season":
+            top_per_day = _potd_picks
+        elif _record_view == "March Madness":
+            top_per_day = _tourney_picks
+        else:
+            top_per_day = pd.concat([_potd_picks, _tourney_picks]).sort_values("date_generated", ascending=False).reset_index(drop=True)
+
+        _all_ncaab = _history[_history["result_clean"].notna() & _history["sport"].astype(str).str.strip().str.upper().str.startswith("NCAAB")]
+        if _record_view == "March Madness":
+            resolved = _all_ncaab[_all_ncaab["sport"].astype(str).str.strip() == "NCAAB Tournament"]
+        elif _record_view == "Regular Season":
+            resolved = _all_ncaab[_all_ncaab["sport"].astype(str).str.strip() != "NCAAB Tournament"]
+        else:
+            resolved = _all_ncaab
         resolved_potd = top_per_day[top_per_day["result_clean"].notna()]
 
         def _roi_and_units(df: pd.DataFrame) -> tuple[float, float, float, float, float]:
@@ -3643,84 +3659,104 @@ with tab_play_history:
                 return f"{bt} · {team} {display_line:+.1f}".strip()
             return f"{bt} · {side} {line:+.1f}".strip()
 
+        def _render_pick_card(row, sport_label, _history_ref):
+            """Render a single pick card with result badge and action buttons."""
+            result = row.get("result_clean")
+            is_tourney = str(row.get("sport", "")).strip() == "NCAAB Tournament"
+            card_class = "ph-feed-card--pending"
+            if result == "W":
+                card_class = "ph-feed-card--win"
+            elif result == "L":
+                card_class = "ph-feed-card--loss"
+            elif result == "P":
+                card_class = "ph-feed-card--push"
+            matchup = f"{row.get('away_team', '')} @ {row.get('home_team', '')}"
+            bet_str = _bet_str(row)
+            edge_str = f"{float(row.get('my_edge_pct', 0)):.1f}%"
+            odds_str = format_american(row.get("market_odds_at_time", 0))
+            tag_html = ' <span style="background:#ff6f00;color:#fff;font-size:0.65rem;padding:2px 6px;border-radius:4px;font-weight:700;vertical-align:middle;margin-left:4px;">MARCH MADNESS</span>' if is_tourney else ""
+            if result == "W":
+                badge = '<span class="ph-feed-badge ph-feed-badge--win">WIN</span>'
+            elif result == "L":
+                badge = '<span class="ph-feed-badge ph-feed-badge--loss">LOSS</span>'
+            elif result == "P":
+                badge = '<span class="ph-feed-badge ph-feed-badge--push">PUSH</span>'
+            else:
+                badge = '<span class="ph-feed-badge ph-feed-badge--pending">—</span>'
+            d_display = pd.to_datetime(row.get("date_generated", "")).strftime("%a, %b %d") if row.get("date_generated") else ""
+            st.markdown(
+                f'<div class="ph-feed-card {card_class}">'
+                f'<div class="ph-feed-date">{_html_escape(d_display)} · {sport_label}{tag_html}</div>'
+                f'<div class="ph-feed-matchup">{_html_escape(matchup)}</div>'
+                f'<div class="ph-feed-meta">{_html_escape(bet_str)} · Edge {edge_str} · Odds {odds_str}</div>'
+                f'<div>{badge}</div></div>',
+                unsafe_allow_html=True,
+            )
+            if result is None or pd.isna(result):
+                mk = row.get("_matchup_key", "")
+                pids_in_group = _history_ref.loc[_history_ref["_matchup_key"] == mk, "play_id"].astype(int).tolist() if mk else [int(row.get("play_id", 0))]
+                c1, c2, c3, _gap, c4, _ = st.columns([1, 1, 1, 1.5, 0.7, 1.8])
+                with c1:
+                    if st.button("Win", key=f"ph_w_{row.get('play_id')}_{sport_label}", help="Mark win"):
+                        for _pid in pids_in_group:
+                            update_play_result(_pid, "W")
+                        _load_play_history_cached.clear()
+                        st.rerun()
+                with c2:
+                    if st.button("Loss", key=f"ph_l_{row.get('play_id')}_{sport_label}", help="Mark loss"):
+                        for _pid in pids_in_group:
+                            update_play_result(_pid, "L")
+                        _load_play_history_cached.clear()
+                        st.rerun()
+                with c3:
+                    if st.button("Push", key=f"ph_p_{row.get('play_id')}_{sport_label}", help="Mark push"):
+                        for _pid in pids_in_group:
+                            update_play_result(_pid, "P")
+                        _load_play_history_cached.clear()
+                        st.rerun()
+                with c4:
+                    if st.button("Del", key=f"ph_del_{row.get('play_id')}_{sport_label}", help="Delete this play"):
+                        first_row_data = None
+                        for _pid in pids_in_group:
+                            deleted = delete_play(_pid)
+                            if deleted and first_row_data is None:
+                                first_row_data = deleted
+                        if first_row_data:
+                            _remove_play_from_historical_csv(
+                                first_row_data["date_generated"],
+                                first_row_data["home_team"],
+                                first_row_data["away_team"],
+                            )
+                        _load_play_history_cached.clear()
+                        st.rerun()
+
         dates_desc = sorted(top_per_day["date_generated"].unique(), reverse=True)
         for d in dates_desc:
             day_rows = top_per_day[top_per_day["date_generated"] == d]
-            date_display = pd.to_datetime(d).strftime("%a, %b %d") if hasattr(pd.to_datetime(d), "strftime") else str(d)
-            pick1_row = day_rows[day_rows["sport"].astype(str).str.strip() == "NCAAB Pick 1"]
-            pick2_row = day_rows[day_rows["sport"].astype(str).str.strip() == "NCAAB Pick 2"]
-            col_p1, col_p2 = st.columns(2)
-            for col, sport_label, row_df in [(col_p1, "NCAAB Pick 1", pick1_row), (col_p2, "NCAAB Pick 2", pick2_row)]:
-                with col:
-                    if row_df.empty:
-                        st.markdown(f'<div class="ph-feed-empty">{sport_label}: No pick</div>', unsafe_allow_html=True)
-                        continue
-                    row = row_df.iloc[0]
-                    result = row.get("result_clean")
-                    card_class = "ph-feed-card--pending"
-                    if result == "W":
-                        card_class = "ph-feed-card--win"
-                    elif result == "L":
-                        card_class = "ph-feed-card--loss"
-                    elif result == "P":
-                        card_class = "ph-feed-card--push"
-                    matchup = f"{row.get('away_team', '')} @ {row.get('home_team', '')}"
-                    bet_str = _bet_str(row)
-                    edge_str = f"{float(row.get('my_edge_pct', 0)):.1f}%"
-                    odds_str = format_american(row.get("market_odds_at_time", 0))
-                    if result == "W":
-                        badge = '<span class="ph-feed-badge ph-feed-badge--win">WIN</span>'
-                    elif result == "L":
-                        badge = '<span class="ph-feed-badge ph-feed-badge--loss">LOSS</span>'
-                    elif result == "P":
-                        badge = '<span class="ph-feed-badge ph-feed-badge--push">PUSH</span>'
-                    else:
-                        badge = '<span class="ph-feed-badge ph-feed-badge--pending">—</span>'
-                    st.markdown(
-                        f'<div class="ph-feed-card {card_class}">'
-                        f'<div class="ph-feed-date">{_html_escape(date_display)} · {sport_label}</div>'
-                        f'<div class="ph-feed-matchup">{_html_escape(matchup)}</div>'
-                        f'<div class="ph-feed-meta">{_html_escape(bet_str)} · Edge {edge_str} · Odds {odds_str}</div>'
-                        f'<div>{badge}</div></div>',
-                        unsafe_allow_html=True,
-                    )
-                    if result is None or pd.isna(result):
-                        mk = row.get("_matchup_key", "")
-                        pids_in_group = _history.loc[_history["_matchup_key"] == mk, "play_id"].astype(int).tolist()
-                        c1, c2, c3, _gap, c4, _ = st.columns([1, 1, 1, 1.5, 0.7, 1.8])
-                        with c1:
-                            if st.button("✅ Win", key=f"ph_w_{row.get('play_id')}_{sport_label}", help="Mark win"):
-                                for _pid in pids_in_group:
-                                    update_play_result(_pid, "W")
-                                _load_play_history_cached.clear()
-                                st.rerun()
-                        with c2:
-                            if st.button("❌ Loss", key=f"ph_l_{row.get('play_id')}_{sport_label}", help="Mark loss"):
-                                for _pid in pids_in_group:
-                                    update_play_result(_pid, "L")
-                                _load_play_history_cached.clear()
-                                st.rerun()
-                        with c3:
-                            if st.button("➖ Push", key=f"ph_p_{row.get('play_id')}_{sport_label}", help="Mark push"):
-                                for _pid in pids_in_group:
-                                    update_play_result(_pid, "P")
-                                _load_play_history_cached.clear()
-                                st.rerun()
-                        with c4:
-                            if st.button("🗑️", key=f"ph_del_{row.get('play_id')}_{sport_label}", help="Delete this play"):
-                                first_row_data = None
-                                for _pid in pids_in_group:
-                                    deleted = delete_play(_pid)
-                                    if deleted and first_row_data is None:
-                                        first_row_data = deleted
-                                if first_row_data:
-                                    _remove_play_from_historical_csv(
-                                        first_row_data["date_generated"],
-                                        first_row_data["home_team"],
-                                        first_row_data["away_team"],
-                                    )
-                                _load_play_history_cached.clear()
-                                st.rerun()
+            _day_sport = day_rows["sport"].astype(str).str.strip()
+            pick1_row = day_rows[_day_sport == "NCAAB Pick 1"]
+            pick2_row = day_rows[_day_sport == "NCAAB Pick 2"]
+            tourney_rows = day_rows[_day_sport == "NCAAB Tournament"]
+
+            if not pick1_row.empty or not pick2_row.empty:
+                col_p1, col_p2 = st.columns(2)
+                for col, sport_label, row_df in [(col_p1, "NCAAB Pick 1", pick1_row), (col_p2, "NCAAB Pick 2", pick2_row)]:
+                    with col:
+                        if row_df.empty:
+                            date_display = pd.to_datetime(d).strftime("%a, %b %d") if hasattr(pd.to_datetime(d), "strftime") else str(d)
+                            st.markdown(f'<div class="ph-feed-empty">{sport_label}: No pick</div>', unsafe_allow_html=True)
+                            continue
+                        _render_pick_card(row_df.iloc[0], sport_label, _history)
+
+            if not tourney_rows.empty:
+                tourney_list = tourney_rows.sort_values("my_edge_pct", ascending=False).reset_index(drop=True)
+                for i in range(0, len(tourney_list), 2):
+                    cols = st.columns(2)
+                    for j, col in enumerate(cols):
+                        idx = i + j
+                        if idx < len(tourney_list):
+                            with col:
+                                _render_pick_card(tourney_list.iloc[idx], "NCAA Tournament", _history)
     else:
         st.info("No archived plays yet. Plays are saved when you load the dashboard (and at 9am ET). Open the app before games to capture today's top picks.")
 

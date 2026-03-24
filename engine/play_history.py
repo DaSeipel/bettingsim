@@ -314,3 +314,104 @@ def load_play_history(
         return df
     finally:
         conn.close()
+
+
+def import_csv_tournament_picks(
+    csv_path: Path | None = None,
+    db_path: Path | None = None,
+    min_date: str = "2026-03-19",
+) -> int:
+    """
+    Import NCAA Tournament / NIT picks from historical_betting_performance.csv
+    into play_history SQLite. Maps CSV schema to SQLite schema.
+    Uses sport='NCAAB Tournament' so they can be distinguished from pipeline picks.
+    Skips rows already present (INSERT OR IGNORE via UNIQUE constraint).
+    Returns number of rows inserted.
+    """
+    data_dir = _data_dir()
+    csv_path = csv_path or data_dir / "historical_betting_performance.csv"
+    db_path = db_path or _default_db_path()
+    if not csv_path.exists():
+        return 0
+
+    df = pd.read_csv(csv_path)
+    df = df[df["Date"] >= min_date].copy()
+    if df.empty:
+        return 0
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    n = 0
+    try:
+        _create_table(conn)
+        for _, row in df.iterrows():
+            date_str = str(row["Date"]).strip()
+            home = str(row.get("Home", "")).strip()
+            away = str(row.get("Away", "")).strip()
+            spread = float(row.get("Market_Spread", 0))
+            pick_dir = str(row.get("Pick_Spread", "")).strip()
+            conf = str(row.get("Confidence_Level", "Medium")).strip()
+            edge = float(row.get("Edge_Points", 0) or 0)
+            prob = float(row.get("Spread_Prob", 0.5) or 0.5)
+            stake_pct = row.get("Suggested_Stake_Pct")
+            try:
+                stake = float(stake_pct) if stake_pct is not None and not pd.isna(stake_pct) else 1.0
+            except (TypeError, ValueError):
+                stake = 1.0
+
+            if pick_dir == "Home":
+                recommended_side = home
+                line = spread
+            elif pick_dir == "Away":
+                recommended_side = away
+                line = abs(spread)
+            else:
+                continue
+
+            ats = row.get("ATS_Result")
+            result_map = {"Win": "W", "Loss": "L", "Push": "P"}
+            result = result_map.get(str(ats).strip()) if ats is not None and not pd.isna(ats) else None
+
+            payout = None
+            if result == "W":
+                payout = round(stake * 0.909, 2)
+            elif result == "L":
+                payout = round(-stake, 2)
+            elif result == "P":
+                payout = 0.0
+
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO play_history
+                    (date_generated, sport, home_team, away_team, bet_type, recommended_side,
+                     spread_or_total, my_edge_pct, my_probability, market_odds_at_time,
+                     recommended_stake, confidence_tier, reasoning_summary, result, actual_payout)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        date_str,
+                        "NCAAB Tournament",
+                        home,
+                        away,
+                        "Spread",
+                        recommended_side,
+                        line,
+                        abs(edge),
+                        prob,
+                        -110,
+                        stake,
+                        conf,
+                        "NCAA Tournament" if date_str >= "2026-03-19" else "NIT",
+                        result,
+                        payout,
+                    ),
+                )
+                if conn.total_changes:
+                    n += 1
+            except sqlite3.IntegrityError:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+    return n
