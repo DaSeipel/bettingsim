@@ -1323,7 +1323,8 @@ def main() -> None:
         print("=" * 60)
 
     # Save value plays to historical performance CSV (2026 date, with new columns)
-    n_saved = _save_historical_performance(results, value_plays, path, game_date)
+    save_all = "--save-all-games" in sys.argv
+    n_saved = _save_historical_performance(results, value_plays, path, game_date, all_games=save_all)
     n_home_final = sum(1 for r in value_plays if r.get("Pick_Spread") == "Home")
     n_away_final = len(value_plays) - n_home_final
     pct_home_final = (100.0 * n_home_final / len(value_plays)) if value_plays else 0
@@ -1542,8 +1543,9 @@ def _save_historical_performance(
     value_plays: list[dict],
     odds_path: Path,
     game_date: str,
+    all_games: bool = False,
 ) -> int:
-    """Append value plays to data/historical_betting_performance.csv with Confidence_Level, Edge_Points, Has_Rebound_Advantage. Returns count saved."""
+    """Append value plays (or every game if all_games) to historical_betting_performance.csv. Returns count saved."""
     hist_path = APP_ROOT / "data" / "historical_betting_performance.csv"
     hist_path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
@@ -1558,7 +1560,8 @@ def _save_historical_performance(
     except Exception:
         odds_file_display = odds_path.name
     rows = []
-    for r in value_plays:
+    source_rows = results if all_games else value_plays
+    for r in source_rows:
         rows.append({
             "Date": game_date,
             "Odds_File": odds_file_display,
@@ -1586,12 +1589,15 @@ def _save_historical_performance(
         for c in columns:
             if c not in existing.columns:
                 existing[c] = None
+        for c in ("Actual_Margin", "ATS_Result", "Walters_Agreement", "Bracket_Sim_Pick"):
+            if c not in df_new.columns and c in existing.columns:
+                df_new[c] = None
         # Keep only one set of plays per date: drop any existing rows with today's date before appending
         if "Date" in existing.columns:
             existing["Date"] = existing["Date"].astype(str).str.strip()
             existing = existing[existing["Date"] != game_date]
-        df_new = df_new[[c for c in columns if c in df_new.columns]]
-        combined = pd.concat([existing, df_new], ignore_index=True)
+        df_new = df_new[[c for c in df_new.columns]]
+        combined = pd.concat([existing, df_new], ignore_index=True, sort=False)
     else:
         combined = df_new
     combined.to_csv(hist_path, index=False)

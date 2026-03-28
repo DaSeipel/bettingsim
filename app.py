@@ -2546,7 +2546,9 @@ potd_picks = _potd_from_value_plays(value_plays_df, existing=potd_picks)
 
 # Archive today's plays to play_history so Mark Results and Play of the Day History can show them tomorrow.
 # This covers: (1) all value plays from cache (e.g. Vanderbilt Moneyline), (2) POTD from cache or historical CSV (Iowa St, Alabama).
-if not STRIP_DOWN_MODE:
+# Only archive once per session to avoid re-inserting plays that were deliberately deleted.
+_archive_key = f"_archived_{date.today().isoformat()}"
+if not STRIP_DOWN_MODE and not st.session_state.get(_archive_key):
     try:
         _req = ["League", "Event", "Selection", "Market", "Odds", "Value (%)", "model_prob", "home_team", "away_team"]
         if not value_plays_df.empty and all(c in value_plays_df.columns for c in _req):
@@ -2576,6 +2578,7 @@ if not STRIP_DOWN_MODE:
             })
         if _potd_rows:
             archive_value_plays(pd.DataFrame(_potd_rows), as_of_date=date.today())
+        st.session_state[_archive_key] = True
     except Exception:
         pass
 

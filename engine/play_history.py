@@ -133,11 +133,19 @@ def archive_value_plays(
                 recommended_stake = None
             conn.execute(
                 """
-                INSERT OR REPLACE INTO play_history
+                INSERT INTO play_history
                 (date_generated, sport, home_team, away_team, bet_type, recommended_side,
                  spread_or_total, my_edge_pct, my_probability, market_odds_at_time,
                  recommended_stake, confidence_tier, reasoning_summary)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(date_generated, sport, home_team, away_team, bet_type, recommended_side, spread_or_total)
+                DO UPDATE SET
+                    my_edge_pct = excluded.my_edge_pct,
+                    my_probability = excluded.my_probability,
+                    market_odds_at_time = excluded.market_odds_at_time,
+                    recommended_stake = excluded.recommended_stake,
+                    confidence_tier = excluded.confidence_tier,
+                    reasoning_summary = excluded.reasoning_summary
                 """,
                 (
                     date_str,
