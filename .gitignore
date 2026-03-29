@@ -11,7 +11,8 @@ __pycache__/
 dist/
 build/
 
-# Streamlit
+# Secrets / env (never commit)
+.env
 .streamlit/secrets.toml
 
 # Odds fetcher cache and DB

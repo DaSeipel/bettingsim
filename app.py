@@ -62,9 +62,9 @@ from engine.clv_tracker import (
     mark_bet_result,
 )
 from engine.play_history import archive_value_plays, delete_play, load_play_history, update_play_result
+from engine.supabase_sync import mlb_rows_from_dataframe, upsert_mlb_card
 from engine.auto_result_job import run_auto_result
 from engine.ncaab_march_context import add_ncaab_march_context_to_df, is_after_selection_sunday
-from engine.bracket_analysis import run_bracket_analysis
 from engine.betting_models import (
     load_feature_matrix_for_inference,
     get_feature_row_for_game,
@@ -1069,6 +1069,7 @@ def _run_startup_snapshot_and_merge() -> None:
             cwd=str(_APP_ROOT),
             capture_output=True,
             timeout=120,
+            shell=False,
         )
         from engine.historical_odds import merge_historical_closing_into_games
         merge_historical_closing_into_games(
@@ -1086,6 +1087,7 @@ def _run_startup_snapshot_and_merge() -> None:
                 cwd=str(_APP_ROOT),
                 capture_output=True,
                 timeout=30,
+                shell=False,
             )
     except Exception:
         pass
@@ -1914,6 +1916,35 @@ _APP_ROOT = Path(__file__).resolve().parent
 HISTORICAL_BETTING_CSV_PATH = _APP_ROOT / "data" / "historical_betting_performance.csv"
 # Match prediction script: use 2026 for "today" when filtering CSV
 HISTORICAL_PICKS_YEAR = 2026
+MLB_VALUE_PLAYS_JSON_PATH = _APP_ROOT / "data" / "cache" / "mlb_value_plays.json"
+
+
+def _load_mlb_value_plays_for_today() -> tuple[pd.DataFrame, list[dict]]:
+    """Load MLB value plays from cache JSON; rows for today's date (card_date or per-play card_date)."""
+    today = date.today().isoformat()
+    if not MLB_VALUE_PLAYS_JSON_PATH.exists():
+        return pd.DataFrame(), []
+    try:
+        with open(MLB_VALUE_PLAYS_JSON_PATH, encoding="utf-8") as f:
+            blob = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return pd.DataFrame(), []
+    if isinstance(blob, list):
+        raw_plays = blob
+        top_date = ""
+    else:
+        raw_plays = blob.get("plays") or []
+        top_date = str(blob.get("card_date", "")).strip()
+    filtered: list[dict] = []
+    for p in raw_plays:
+        if not isinstance(p, dict):
+            continue
+        pd_ = str(p.get("card_date", "")).strip()
+        if pd_ == today or (not pd_ and top_date == today):
+            filtered.append(p)
+    if not filtered:
+        return pd.DataFrame(), []
+    return pd.DataFrame(filtered), filtered
 
 
 def _normalize_date_to_iso(raw: str) -> Optional[str]:
@@ -2813,7 +2844,9 @@ if _unresolved_stale > 0:
     )
     st.markdown(_slim_alert_html, unsafe_allow_html=True)
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
-tab_overview, tab_ncaab, tab_march, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(["Overview", "NCAAB", "March", "NBA (Coming Soon)", "Mark Results", "Record", "Manual Odds", "Game Lookup"])
+tab_overview, tab_ncaab, tab_mlb, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(
+    ["Overview", "NCAAB", "MLB", "NBA (Coming Soon)", "Mark Results", "Record", "Manual Odds", "Game Lookup"]
+)
 
 with tab_overview:
     st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
@@ -2953,6 +2986,7 @@ with tab_ncaab:
                     env=env,
                     timeout=300,
                     check=False,
+                    shell=False,
                 )
             except subprocess.TimeoutExpired:
                 st.error("Pipeline timed out after 5 minutes.")
@@ -3010,305 +3044,166 @@ with tab_ncaab:
         else:
             st.info("Set Odds API key in the sidebar to load today's NCAAB games and value plays.")
 
-with tab_march:
-    st.subheader("2026 NCAA Bracket Analysis")
-    st.caption("Analyze the tournament bracket for sleepers, Final 4 probabilities (10k Monte Carlo), and first-round spread value (Walters plays). Uses the XGBoost spread model.")
-    st.markdown("---")
-    st.markdown("**Inputs**")
-    bracket_input = st.text_area(
-        "Bracket (first-round matchups)",
-        value="",
-        height=120,
-        placeholder="CSV: TeamA, SeedA, TeamB, SeedB [, MarketSpread]\nExample:\nPurdue, 1, Montana St, 16, -24.5\nTennessee, 2, St. Peter's, 15, -18\n... (32 games)",
-        key="march_bracket_csv",
-    )
-    rankings_input = st.text_area(
-        "Power rankings (model vs public)",
-        value="",
-        height=120,
-        placeholder="CSV: Team, Seed, ModelRank (1 = best)\nExample:\nPurdue, 1, 2\nUConn, 1, 1\nTennessee, 2, 5\n...",
-        key="march_power_rankings_csv",
-    )
-    n_sims = st.number_input("Monte Carlo iterations", min_value=1000, max_value=50000, value=10000, step=1000, key="march_n_sims")
-    run_analysis = st.button("Run Bracket Analysis", key="march_run_btn")
-    if run_analysis and bracket_input.strip() and rankings_input.strip():
-        with st.spinner(f"Running {n_sims:,} bracket simulations and analysis..."):
-            out = run_bracket_analysis(
-                bracket_input.strip(),
-                rankings_input.strip(),
-                n_sims=int(n_sims),
-            )
-        for err in out.get("errors", []):
-            st.error(err)
-        st.markdown("---")
-        st.markdown("**Top 5 Value Sleepers**")
-        st.caption("Value Delta = (Official Seed Rank) − (Model Rank). Higher = undervalued by the committee.")
-        sleepers = out.get("value_sleepers", [])
-        if sleepers:
-            sleeper_df = pd.DataFrame(sleepers)
-            if "march_factors" in sleeper_df.columns:
-                sleeper_df = sleeper_df.rename(columns={"march_factors": "March Factors"})
-            st.dataframe(sleeper_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No sleepers computed. Check bracket and power rankings formats (Team, Seed, ModelRank).")
-        st.markdown("**Final 4 probabilities**")
-        st.caption(f"Share of {out.get('n_sims', n_sims):,} simulations in which each team reached the Final Four.")
-        f4 = out.get("final4_probabilities", [])
-        if f4:
-            f4_df = pd.DataFrame(f4)
-            st.dataframe(f4_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("Run analysis with 32 first-round matchups to get Final 4 probabilities.")
-        st.markdown("**Glitch teams**")
-        st.caption("Seed #7 or lower, Final 4 rate >5%, and Top 50 in at least 2 of: FT%, 3P%, Experience.")
-        glitch = out.get("glitch_teams", [])
-        if glitch:
-            glitch_df = pd.DataFrame(glitch)
-            st.dataframe(glitch_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No glitch teams (seed 7+ with >5% Final 4 rate) in this run.")
-        st.markdown("**Walters play**")
-        st.caption("First-round matchups where model vs market spread delta is between 2 and 7 points (top 3). Excluded only when model spread hit the 10- or 22-pt floor anchor.")
-        walters = out.get("walters_plays", [])
-        if walters:
-            walters_df = pd.DataFrame(walters)
-            st.dataframe(walters_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("Add a MarketSpread column to your bracket CSV for first-round games to see Walters plays.")
-        walters_errors = out.get("walters_data_errors", [])
-        if walters_errors:
-            st.caption(f"Excluded (model hit floor anchor): {len(walters_errors)} matchup(s).")
-    elif run_analysis:
-        st.warning("Paste both **Bracket** and **Power rankings** CSV, then run again.")
-    if march_madness_mode:
-        st.success("March Madness mode is on — 5% min edge, tournament-eligible only.")
-    else:
-        st.info("Turn on **March Madness mode** in the sidebar to filter for tournament-eligible games and see seed context on plays.")
-
-    # --- Bracket Tracker (display + manual result tracking) ---
-    st.markdown("---")
-    st.subheader("Bracket Tracker")
-    st.caption("Track every 2026 NCAA tournament pick against actual results as games finish.")
-
-    bracket_path = Path("data/ncaab/bracket_display_2026.json")
-    if not bracket_path.exists():
-        st.info("Bracket file not found. Run the bracket fill + confidence scripts to generate `bracket_display_2026.json`.")
-    else:
-        try:
-            with open(bracket_path) as f:
-                bracket_data = json.load(f)
-        except Exception as e:
-            st.error(f"Error loading bracket: {e}")
-            bracket_data = None
-
-        if bracket_data and isinstance(bracket_data, dict):
-            games = bracket_data.get("games", [])
-        else:
-            games = []
-
-        if not games:
-            st.info("No games in bracket file. Regenerate the bracket display JSON and try again.")
-        else:
-            # CSS to match dark theme cards / badges
-            st.markdown(
-                """
-                <style>
-                .bt-card {
-                    border-radius: 10px;
-                    padding: 0.9rem 1.0rem;
-                    margin-bottom: 0.75rem;
-                    background: rgba(20, 24, 28, 0.9);
-                    border: 1px solid rgba(120,144,156,0.7);
-                    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-                }
-                .bt-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    margin-bottom: 0.35rem;
-                    font-size: 0.85rem;
-                    color: rgba(236,239,241,0.9);
-                }
-                .bt-teams {
-                    display: flex;
-                    justify-content: space-between;
-                    font-size: 0.95rem;
-                    color: #eceff1;
-                    margin-bottom: 0.4rem;
-                }
-                .bt-team-name {
-                    font-weight: 600;
-                }
-                .bt-team-name--pick {
-                    font-weight: 800;
-                }
-                .bt-meta {
-                    font-size: 0.8rem;
-                    color: rgba(207,216,220,0.9);
-                    display: flex;
-                    justify-content: space-between;
-                    flex-wrap: wrap;
-                    gap: 0.4rem;
-                }
-                .bt-badge {
-                    display: inline-block;
-                    padding: 0.15rem 0.55rem;
-                    border-radius: 999px;
-                    font-size: 0.75rem;
-                    font-weight: 700;
-                    text-transform: uppercase;
-                    letter-spacing: 0.03em;
-                }
-                .bt-badge-lock { background: #1b5e20; color: #e8f5e9; }
-                .bt-badge-strong { background: #1565c0; color: #e3f2fd; }
-                .bt-badge-lean { background: #ef6c00; color: #fff3e0; }
-                .bt-badge-coin { background: #546e7a; color: #eceff1; }
-                .bt-badge-upset { background: #c62828; color: #ffebee; }
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            # Session state for manual results: game_id -> winner team name
-            if "bracket_results" not in st.session_state:
-                st.session_state["bracket_results"] = {}
-            results = st.session_state["bracket_results"]
-
-            # Compute summary metrics
-            total_games = len(games)
-            correct = incorrect = pending = 0
-            upset_total = upset_resolved = upset_correct = 0
-
-            for g in games:
-                gid = f"{g.get('round')}_{g.get('region')}_{g.get('game_idx')}"
-                actual = results.get(gid)
-                pick = g.get("pick")
-                is_upset = bool(g.get("is_upset"))
-                if actual:
-                    if actual == pick:
-                        correct += 1
-                    else:
-                        incorrect += 1
-                    if is_upset:
-                        upset_resolved += 1
-                        if actual == pick:
-                            upset_correct += 1
+with tab_mlb:
+    st.subheader("MLB")
+    st.caption("Today's MLB value plays from the local cache (data/cache/mlb_value_plays.json). Edge = (model prob × decimal odds) − 1, same as NCAAB Value % basis.")
+    if st.session_state.pop("mlb_model_success_msg", None):
+        st.success(
+            "MLB pipeline finished: `data/odds/live_mlb_odds.json` is updated and `predict_mlb.py` has run. "
+            "Reloaded picks below."
+        )
+    _mlb_live_odds_path = _APP_ROOT / "data" / "odds" / "live_mlb_odds.json"
+    if st.button("🚀 Run MLB Model", key="mlb_run_model", help="Run fetch_mlb_odds.py then predict_mlb.py (refreshes odds and value-play cache)"):
+        with st.spinner("Running scripts/fetch_mlb_odds.py… then scripts/predict_mlb.py…"):
+            _root = str(_APP_ROOT)
+            _fetch = _APP_ROOT / "scripts" / "fetch_mlb_odds.py"
+            _predict = _APP_ROOT / "scripts" / "predict_mlb.py"
+            try:
+                r1 = subprocess.run(
+                    [sys.executable, str(_fetch)],
+                    cwd=_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                    shell=False,
+                )
+                if r1.returncode != 0:
+                    err = (r1.stderr or r1.stdout or "").strip() or f"exit {r1.returncode}"
+                    st.error(f"fetch_mlb_odds.py failed: {err}")
                 else:
-                    pending += 1
-                if is_upset:
-                    upset_total += 1
-
-            col_c, col_i, col_p, col_u = st.columns(4)
-            with col_c:
-                st.metric("Correct picks", f"{correct}")
-            with col_i:
-                st.metric("Incorrect picks", f"{incorrect}")
-            with col_p:
-                st.metric("Pending", f"{pending}")
-            with col_u:
-                if upset_resolved:
-                    pct = 100.0 * upset_correct / max(upset_resolved, 1)
-                    st.metric("Upset accuracy", f"{pct:.1f}%", f"{upset_correct}/{upset_resolved}")
-                else:
-                    st.metric("Upset accuracy", "—", "0/0")
-
-            # Region tabs: East / West / South / Midwest / Final Four
-            region_tabs = st.tabs(["East", "West", "South", "Midwest", "Final Four"])
-            region_labels = ["East", "West", "South", "Midwest", "National"]
-
-            for tab, region in zip(region_tabs, region_labels):
-                with tab:
-                    if region == "National":
-                        region_games = [g for g in games if str(g.get("region")) == "National"]
-                    else:
-                        region_games = [g for g in games if str(g.get("region")) == region]
-
-                    if not region_games:
-                        st.info("No games in this region yet.")
-                        continue
-
-                    # Order by round then game index
-                    region_games = sorted(
-                        region_games,
-                        key=lambda g: (int(g.get("round", 0)), int(g.get("game_idx", 0))),
+                    r2 = subprocess.run(
+                        [sys.executable, str(_predict)],
+                        cwd=_root,
+                        capture_output=True,
+                        text=True,
+                        timeout=180,
+                        shell=False,
                     )
+                    if r2.returncode != 0:
+                        err = (r2.stderr or r2.stdout or "").strip() or f"exit {r2.returncode}"
+                        st.error(f"predict_mlb.py failed: {err}")
+                    elif _mlb_live_odds_path.is_file():
+                        st.session_state["mlb_model_success_msg"] = True
+                        st.rerun()
+                    else:
+                        st.error("Pipeline reported success but `data/odds/live_mlb_odds.json` was not found.")
+            except subprocess.TimeoutExpired:
+                st.error("MLB pipeline timed out after 3 minutes.")
+            except Exception as e:
+                st.error(f"MLB pipeline error: {e}")
+    mlb_df, mlb_plays_raw = _load_mlb_value_plays_for_today()
+    if mlb_df.empty:
+        st.info(
+            f"No MLB value plays for **{date.today().isoformat()}**. Add or update **{MLB_VALUE_PLAYS_JSON_PATH.name}** "
+            "(set `card_date` to today or give each play a `card_date`)."
+        )
+    else:
+        disp = mlb_df.copy()
+        if "odds_american" in disp.columns:
+            disp["Odds"] = disp["odds_american"].apply(format_american)
+        # Edge % = EV in percentage points: (p × decimal_odds) − 1, same as strategies.expected_value_pct × 100
+        if "edge" in disp.columns:
+            disp["Edge %"] = disp["edge"].apply(lambda x: round(float(x) * 100.0, 2) if pd.notna(x) else None)
+        elif "edge_pct" in disp.columns:
+            disp["Edge %"] = disp["edge_pct"].apply(
+                lambda x: (
+                    round(float(x), 2)
+                    if pd.notna(x) and abs(float(x)) >= 1.0
+                    else round(float(x) * 100.0, 2)
+                )
+                if pd.notna(x)
+                else None
+            )
+        if "model_prob" in disp.columns:
+            disp["Model prob"] = disp["model_prob"]
+        stake_col = []
+        for _, r in disp.iterrows():
+            try:
+                o = float(r.get("odds_american", 0))
+                # Kelly: win probability for this pick's side × American odds for that same bet
+                p = float(r.get("model_prob", 0))
+                frac = kelly_fraction(o, p, fraction=kelly_frac)
+                stake_col.append(round(BANKROLL_FOR_STAKES * frac, 2))
+            except (TypeError, ValueError):
+                stake_col.append(None)
+        disp["Rec. stake ($)"] = stake_col
+        col_rename = {
+            "away_team": "Away",
+            "home_team": "Home",
+            "away_pitcher": "SP (away)",
+            "home_pitcher": "SP (home)",
+            "market": "Market",
+            "selection": "Pick",
+            "total_line": "Total line",
+        }
+        disp = disp.rename(columns={k: v for k, v in col_rename.items() if k in disp.columns})
+        show_cols = [
+            c
+            for c in [
+                "Away",
+                "Home",
+                "SP (away)",
+                "SP (home)",
+                "Market",
+                "Pick",
+                "Odds",
+                "Model prob",
+                "Edge %",
+                "Total line",
+                "Rec. stake ($)",
+            ]
+            if c in disp.columns
+        ]
+        display_df = disp[show_cols].copy()
 
-                    current_round = None
-                    for g in region_games:
-                        rname = g.get("round_name") or f"Round {g.get('round')}"
-                        if rname != current_round:
-                            if current_round is not None:
-                                st.markdown("")  # spacing
-                            st.markdown(f"**{rname}**")
-                            current_round = rname
+        def _mlb_edge_row_style(row: pd.Series) -> list[str]:
+            """Green row when Edge % > 5 (% points), i.e. decimal EV > 0.05."""
+            try:
+                v = row.get("Edge %")
+                if v is not None and pd.notna(v) and float(v) > 5.0:
+                    return ["background-color: rgba(46, 125, 50, 0.42); color: #e8f5e9"] * len(row)
+            except (TypeError, ValueError):
+                pass
+            return [""] * len(row)
 
-                        gid = f"{g.get('round')}_{g.get('region')}_{g.get('game_idx')}"
-                        team_a = g.get("team_a")
-                        team_b = g.get("team_b")
-                        pick = g.get("pick")
-                        seed_matchup = g.get("seed_matchup")
-                        tier = str(g.get("confidence_tier") or "Coin Flip")
-                        is_upset = bool(g.get("is_upset"))
-                        pa = float(g.get("win_pct_a", 0.0))
-                        pb = float(g.get("win_pct_b", 0.0))
-                        market_spread = g.get("market_spread")
+        fmt_cols: dict[str, str] = {}
+        if "Model prob" in display_df.columns:
+            fmt_cols["Model prob"] = "{:.3f}"
+        if "Edge %" in display_df.columns:
+            fmt_cols["Edge %"] = "{:.2f}"
+        if "Rec. stake ($)" in display_df.columns:
+            fmt_cols["Rec. stake ($)"] = "${:.2f}"
+        if "Total line" in display_df.columns:
+            fmt_cols["Total line"] = "{:.1f}"
 
-                        # Badge classes
-                        tier_key = tier.lower().replace(" ", "")
-                        badge_class = {
-                            "lock": "bt-badge-lock",
-                            "strong": "bt-badge-strong",
-                            "lean": "bt-badge-lean",
-                            "coinflip": "bt-badge-coin",
-                        }.get(tier_key, "bt-badge-coin")
-
-                        upset_badge = ""
-                        if is_upset:
-                            upset_badge = '<span class="bt-badge bt-badge-upset">Upset pick</span>'
-
-                        tier_badge = f'<span class="bt-badge {badge_class}">{tier}</span>'
-
-                        header_left = f"{g.get('region')} · Game {g.get('game_idx') + 1}"
-                        header_right_parts = []
-                        if seed_matchup:
-                            header_right_parts.append(seed_matchup)
-                        if market_spread is not None:
-                            header_right_parts.append(f"Mkt {float(market_spread):+0.1f}")
-                        header_right = " · ".join(header_right_parts)
-
-                        team_a_class = "bt-team-name bt-team-name--pick" if pick == team_a else "bt-team-name"
-                        team_b_class = "bt-team-name bt-team-name--pick" if pick == team_b else "bt-team-name"
-
-                        card_html = (
-                            '<div class="bt-card">'
-                            f'<div class="bt-header"><span>{header_left}</span><span>{header_right}</span></div>'
-                            '<div class="bt-teams">'
-                            f'<div><div class="{team_a_class}">{team_a}</div>'
-                            f'<div style="font-size:0.8rem;color:rgba(176,190,197,0.9);">Win {pa:0.1f}%</div></div>'
-                            f'<div style="text-align:right;"><div class="{team_b_class}">{team_b}</div>'
-                            f'<div style="font-size:0.8rem;color:rgba(176,190,197,0.9);">Win {pb:0.1f}%</div></div>'
-                            '</div>'
-                            f'<div class="bt-meta"><div>{tier_badge} {upset_badge}</div>'
-                            f'<div>Pick: <strong>{pick}</strong></div></div>'
-                            '</div>'
+        show_styled = display_df
+        styled = (
+            show_styled.style.apply(_mlb_edge_row_style, axis=1)
+            .format(fmt_cols, na_rep="—")
+            .hide(axis="index")
+        )
+        st.dataframe(styled, use_container_width=True)
+        if st.button("Sync to Supabase", key="mlb_sync_supabase", help="Upsert today's visible rows to table mlb_picks (requires [supabase] in secrets)"):
+            try:
+                payload = mlb_rows_from_dataframe(mlb_df)
+                if not payload:
+                    st.warning("Nothing to sync — no rows in today's MLB card.")
+                else:
+                    result = upsert_mlb_card(payload)
+                    n = len(payload)
+                    rows_back = getattr(result, "data", None) if result is not None else None
+                    if isinstance(rows_back, list) and len(rows_back) > 0:
+                        st.success(
+                            f"**Success:** Upserted **{n}** row(s) to Supabase table `mlb_picks` "
+                            f"(server returned {len(rows_back)} record(s))."
                         )
-                        st.markdown(card_html, unsafe_allow_html=True)
-
-                        # Manual result selector
-                        options = ["Not played yet", team_a, team_b]
-                        default_val = results.get(gid) or "Not played yet"
-                        choice = st.radio(
-                            "Result",
-                            options,
-                            horizontal=True,
-                            key=f"bt_res_{gid}",
-                            index=options.index(default_val),
+                    else:
+                        st.success(
+                            f"**Success:** Upsert completed for **{n}** pick(s) on table `mlb_picks` "
+                            f"(cloud write finished with no exception)."
                         )
-                        if choice == "Not played yet":
-                            results.pop(gid, None)
-                        else:
-                            results[gid] = choice
-
+            except Exception as e:
+                st.error(f"**Error:** Supabase sync did not complete — {e}")
 
 with tab_mark_results:
     st.subheader("Mark Results")
