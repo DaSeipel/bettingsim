@@ -1,0 +1,218 @@
+{
+  "_meta": {
+    "description": "MLB park factors for all 30 teams. Based on 3-year rolling Statcast data (2023-2025) and ESPN/FantasyPros research. 100 = league average. >100 = hitter-friendly, <100 = pitcher-friendly. Updated for 2026 venue changes (Rays back to Tropicana, Royals renovated Kauffman, A's still in Sacramento).",
+    "sources": ["Baseball Savant Statcast Park Factors", "ESPN Park Factors 2026", "FantasyPros MLB Park Factors 2025"],
+    "last_updated": "2026-03-30",
+    "usage": "run_factor = park_factors[team_name]['runs'] / 100.0; adjust total or win probability accordingly"
+  },
+  "Arizona Diamondbacks": {
+    "venue": "Chase Field",
+    "runs": 103,
+    "hr": 85,
+    "hits": 102,
+    "notes": "Retractable roof, humidor installed. Suppresses HR despite warm air. Boosts hits/doubles."
+  },
+  "Atlanta Braves": {
+    "venue": "Truist Park",
+    "runs": 99,
+    "hr": 101,
+    "hits": 99,
+    "notes": "Mostly neutral. Slight HR boost."
+  },
+  "Baltimore Orioles": {
+    "venue": "Oriole Park at Camden Yards",
+    "runs": 96,
+    "hr": 95,
+    "hits": 97,
+    "notes": "Post-2022 dimension changes made it pitcher-friendly. Fences adjusted again for 2025 — trending back toward neutral. RHB HR suppressed heavily (lowest in MLB 2022-2024)."
+  },
+  "Boston Red Sox": {
+    "venue": "Fenway Park",
+    "runs": 107,
+    "hr": 101,
+    "hits": 110,
+    "notes": "Green Monster inflates doubles/hits. Strong hitter park for runs. LHB HR suppressed, RHB HR boosted."
+  },
+  "Chicago Cubs": {
+    "venue": "Wrigley Field",
+    "runs": 96,
+    "hr": 93,
+    "hits": 98,
+    "notes": "Trending pitcher-friendly in recent years. Wind direction matters enormously game-to-game but averages out to slight suppression."
+  },
+  "Chicago White Sox": {
+    "venue": "Guaranteed Rate Field",
+    "runs": 104,
+    "hr": 108,
+    "hits": 101,
+    "notes": "Above-average HR park, especially for RHB. Boosts scoring."
+  },
+  "Cincinnati Reds": {
+    "venue": "Great American Ball Park",
+    "runs": 108,
+    "hr": 118,
+    "hits": 103,
+    "notes": "Elite HR park — top 2 in MLB. Small dimensions, Ohio River wind patterns carry fly balls. Major run inflator."
+  },
+  "Cleveland Guardians": {
+    "venue": "Progressive Field",
+    "runs": 98,
+    "hr": 93,
+    "hits": 99,
+    "notes": "Slightly pitcher-friendly. Suppresses HR moderately."
+  },
+  "Colorado Rockies": {
+    "venue": "Coors Field",
+    "runs": 118,
+    "hr": 112,
+    "hits": 115,
+    "notes": "Highest run-scoring venue in MLB by a wide margin. Altitude (5,280 ft) thins air, balls carry farther, breaking balls break less. Humidor partially mitigates but still extreme."
+  },
+  "Detroit Tigers": {
+    "venue": "Comerica Park",
+    "runs": 97,
+    "hr": 96,
+    "hits": 98,
+    "notes": "Slightly pitcher-friendly. Deep center field suppresses HR. Spacious outfield."
+  },
+  "Houston Astros": {
+    "venue": "Minute Maid Park",
+    "runs": 102,
+    "hr": 106,
+    "hits": 100,
+    "notes": "Retractable roof. Short left field (315 ft) boosts RHB HR. Crawford Boxes are a factor."
+  },
+  "Kansas City Royals": {
+    "venue": "Kauffman Stadium",
+    "runs": 104,
+    "hr": 97,
+    "hits": 106,
+    "notes": "2026 renovation: outfield walls moved in 8-10 ft and lowered. Previously boosted doubles/triples with vast outfield. HR may increase with new dimensions. Midwest heat helps carry in summer."
+  },
+  "Los Angeles Angels": {
+    "venue": "Angel Stadium",
+    "runs": 101,
+    "hr": 107,
+    "hits": 99,
+    "notes": "Above-average HR park. Marine layer less impactful than Dodger Stadium due to inland location."
+  },
+  "Los Angeles Dodgers": {
+    "venue": "Dodger Stadium",
+    "runs": 94,
+    "hr": 104,
+    "hits": 93,
+    "notes": "Significant run suppressor despite boosting HR. Marine layer, large foul territory, spacious outfield reduce hits. One of MLB's best pitcher parks for overall scoring."
+  },
+  "Miami Marlins": {
+    "venue": "loanDepot Park",
+    "runs": 106,
+    "hr": 100,
+    "hits": 104,
+    "notes": "Trending hitter-friendly in recent years despite retractable roof. Was pitcher-friendly early in its existence but has shifted significantly."
+  },
+  "Milwaukee Brewers": {
+    "venue": "American Family Field",
+    "runs": 102,
+    "hr": 108,
+    "hits": 100,
+    "notes": "Above-average HR park. Retractable roof keeps conditions controlled. Slight scoring boost."
+  },
+  "Minnesota Twins": {
+    "venue": "Target Field",
+    "runs": 100,
+    "hr": 100,
+    "hits": 100,
+    "notes": "Almost perfectly neutral. Outdoor park in Minneapolis."
+  },
+  "New York Mets": {
+    "venue": "Citi Field",
+    "runs": 93,
+    "hr": 95,
+    "hits": 95,
+    "notes": "Pitcher-friendly. Suppresses runs, hits, and HR. One of the more significant run suppressors in MLB."
+  },
+  "New York Yankees": {
+    "venue": "Yankee Stadium",
+    "runs": 103,
+    "hr": 112,
+    "hits": 99,
+    "notes": "Short right field porch (314 ft) inflates LHB HR significantly. Above-average HR park overall."
+  },
+  "Athletics": {
+    "venue": "Sutter Health Park (Sacramento)",
+    "runs": 110,
+    "hr": 105,
+    "hits": 107,
+    "notes": "2025-2026 temporary home. Minor league park with less vertical structure — wind has more impact. Sacramento heat boosts fly ball carry. More hitter-friendly than old Oakland Coliseum."
+  },
+  "Philadelphia Phillies": {
+    "venue": "Citizens Bank Park",
+    "runs": 103,
+    "hr": 110,
+    "hits": 101,
+    "notes": "Above-average HR park. Boosts power, especially to right-center. Consistent run inflator."
+  },
+  "Pittsburgh Pirates": {
+    "venue": "PNC Park",
+    "runs": 103,
+    "hr": 93,
+    "hits": 105,
+    "notes": "Boosts runs and hits but suppresses HR. Spacious outfield yields doubles/triples. River wind patterns can carry balls or knock them down depending on direction."
+  },
+  "San Diego Padres": {
+    "venue": "Petco Park",
+    "runs": 96,
+    "hr": 94,
+    "hits": 97,
+    "notes": "Pitcher-friendly. Marine layer and spacious dimensions suppress scoring. Less extreme than pre-2013 but still below average."
+  },
+  "San Francisco Giants": {
+    "venue": "Oracle Park",
+    "runs": 94,
+    "hr": 82,
+    "hits": 97,
+    "notes": "One of MLB's strongest HR suppressors. McCovey Cove wind and marine layer kill fly balls. Extreme RHB HR suppression. Pitcher's park overall."
+  },
+  "Seattle Mariners": {
+    "venue": "T-Mobile Park",
+    "runs": 92,
+    "hr": 96,
+    "hits": 94,
+    "notes": "Lowest or second-lowest run-scoring park in MLB. Marine layer, retractable roof (rarely closed), and spacious dimensions all suppress offense."
+  },
+  "St. Louis Cardinals": {
+    "venue": "Busch Stadium",
+    "runs": 98,
+    "hr": 98,
+    "hits": 99,
+    "notes": "Slightly below neutral. Midwest heat in summer can help carry but overall plays close to average."
+  },
+  "Tampa Bay Rays": {
+    "venue": "Tropicana Field",
+    "runs": 97,
+    "hr": 96,
+    "hits": 98,
+    "notes": "2026 return to Tropicana Field after 2025 in Steinbrenner Field. Indoor dome with artificial turf. Historically slightly pitcher-friendly. Catwalk/ring interference is unique."
+  },
+  "Texas Rangers": {
+    "venue": "Globe Life Field",
+    "runs": 102,
+    "hr": 107,
+    "hits": 100,
+    "notes": "Retractable roof. Above-average HR park. Was a massive hitter park in 2020 opening year, has normalized but still boosts power."
+  },
+  "Toronto Blue Jays": {
+    "venue": "Rogers Centre",
+    "runs": 101,
+    "hr": 103,
+    "hits": 100,
+    "notes": "Retractable roof. Slight HR boost. Mostly neutral for runs. Artificial turf can speed up grounders."
+  },
+  "Washington Nationals": {
+    "venue": "Robert F. Kennedy Memorial Stadium",
+    "runs": 100,
+    "hr": 100,
+    "hits": 100,
+    "notes": "2026 temporary home (RFK). No MLB park factor history — set to neutral 100 pending data."
+  }
+}

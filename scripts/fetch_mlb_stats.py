@@ -2,7 +2,10 @@
 """
 Fetch MLB team-level stats from the public MLB Stats API and save to data/mlb/team_stats.csv.
 
-Columns: team_id, team_name, season, era, whip, woba, bullpen_era
+Columns: team_id, team_name, season, wins, losses, win_pct, run_differential,
+era, whip, woba, bullpen_era
+- wins / losses / win_pct / run_differential: regular-season standings via
+  /standings?leagueId=103,104&standingsTypes=regularSeason (joined by team_id).
 - era / whip: team season pitching (all pitchers).
 - woba: FanGraphs-style linear weights from team hitting counting stats (API does not expose wOBA directly).
 - bullpen_era: ERA aggregated over roster pitchers classified as relievers (gamesStarted < 0.5 * gamesPitched),
@@ -167,10 +170,39 @@ def bullpen_era_for_team(team_id: int, season: int) -> float:
     return (total_er * 27.0) / float(total_outs)  # ERA = 9 * ER / IP, IP = outs/3
 
 
+def standings_map_by_team_id(season: int) -> dict[int, dict[str, int | float | None]]:
+    """Regular-season wins/losses and run differential keyed by MLB team id."""
+    time.sleep(REQUEST_SLEEP_S)
+    url = f"{BASE}/standings?leagueId=103,104&season={season}&standingsTypes=regularSeason"
+    data = _get_json(url)
+    out: dict[int, dict[str, int | float | None]] = {}
+    for rec in data.get("records") or []:
+        for tr in rec.get("teamRecords") or []:
+            tm = tr.get("team") or {}
+            tid = int(tm.get("id") or 0)
+            if not tid:
+                continue
+            wins = int(tr.get("wins") or 0)
+            losses = int(tr.get("losses") or 0)
+            gp = wins + losses
+            rd_raw = tr.get("runDifferential")
+            try:
+                rd = int(rd_raw) if rd_raw is not None and str(rd_raw) != "" else None
+            except (TypeError, ValueError):
+                rd = None
+            out[tid] = {
+                "wins": wins,
+                "losses": losses,
+                "run_differential": rd,
+            }
+    return out
+
+
 def fetch_mlb_team_stats(season: int) -> pd.DataFrame:
     time.sleep(REQUEST_SLEEP_S)
     teams_data = _get_json(f"{BASE}/teams?sportId=1&season={season}")
     teams = [t for t in teams_data.get("teams", []) if t.get("sport", {}).get("id") == 1]
+    wl_by_tid = standings_map_by_team_id(season)
     rows: list[dict] = []
     for t in sorted(teams, key=lambda x: x.get("name", "")):
         tid = int(t["id"])
@@ -181,11 +213,21 @@ def fetch_mlb_team_stats(season: int) -> pd.DataFrame:
         woba = team_hitting_woba(tid, season)
         time.sleep(REQUEST_SLEEP_S)
         bp_era = bullpen_era_for_team(tid, season)
+        wl = wl_by_tid.get(tid) or {}
+        w = int(wl.get("wins") or 0)
+        l_ = int(wl.get("losses") or 0)
+        gp = w + l_
+        wp_f = float(w / gp) if gp > 0 else float("nan")
+        rd = wl.get("run_differential")
         rows.append(
             {
                 "team_id": tid,
                 "team_name": name,
                 "season": season,
+                "wins": w,
+                "losses": l_,
+                "win_pct": round(wp_f, 5) if wp_f == wp_f else float("nan"),
+                "run_differential": rd if rd is not None else float("nan"),
                 "era": pitch["era"],
                 "whip": pitch["whip"],
                 "woba": round(woba, 4) if woba == woba else float("nan"),

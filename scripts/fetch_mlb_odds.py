@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -39,12 +40,24 @@ if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 os.chdir(APP_ROOT)
 
+from engine.mlb_engine import MLB_TEAM_NAME_ALIASES, normalize_mlb_team_name_for_join
+
 OUTPUT_PATH = APP_ROOT / "data" / "odds" / "live_mlb_odds.json"
 FRESHNESS_SECONDS = 30 * 60
 SPORT_KEY = "baseball_mlb"
 
 VEGAS_INSIDER_MLB_ODDS = "https://www.vegasinsider.com/mlb/odds/las-vegas/"
 ODDS_SHARK_MLB_ODDS = "https://www.oddsshark.com/mlb/odds"
+
+# VegasInsider nicknames / abbreviations → expand for fuzzy match vs statsapi full names.
+VI_TEAM_LABEL_HINTS: dict[str, str] = {
+    "d-backs": "Arizona Diamondbacks",
+    "dbacks": "Arizona Diamondbacks",
+    "diamondbacks": "Arizona Diamondbacks",
+    "jays": "Toronto Blue Jays",
+    "m's": "Seattle Mariners",
+    "ms": "Seattle Mariners",
+}
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -92,6 +105,125 @@ def _consensus_int(cell_text: str) -> int | None:
         return None
 
 
+def _vi_row_team_label(first_cell: str) -> str | None:
+    """First column like '957 Twins' or '958 Orioles' → team nickname 'Twins'."""
+    s = first_cell.strip()
+    if not s or s.lower() in ("time", "open") or s.startswith("›"):
+        return None
+    m = re.match(r"^(\d+)\s+(.+)$", s)
+    if m:
+        return m.group(2).strip()
+    return s
+
+
+def _vi_label_matches_statsapi_team(vi_label: str, statsapi_full_name: str) -> bool:
+    """
+    True when VI's first-column label refers to the same club as statsapi's full name.
+    VI often uses the bare nickname ('Rays', 'Brewers'); statsapi uses city + name.
+    """
+    sched = normalize_mlb_team_name_for_join(statsapi_full_name)
+    alias = MLB_TEAM_NAME_ALIASES.get(sched, sched)
+    raw = vi_label.strip()
+    if not raw or not alias:
+        return False
+    expanded = VI_TEAM_LABEL_HINTS.get(raw.lower(), raw)
+    v = " ".join(expanded.split()).lower()
+    a = " ".join(alias.split()).lower()
+    if v == a or v in a:
+        return True
+    toks = a.split()
+    if len(toks) >= 2 and v == f"{toks[-2]} {toks[-1]}":
+        return True
+    if toks and v == toks[-1]:
+        return True
+    return False
+
+
+def _team_match_score(vi_label: str, statsapi_full_name: str) -> int:
+    """How well a VI row label matches statsapi away_name / home_name."""
+    if _vi_label_matches_statsapi_team(vi_label, statsapi_full_name):
+        return 100
+    try:
+        from thefuzz import fuzz
+    except ImportError:
+        fuzz = None
+    sched = normalize_mlb_team_name_for_join(statsapi_full_name)
+    alias = MLB_TEAM_NAME_ALIASES.get(sched, sched)
+    vi = vi_label.strip()
+    expanded = VI_TEAM_LABEL_HINTS.get(vi.lower(), vi)
+    if not fuzz:
+        a, b = expanded.lower(), alias.lower()
+        if a in b or b.endswith(a.split()[-1].lower()):
+            return 85
+        return max(50, 100 - 10 * abs(len(a) - len(b)))
+    return max(
+        fuzz.token_sort_ratio(expanded, alias),
+        fuzz.token_sort_ratio(vi, alias),
+        fuzz.token_sort_ratio(expanded, sched),
+    )
+
+
+def _resolve_pair_to_away_home_ml(
+    away_team: str, home_team: str, pair: tuple[tuple[str, int], tuple[str, int]]
+) -> tuple[int, int, float] | None:
+    """
+    Map a scraped ((teamA, mlA), (teamB, mlB)) to (away_ml, home_ml) using name match.
+    Returns (away_ml, home_ml, confidence) or None if match is too weak.
+    """
+    (t1, m1), (t2, m2) = pair
+    s1a = _team_match_score(t1, away_team)
+    s1h = _team_match_score(t1, home_team)
+    s2a = _team_match_score(t2, away_team)
+    s2h = _team_match_score(t2, home_team)
+    o1 = s1a + s2h
+    o2 = s1h + s2a
+    min_side = 62
+
+    if o1 >= o2 and s1a >= min_side and s2h >= min_side:
+        return m1, m2, float(o1)
+    if o2 > o1 and s1h >= min_side and s2a >= min_side:
+        return m2, m1, float(o2)
+    return None
+
+
+def _assign_moneylines_and_total_indices(
+    sched: list[dict],
+    ml_pairs: list[tuple[tuple[str, int], tuple[str, int]]],
+) -> list[tuple[int | None, int | None, int | None]]:
+    """
+    For each schedule game (statsapi order), pick an unused VI pair that best matches
+    away_name / home_name. Returns parallel list: (away_ml, home_ml, vi_pair_index).
+
+    vi_pair_index aligns with parse_vegasinsider_totals order (same table pairing).
+    """
+    n = len(sched)
+    out: list[tuple[int | None, int | None, int | None]] = [(None, None, None)] * n
+    used: set[int] = set()
+    for i, g in enumerate(sched):
+        away = str(g.get("away_name") or "").strip()
+        home = str(g.get("home_name") or "").strip()
+        if not away or not home:
+            continue
+        best_j: int | None = None
+        best_sc = -1.0
+        best_mls: tuple[int, int] = (0, 0)
+        for j, pair in enumerate(ml_pairs):
+            if j in used:
+                continue
+            resolved = _resolve_pair_to_away_home_ml(away, home, pair)
+            if resolved is None:
+                continue
+            aml, hml, sc = resolved
+            if sc > best_sc:
+                best_sc = sc
+                best_j = j
+                best_mls = (aml, hml)
+        if best_j is not None:
+            used.add(best_j)
+            out[i] = (best_mls[0], best_mls[1], best_j)
+    return out
+
+
 def _odds_cell_for_row(tds: list) -> str:
     """VegasInsider uses column 1 for consensus; older layouts used last column."""
     if len(tds) >= 2:
@@ -101,21 +233,19 @@ def _odds_cell_for_row(tds: list) -> str:
     return tds[-1].get_text(" ", strip=True) if tds else ""
 
 
-def parse_vegasinsider_moneylines(html: str, max_pairs: int | None = None) -> list[tuple[int, int]]:
+def debug_vegasinsider_moneyline_rows(html: str) -> list[dict[str, str | int]]:
     """
-    Parse VI Las Vegas MLB odds table: consensus moneyline is in the second <td> (or last).
-    Returns list of (away_ml, home_ml) in page order (pairs of moneyline rows).
-    Skips total (o9/u9) and run-line rows.
+    Each scraped ML table row before pairing: rotation+team cell, consensus cell, parsed label/ML.
     """
     soup = BeautifulSoup(html, "html.parser")
-    consensus_vals: list[int] = []
+    out: list[dict[str, str | int]] = []
     for tr in soup.find_all("tr"):
         tds = tr.find_all("td")
         if len(tds) < 2:
             continue
         first = tds[0].get_text(" ", strip=True)
-        fl = first.lower()
-        if fl in ("time", "open") or first.startswith("›"):
+        label = _vi_row_team_label(first)
+        if not label:
             continue
         cell = _odds_cell_for_row(tds)
         cl = cell.lower()
@@ -124,11 +254,108 @@ def parse_vegasinsider_moneylines(html: str, max_pairs: int | None = None) -> li
         if re.search(r"\d+\.\d", cl):
             continue
         ci = _consensus_int(cell)
-        if ci is not None:
-            consensus_vals.append(ci)
-    pairs: list[tuple[int, int]] = []
-    for i in range(0, len(consensus_vals) - 1, 2):
-        pairs.append((consensus_vals[i], consensus_vals[i + 1]))
+        if ci is None:
+            continue
+        out.append(
+            {
+                "first_cell": first,
+                "consensus_cell": cell.strip(),
+                "label": label,
+                "ml": ci,
+            }
+        )
+    return out
+
+
+def _pair_labels_lower(pair: tuple[tuple[str, int], tuple[str, int]]) -> set[str]:
+    return {pair[0][0].lower(), pair[1][0].lower()}
+
+
+def _pair_matches_substrs(
+    pair: tuple[tuple[str, int], tuple[str, int]], a: str, b: str
+) -> bool:
+    labs = _pair_labels_lower(pair)
+    return any(a in x for x in labs) and any(b in x for x in labs)
+
+
+def print_raw_vi_moneylines_for_verification(html: str) -> None:
+    """Stdout: numbered rows, sequential pairs, then spotlight NYM@STL and WSH@PHI (pre-schedule match)."""
+    rows = debug_vegasinsider_moneyline_rows(html)
+    pairs = parse_vegasinsider_moneyline_pairs(html, max_pairs=None)
+
+    print("--- VegasInsider raw ML rows (consensus column, before schedule pairing) ---")
+    for i, r in enumerate(rows):
+        print(
+            f"  row[{i:3d}] first_cell={r['first_cell']!r} | "
+            f"consensus={r['consensus_cell']!r} → label={r['label']!r} ml={r['ml']}"
+        )
+
+    print("\n--- Sequential pairs (row[2k], row[2k+1]) — VI table order, not statsapi ---")
+    for j, p in enumerate(pairs):
+        (t1, m1), (t2, m2) = p
+        print(f"  pair[{j:3d}] ({t1!r}, {m1})  |  ({t2!r}, {m2})")
+
+    print("\n--- Spotlight: Mets @ Cardinals (look for Mets + Cardinals in same pair) ---")
+    mets_stl = [
+        (j, p)
+        for j, p in enumerate(pairs)
+        if _pair_matches_substrs(p, "mets", "cardinal")
+    ]
+    if not mets_stl:
+        print("  (no pair with both Mets and Cardinals labels)")
+    for j, p in mets_stl:
+        (t1, m1), (t2, m2) = p
+        print(f"  pair[{j}] order not away/home: {t1} {m1:+d}  |  {t2} {m2:+d}")
+
+    print("\n--- Spotlight: Nationals @ Phillies (look for Nationals + Phillies in same pair) ---")
+    was_phi = [
+        (j, p)
+        for j, p in enumerate(pairs)
+        if _pair_matches_substrs(p, "national", "phillie")
+    ]
+    if not was_phi:
+        print("  (no pair with both Nationals and Phillies labels)")
+    for j, p in was_phi:
+        (t1, m1), (t2, m2) = p
+        print(f"  pair[{j}] order not away/home: {t1} {m1:+d}  |  {t2} {m2:+d}")
+
+    print(
+        "\n(Home/away on each side is determined only after matching this pair to statsapi "
+        "away_name/home_name; first row in a pair is not necessarily away.)"
+    )
+
+
+def parse_vegasinsider_moneyline_pairs(
+    html: str, max_pairs: int | None = None
+) -> list[tuple[tuple[str, int], tuple[str, int]]]:
+    """
+    Parse VI MLB table: each moneyline row has rotation + team in col0, consensus ML in col1.
+    Returns [((team_label, ml), (team_label, ml)), ...] — one tuple per game (two teams).
+    Skips over/under and run-line rows (not plain integer ML in consensus cell).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    rows: list[tuple[str, int]] = []
+    for tr in soup.find_all("tr"):
+        tds = tr.find_all("td")
+        if len(tds) < 2:
+            continue
+        first = tds[0].get_text(" ", strip=True)
+        label = _vi_row_team_label(first)
+        if not label:
+            continue
+        cell = _odds_cell_for_row(tds)
+        cl = cell.lower()
+        if re.match(r"^[ou]\d", cl):
+            continue
+        if re.search(r"\d+\.\d", cl):
+            continue
+        ci = _consensus_int(cell)
+        if ci is None:
+            continue
+        rows.append((label, ci))
+    pairs: list[tuple[tuple[str, int], tuple[str, int]]] = []
+    for i in range(0, len(rows) - 1, 2):
+        pairs.append((rows[i], rows[i + 1]))
     if max_pairs is not None and len(pairs) > max_pairs:
         pairs = pairs[:max_pairs]
     return pairs
@@ -187,21 +414,25 @@ def parse_vegasinsider_totals(html: str, max_games: int | None = None) -> list[d
     return games
 
 
-def scrape_odds_pages(max_games: int) -> tuple[list[tuple[int, int]], list[dict[str, float | int | None]], str]:
+def scrape_odds_pages(
+    max_pairs_hint: int,
+) -> tuple[list[tuple[tuple[str, int], tuple[str, int]]], list[dict[str, float | int | None]], str]:
     """
-    Try VegasInsider first, then OddsShark HTML (same HTML parsers; sites change often).
-    Returns (ml_pairs, totals_list, bookmaker_label). Caps lists to max_games (statsapi slate size).
+    Try VegasInsider first, then OddsShark. ML pairs include team labels for schedule matching.
+    Parse extra pairs (up to 2x slate) so reordering vs statsapi still matches; cap for safety.
     """
-    cap = max_games if max_games > 0 else None
+    cap = None
+    if max_pairs_hint > 0:
+        cap = min(60, max_pairs_hint * 2 + 8)
     html = _fetch_html(VEGAS_INSIDER_MLB_ODDS)
     if html:
-        ml = parse_vegasinsider_moneylines(html, max_pairs=cap)
+        ml = parse_vegasinsider_moneyline_pairs(html, max_pairs=cap)
         tot = parse_vegasinsider_totals(html, max_games=cap)
         if ml:
             return ml, tot, "VegasInsider (consensus)"
     html2 = _fetch_html(ODDS_SHARK_MLB_ODDS)
     if html2:
-        ml2 = parse_vegasinsider_moneylines(html2, max_pairs=cap)
+        ml2 = parse_vegasinsider_moneyline_pairs(html2, max_pairs=cap)
         tot2 = parse_vegasinsider_totals(html2, max_games=cap)
         if ml2:
             return ml2, tot2, "OddsShark (consensus-style)"
@@ -231,7 +462,8 @@ def build_payload() -> dict:
     sched = load_schedule_statsapi(now_et)
     nsched = len(sched)
 
-    ml_pairs, totals_list, book_title = scrape_odds_pages(max_games=nsched)
+    ml_pairs, totals_list, book_title = scrape_odds_pages(max_pairs_hint=nsched)
+    ml_assign = _assign_moneylines_and_total_indices(sched, ml_pairs)
 
     games_out: list[dict] = []
     for i, g in enumerate(sched):
@@ -243,14 +475,15 @@ def build_payload() -> dict:
         ap = (g.get("away_probable_pitcher") or None) and str(g.get("away_probable_pitcher")).strip()
 
         ml = {"home_odds": None, "away_odds": None}
-        if i < len(ml_pairs):
-            away_ml, home_ml = ml_pairs[i]
+        away_ml, home_ml, vi_idx = ml_assign[i]
+        if away_ml is not None:
             ml["away_odds"] = away_ml
+        if home_ml is not None:
             ml["home_odds"] = home_ml
 
         total: dict[str, float | int | None] = {"line": None, "over_odds": None, "under_odds": None}
-        if i < len(totals_list):
-            t = totals_list[i]
+        if vi_idx is not None and vi_idx < len(totals_list):
+            t = totals_list[vi_idx]
             total["line"] = t.get("line")
             total["over_odds"] = t.get("over_odds")
             total["under_odds"] = t.get("under_odds")
@@ -281,9 +514,30 @@ def build_payload() -> dict:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="MLB schedule + scraped consensus odds → live_mlb_odds.json")
+    parser.add_argument(
+        "--print-raw-vi",
+        action="store_true",
+        help="Fetch VegasInsider, print raw ML rows and pairs (before statsapi matching), then exit.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignore 30m freshness guard and rewrite JSON.",
+    )
+    args = parser.parse_args()
+
+    if args.print_raw_vi:
+        html = _fetch_html(VEGAS_INSIDER_MLB_ODDS)
+        if not html:
+            print("Failed to fetch VegasInsider HTML.", file=sys.stderr)
+            return 1
+        print_raw_vi_moneylines_for_verification(html)
+        return 0
+
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    if _is_fresh(OUTPUT_PATH):
+    if not args.force and _is_fresh(OUTPUT_PATH):
         print("Data is fresh.")
         return 0
 
