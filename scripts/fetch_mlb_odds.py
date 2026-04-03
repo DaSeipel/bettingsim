@@ -116,14 +116,31 @@ def _vi_row_team_label(first_cell: str) -> str | None:
     return s
 
 
+def _vi_label_strip_pitcher_suffix(vi_label: str) -> str:
+    """
+    VI row labels often include probable pitcher: 'Dodgers Sheehan (R)', 'Red Sox Gray (R)'.
+    Matching uses only the team nickname; strip trailing 'LastName (L)' / '(R)'.
+    With ≥3 tokens and last token like '(R)', drop the last two tokens so multi-word
+    nicknames stay intact ('Blue Jays Cease (R)' → 'Blue Jays').
+    """
+    s = " ".join(vi_label.split())
+    if not s:
+        return s
+    toks = s.split()
+    while len(toks) >= 3 and re.fullmatch(r"\([lLrR]\)", toks[-1] or ""):
+        toks = toks[:-2]
+    return " ".join(toks)
+
+
 def _vi_label_matches_statsapi_team(vi_label: str, statsapi_full_name: str) -> bool:
     """
     True when VI's first-column label refers to the same club as statsapi's full name.
     VI often uses the bare nickname ('Rays', 'Brewers'); statsapi uses city + name.
+    Pitcher suffixes on VI labels are stripped first (see _vi_label_strip_pitcher_suffix).
     """
     sched = normalize_mlb_team_name_for_join(statsapi_full_name)
     alias = MLB_TEAM_NAME_ALIASES.get(sched, sched)
-    raw = vi_label.strip()
+    raw = _vi_label_strip_pitcher_suffix(vi_label.strip())
     if not raw or not alias:
         return False
     expanded = VI_TEAM_LABEL_HINTS.get(raw.lower(), raw)
@@ -149,7 +166,7 @@ def _team_match_score(vi_label: str, statsapi_full_name: str) -> int:
         fuzz = None
     sched = normalize_mlb_team_name_for_join(statsapi_full_name)
     alias = MLB_TEAM_NAME_ALIASES.get(sched, sched)
-    vi = vi_label.strip()
+    vi = _vi_label_strip_pitcher_suffix(vi_label.strip())
     expanded = VI_TEAM_LABEL_HINTS.get(vi.lower(), vi)
     if not fuzz:
         a, b = expanded.lower(), alias.lower()

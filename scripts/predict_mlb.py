@@ -445,7 +445,20 @@ def main() -> int:
                         flush=True,
                     )
 
-        if hr is None or ar is None or home_odds_am is None or away_odds_am is None:
+        skip_parts: list[str] = []
+        if hr is None:
+            skip_parts.append(f"no_team_stats_row_home({home!r})")
+        if ar is None:
+            skip_parts.append(f"no_team_stats_row_away({away!r})")
+        if home_odds_am is None:
+            skip_parts.append("missing_or_invalid_home_moneyline")
+        if away_odds_am is None:
+            skip_parts.append("missing_or_invalid_away_moneyline")
+        if skip_parts:
+            print(
+                f"{away} @ {home} | SKIP (before model/edges): {'; '.join(skip_parts)}",
+                flush=True,
+            )
             continue
 
         hp = _find_pitcher_row(pitcher_df, g.get("home_pitcher"))
@@ -480,6 +493,7 @@ def main() -> int:
             summ = value_summary_moneyline(model_p, odds_used, float(home_odds_am))
 
         edge = float(summ["edge"])
+        # One line per game before edge / MIN_EDGE filtering (stdout so it shows even when stderr is quiet).
         print(
             f"{away} @ {home} | ho={home_odds_am} ao={away_odds_am} | p_home={p_home:.3f} | "
             f"park={game_park_mult:.3f} | "
@@ -488,6 +502,18 @@ def main() -> int:
         )
 
         if edge < MIN_EDGE_DECIMAL:
+            if edge_h < 0 and edge_a < 0:
+                print(
+                    f"{away} @ {home} | NO_PLAY: both edges negative "
+                    f"(edge_h={edge_h:.4f} edge_a={edge_a:.4f}); best_pick_edge={edge:.4f} < MIN {MIN_EDGE_DECIMAL}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"{away} @ {home} | NO_PLAY: best_pick_edge={edge:.4f} < MIN {MIN_EDGE_DECIMAL} "
+                    f"(edge_h={edge_h:.4f} edge_a={edge_a:.4f})",
+                    flush=True,
+                )
             continue
 
         plays.append(
