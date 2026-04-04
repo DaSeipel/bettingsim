@@ -1,5 +1,5 @@
 {
-  "fetched_at_utc": "2026-04-04T13:52:07.735683Z",
+  "fetched_at_utc": "2026-04-04T18:14:45.005449Z",
   "sport_key": "baseball_mlb",
   "source": "statsapi_schedule+web_scrape",
   "bookmaker_title": "VegasInsider (consensus)",
@@ -244,7 +244,7 @@
       "commence_time": "2026-04-05T00:10:00Z",
       "home_team": "Colorado Rockies",
       "away_team": "Philadelphia Phillies",
-      "home_pitcher": null,
+      "home_pitcher": "Brennan Bernardino",
       "away_pitcher": "Jes\u00fas Luzardo",
       "bookmaker_title": "VegasInsider (consensus)",
       "moneyline": {

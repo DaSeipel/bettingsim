@@ -41,8 +41,22 @@ OUT_PATH = ROOT / "data" / "cache" / "mlb_value_plays.json"
 PITCHER_STATS_PATH = ROOT / "data" / "mlb" / "pitcher_stats.csv"
 PARK_FACTORS_PATH = ROOT / "data" / "mlb" / "mlb_park_factors.json"
 
-# Temporary: 0% minimum edge (decimal EV >= 0) to verify odds + stats → plays.
-MIN_EDGE_DECIMAL = 0.0
+# Edge and probability filters (decimal edge = EV fraction, e.g. 0.03 = 3%).
+MIN_EDGE_DECIMAL = 0.03  # minimum 3% edge to qualify as a play
+MAX_EDGE_DECIMAL = 0.15  # skip plays above this; prints FLAGGED_HIGH_EDGE
+MIN_MODEL_PROB = 0.42  # skip picks below this win probability; prints SKIP_LOW_PROB
+
+# Pull model win prob toward two-way fair implied (after logistic + clamp, before edge).
+PROB_SHRINK_TOWARD_MARKET = 0.25
+
+# When a starter is missing from pitcher_stats.csv, use league-average rate stats and
+# IP=50 → confidence 0.50 → ~30/70 pitcher/team split (not 0/100).
+MISSING_PITCHER_STATS_ROW: dict[str, float] = {
+    "fip": 4.25,
+    "k9": 8.8,
+    "bb9": 3.2,
+    "innings_pitched": 50.0,
+}
 
 # Max pitcher share when both starters have 100+ IP (confidence 1.0). Below that,
 # pitcher_weight = PITCH_MATCHUP_WEIGHT * min(home_conf, away_conf), team_weight = 1 - pitcher_weight.
@@ -361,6 +375,7 @@ def main() -> int:
 
     from engine.mlb_engine import (
         DEFAULT_MLB_TEAM_STATS_CSV,
+        implied_probability_fair_two_sided,
         load_live_mlb_odds,
         value_summary_moneyline,
     )
@@ -463,10 +478,23 @@ def main() -> int:
 
         hp = _find_pitcher_row(pitcher_df, g.get("home_pitcher"))
         ap = _find_pitcher_row(pitcher_df, g.get("away_pitcher"))
-        p_home, game_park_mult = _home_win_prob(hr, ar, hp, ap, home_team_name=home)
+        if hp is None:
+            hp = MISSING_PITCHER_STATS_ROW
+        if ap is None:
+            ap = MISSING_PITCHER_STATS_ROW
+
+        p_home_model, game_park_mult = _home_win_prob(hr, ar, hp, ap, home_team_name=home)
+
+        fair_home, fair_away = implied_probability_fair_two_sided(
+            float(home_odds_am), float(away_odds_am)
+        )
+        p_home = float(
+            p_home_model
+            - PROB_SHRINK_TOWARD_MARKET * (float(p_home_model) - float(fair_home))
+        )
 
         # edge_h: evaluate HOME side using home_odds_am (first arg = that side's American price).
-        # edge_away: evaluate AWAY side using away_odds_am.
+        # edge_away: evaluate AWAY side using away_odds_am. Uses shrunk p_home toward market fair.
         summ_home = value_summary_moneyline(
             float(p_home), float(home_odds_am), float(away_odds_am)
         )
@@ -495,11 +523,26 @@ def main() -> int:
         edge = float(summ["edge"])
         # One line per game before edge / MIN_EDGE filtering (stdout so it shows even when stderr is quiet).
         print(
-            f"{away} @ {home} | ho={home_odds_am} ao={away_odds_am} | p_home={p_home:.3f} | "
+            f"{away} @ {home} | ho={home_odds_am} ao={away_odds_am} | "
+            f"p_home={p_home:.3f} raw_model={float(p_home_model):.3f} fair_home={fair_home:.3f} | "
             f"park={game_park_mult:.3f} | "
             f"edge_h={edge_h:.4f} edge_a={edge_a:.4f} | pick={pick} at {odds_used}",
             flush=True,
         )
+
+        if model_p < MIN_MODEL_PROB:
+            print(
+                f"SKIP_LOW_PROB: {pick} | model_prob={model_p:.3f}",
+                flush=True,
+            )
+            continue
+
+        if edge > MAX_EDGE_DECIMAL:
+            print(
+                f"FLAGGED_HIGH_EDGE: {pick} | edge={edge:.3f} exceeds MAX",
+                flush=True,
+            )
+            continue
 
         if edge < MIN_EDGE_DECIMAL:
             if edge_h < 0 and edge_a < 0:

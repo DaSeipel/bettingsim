@@ -28,7 +28,14 @@ import requests
 REQUEST_TIMEOUT = 30
 REQUEST_SLEEP_S = 0.12
 BASE = "https://statsapi.mlb.com/api/v1"
-OUTPUT_PATH = Path(__file__).resolve().parent.parent / "data" / "mlb" / "team_stats.csv"
+APP_ROOT = Path(__file__).resolve().parent.parent
+OUTPUT_PATH = APP_ROOT / "data" / "mlb" / "team_stats.csv"
+OUTPUT_2025_PATH = APP_ROOT / "data" / "mlb" / "team_stats_2025.csv"
+OUTPUT_2026_PATH = APP_ROOT / "data" / "mlb" / "team_stats_2026.csv"
+
+# When blending 2025 + 2026 stats, how much weight goes to current (2026) season.
+BLEND_2026_WEIGHT = 0.30
+BLEND_NUMERIC_COLS = ("era", "whip", "woba", "bullpen_era", "win_pct", "run_differential")
 
 
 def _get_json(url: str) -> dict:
@@ -237,16 +244,115 @@ def fetch_mlb_team_stats(season: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def fetch_mlb_team_stats_light(season: int) -> pd.DataFrame:
+    """Like fetch_mlb_team_stats but skips the expensive bullpen_era roster lookup.
+    Uses team-level ERA as bullpen_era placeholder (good enough for early-season 2026)."""
+    time.sleep(REQUEST_SLEEP_S)
+    teams_data = _get_json(f"{BASE}/teams?sportId=1&season={season}")
+    teams = [t for t in teams_data.get("teams", []) if t.get("sport", {}).get("id") == 1]
+    wl_by_tid = standings_map_by_team_id(season)
+    rows: list[dict] = []
+    for t in sorted(teams, key=lambda x: x.get("name", "")):
+        tid = int(t["id"])
+        name = str(t.get("name", ""))
+        time.sleep(REQUEST_SLEEP_S)
+        pitch = team_pitching_row(tid, season)
+        time.sleep(REQUEST_SLEEP_S)
+        woba = team_hitting_woba(tid, season)
+        wl = wl_by_tid.get(tid) or {}
+        w = int(wl.get("wins") or 0)
+        l_ = int(wl.get("losses") or 0)
+        gp = w + l_
+        wp_f = float(w / gp) if gp > 0 else float("nan")
+        rd = wl.get("run_differential")
+        rows.append(
+            {
+                "team_id": tid,
+                "team_name": name,
+                "season": season,
+                "wins": w,
+                "losses": l_,
+                "win_pct": round(wp_f, 5) if wp_f == wp_f else float("nan"),
+                "run_differential": rd if rd is not None else float("nan"),
+                "era": pitch["era"],
+                "whip": pitch["whip"],
+                "woba": round(woba, 4) if woba == woba else float("nan"),
+                "bullpen_era": pitch["era"],  # team ERA as proxy
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def blend_team_stats(df_2025: pd.DataFrame, df_2026: pd.DataFrame, w26: float = BLEND_2026_WEIGHT) -> pd.DataFrame:
+    """Blend 2025 and 2026 per-team numeric stats. If a team has 0 games in 2026, use 100% 2025."""
+    w25 = 1.0 - w26
+    merged = df_2025.merge(df_2026, on="team_id", suffixes=("_25", "_26"), how="left")
+    rows: list[dict] = []
+    for _, r in merged.iterrows():
+        gp_26 = int(r.get("wins_26") or 0) + int(r.get("losses_26") or 0)
+        has_2026 = gp_26 > 0
+
+        row: dict = {
+            "team_id": int(r["team_id"]),
+            "team_name": r.get("team_name_25") or r.get("team_name_26") or "",
+            "season": "blend",
+            "wins": int(r.get("wins_26") or r.get("wins_25") or 0),
+            "losses": int(r.get("losses_26") or r.get("losses_25") or 0),
+        }
+        for col in BLEND_NUMERIC_COLS:
+            v25 = r.get(f"{col}_25")
+            v26 = r.get(f"{col}_26")
+            v25_ok = v25 is not None and v25 == v25  # not NaN
+            v26_ok = v26 is not None and v26 == v26 and has_2026
+            if v25_ok and v26_ok:
+                row[col] = round(w25 * float(v25) + w26 * float(v26), 5)
+            elif v25_ok:
+                row[col] = float(v25)
+            elif v26_ok:
+                row[col] = float(v26)
+            else:
+                row[col] = float("nan")
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Fetch MLB team stats into data/mlb/team_stats.csv")
     p.add_argument("--season", type=int, default=None, help="Season year (default: latest completed MLB season heuristic)")
+    p.add_argument(
+        "--season-blend",
+        action="store_true",
+        help="Fetch both 2025 and 2026, blend into team_stats.csv (saves per-year CSVs too).",
+    )
     args = p.parse_args()
+
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.season_blend:
+        print("Fetching 2025 team stats (full, with bullpen roster lookup)...")
+        df_25 = fetch_mlb_team_stats(2025)
+        df_25.to_csv(OUTPUT_2025_PATH, index=False)
+        print(f"Saved {len(df_25)} teams to {OUTPUT_2025_PATH}")
+
+        print("Fetching 2026 team stats (light, no bullpen roster lookup)...")
+        df_26 = fetch_mlb_team_stats_light(2026)
+        df_26.to_csv(OUTPUT_2026_PATH, index=False)
+        print(f"Saved {len(df_26)} teams to {OUTPUT_2026_PATH}")
+
+        blended = blend_team_stats(df_25, df_26, w26=BLEND_2026_WEIGHT)
+        blended.to_csv(OUTPUT_PATH, index=False)
+        print(
+            f"Blended {len(blended)} teams (weight: {BLEND_2026_WEIGHT:.0%} 2026 / "
+            f"{1 - BLEND_2026_WEIGHT:.0%} 2025) → {OUTPUT_PATH}"
+        )
+        return
+
     season = args.season
     if season is None:
         from datetime import date
 
         today = date.today()
-        # After November, use current year; before April spring training, use prior year completed stats.
         if today.month >= 11:
             season = today.year
         elif today.month < 4:
@@ -259,7 +365,6 @@ def main() -> None:
     if df.empty:
         print("No teams returned.")
         return
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(OUTPUT_PATH, index=False)
     print(f"Saved {len(df)} teams to {OUTPUT_PATH}")
 

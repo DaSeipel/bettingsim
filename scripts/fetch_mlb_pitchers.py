@@ -44,6 +44,10 @@ DEFAULT_ODDS_PATH = APP_ROOT / "data" / "odds" / "live_mlb_odds.json"
 OUTPUT_PATH = APP_ROOT / "data" / "mlb" / "pitcher_stats.csv"
 FIP_C_FGM = 3.10
 
+# Blend weight for 2026 rate stats when both seasons are available.
+PITCHER_BLEND_2026_WEIGHT = 0.30
+_PITCHER_BLEND_RATE_COLS = ("era", "fip", "whip", "k9", "bb9")
+
 
 def _get_json(url: str) -> dict:
     r = requests.get(url, timeout=REQUEST_TIMEOUT)
@@ -241,6 +245,36 @@ def unique_pitcher_names_from_odds(odds_path: Path) -> list[str]:
     return order
 
 
+def blend_pitcher_rows(
+    row_2025: dict | None,
+    row_2026: dict | None,
+    w26: float = PITCHER_BLEND_2026_WEIGHT,
+) -> dict | None:
+    """Blend 2025 and 2026 rate stats for a single pitcher.
+    Uses 2026 IP (current workload), blends ERA/FIP/WHIP/K9/BB9.
+    If only one season exists, returns that row unchanged."""
+    if row_2025 is None and row_2026 is None:
+        return None
+    if row_2025 is None:
+        return row_2026
+    if row_2026 is None:
+        return row_2025
+    w25 = 1.0 - w26
+    out = dict(row_2025)
+    out["season"] = "blend"
+    out["innings_pitched"] = row_2026.get("innings_pitched") or row_2025.get("innings_pitched") or 0.0
+    for col in _PITCHER_BLEND_RATE_COLS:
+        v25 = row_2025.get(col)
+        v26 = row_2026.get(col)
+        if v25 is not None and v26 is not None:
+            out[col] = round(w25 * float(v25) + w26 * float(v26), 3)
+        elif v25 is not None:
+            out[col] = v25
+        elif v26 is not None:
+            out[col] = v26
+    return out
+
+
 def infer_season_from_odds_blob(blob: dict | None, fallback: int) -> int:
     if not blob:
         return fallback
@@ -285,6 +319,7 @@ def main() -> int:
         print(f"Wrote empty {OUTPUT_PATH}")
         return 0
 
+    blend_2026 = season >= 2026
     rows: list[dict] = []
     for odds_name in names:
         time.sleep(REQUEST_SLEEP_S)
@@ -296,22 +331,41 @@ def main() -> int:
         if pid is None:
             print(f"No MLB match for pitcher name: {odds_name!r}", file=sys.stderr)
             continue
+
+        row_2025: dict | None = None
+        row_2026: dict | None = None
+
         time.sleep(REQUEST_SLEEP_S)
         try:
-            row = fetch_pitcher_season_row(pid, season, odds_name, fn or "")
+            row_2025 = fetch_pitcher_season_row(pid, 2025, odds_name, fn or "")
         except requests.RequestException as e:
-            print(f"Stats failed for {odds_name!r} (id={pid}): {e}", file=sys.stderr)
-            continue
+            print(f"  2025 stats failed for {odds_name!r}: {e}", file=sys.stderr)
+
+        if blend_2026:
+            time.sleep(REQUEST_SLEEP_S)
+            try:
+                row_2026 = fetch_pitcher_season_row(pid, 2026, odds_name, fn or "")
+            except requests.RequestException as e:
+                print(f"  2026 stats failed for {odds_name!r}: {e}", file=sys.stderr)
+
+        if blend_2026:
+            row = blend_pitcher_rows(row_2025, row_2026, w26=PITCHER_BLEND_2026_WEIGHT)
+            tag = "blend" if row_2025 and row_2026 else ("2026-only" if row_2026 else "2025-only")
+        else:
+            row = row_2025
+            tag = str(season)
+
         if row:
             rows.append(row)
-            print(f"  {odds_name} -> {fn} ({pid}) IP={row.get('innings_pitched')}")
+            print(f"  {odds_name} -> {fn} ({pid}) IP={row.get('innings_pitched')} [{tag}]")
         else:
-            print(f"No {season} pitching split for {odds_name!r} (id={pid})", file=sys.stderr)
+            print(f"No pitching data for {odds_name!r} (id={pid})", file=sys.stderr)
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(rows)
     df.to_csv(OUTPUT_PATH, index=False)
-    print(f"Saved {len(df)} pitcher(s) to {OUTPUT_PATH} (season={season})")
+    label = f"blended 2025+2026 ({PITCHER_BLEND_2026_WEIGHT:.0%}/{1 - PITCHER_BLEND_2026_WEIGHT:.0%})" if blend_2026 else f"season={season}"
+    print(f"Saved {len(df)} pitcher(s) to {OUTPUT_PATH} ({label})")
     return 0
 
 
