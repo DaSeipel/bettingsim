@@ -92,7 +92,12 @@ def archive_value_plays(
             home_team = str(row.get("home_team", "")).strip() or "—"
             away_team = str(row.get("away_team", "")).strip() or "—"
             market = str(row.get("Market", "")).strip().lower() or "h2h"
-            bet_type = {"h2h": "Moneyline", "spreads": "Spread", "totals": "Over/Under"}.get(market, market)
+            bet_type = {
+                "h2h": "Moneyline",
+                "moneyline": "Moneyline",
+                "spreads": "Spread",
+                "totals": "Over/Under",
+            }.get(market, market)
             recommended_side = str(row.get("Selection", "")).strip() or "—"
             # Always store team name, not "Home"/"Away", so cards show correct pick (e.g. Pennsylvania +9.5 not YALE +9.5)
             if recommended_side.strip().lower() == "home" and home_team:

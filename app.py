@@ -62,7 +62,6 @@ from engine.clv_tracker import (
     mark_bet_result,
 )
 from engine.play_history import archive_value_plays, delete_play, load_play_history, update_play_result
-from engine.supabase_sync import mlb_rows_from_dataframe, upsert_mlb_card
 from engine.auto_result_job import run_auto_result
 from engine.ncaab_march_context import add_ncaab_march_context_to_df, is_after_selection_sunday
 from engine.betting_models import (
@@ -2067,6 +2066,98 @@ def _mlb_top_two_potd_picks(mlb_df: pd.DataFrame) -> tuple[Optional[dict], Optio
     return d1, d2
 
 
+def _mlb_dataframe_for_play_history(mlb_df: pd.DataFrame) -> pd.DataFrame:
+    """Build rows for archive_value_plays: League='MLB', Market in h2h/spreads/totals for bet_type mapping."""
+    if mlb_df is None or mlb_df.empty:
+        return pd.DataFrame()
+    out_rows: list[dict] = []
+    for _, r in mlb_df.iterrows():
+        away = str(r.get("away_team", "")).strip()
+        home = str(r.get("home_team", "")).strip()
+        if not away or not home:
+            continue
+        sel = str(r.get("selection", "")).strip()
+        market_raw = str(r.get("market", "")).strip().lower()
+        point_val = None
+        if market_raw in ("moneyline", "h2h"):
+            market = "h2h"
+        elif market_raw in ("spreads", "spread"):
+            market = "spreads"
+            for k in ("spread", "point", "spread_line"):
+                v = r.get(k)
+                if v is not None and pd.notna(v):
+                    try:
+                        point_val = float(v)
+                        break
+                    except (TypeError, ValueError):
+                        pass
+        elif market_raw in ("totals", "total"):
+            market = "totals"
+            tl = r.get("total_line")
+            if tl is not None and pd.notna(tl):
+                try:
+                    point_val = float(tl)
+                except (TypeError, ValueError):
+                    point_val = None
+        else:
+            market = "h2h"
+        edge_dec = r.get("edge")
+        if edge_dec is not None and pd.notna(edge_dec):
+            try:
+                val_pct = float(edge_dec) * 100.0
+            except (TypeError, ValueError):
+                val_pct = 0.0
+        else:
+            val_pct = 0.0
+            ep = r.get("edge_pct")
+            if ep is not None and pd.notna(ep):
+                try:
+                    fv = float(ep)
+                    val_pct = fv if abs(fv) >= 1.0 else fv * 100.0
+                except (TypeError, ValueError):
+                    pass
+        try:
+            odds = float(r.get("odds_american", -110) or -110)
+        except (TypeError, ValueError):
+            odds = -110.0
+        try:
+            mp = float(r.get("model_prob", 0.5) or 0.5)
+        except (TypeError, ValueError):
+            mp = 0.5
+        try:
+            frac = kelly_fraction(odds, mp, fraction=kelly_frac)
+            rec_stake = round(BANKROLL_FOR_STAKES * frac, 2)
+        except (TypeError, ValueError):
+            rec_stake = None
+        parts: list[str] = []
+        ap_a = str(r.get("away_pitcher", "")).strip()
+        ap_h = str(r.get("home_pitcher", "")).strip()
+        if ap_a or ap_h:
+            parts.append(f"SP: {ap_a or 'TBD'} @ {ap_h or 'TBD'}")
+        eid = r.get("event_id")
+        if eid is not None and str(eid).strip():
+            parts.append(f"event_id={eid}")
+        reasoning = " · ".join(parts) if parts else None
+        out_rows.append(
+            {
+                "League": "MLB",
+                "Event": f"{away} @ {home}",
+                "Selection": sel or "—",
+                "Market": market,
+                "Odds": odds,
+                "Value (%)": max(0.0, min(99.0, val_pct)),
+                "model_prob": mp,
+                "home_team": home,
+                "away_team": away,
+                "point": point_val,
+                "Recommended Stake": rec_stake,
+                "confidence_tier": "Medium",
+                "reasoning_summary": reasoning,
+            }
+        )
+    return pd.DataFrame(out_rows)
+
+
 def _normalize_date_to_iso(raw: str) -> Optional[str]:
     """Parse date from YYYY-MM-DD or MM-DD-YYYY into YYYY-MM-DD; return None if unparseable."""
     s = str(raw).strip()
@@ -3330,27 +3421,21 @@ with tab_mlb:
             .hide(axis="index")
         )
         st.dataframe(styled, use_container_width=True)
-        if st.button("Sync to Supabase", key="mlb_sync_supabase", help="Upsert today's visible rows to table mlb_picks (requires [supabase] in secrets)"):
+        if st.button(
+            "Save Picks",
+            key="mlb_save_play_history",
+            help="Archive today's MLB rows to play_history in data/espn.db (sport=MLB). Re-save updates edges/odds for the same date.",
+        ):
             try:
-                payload = mlb_rows_from_dataframe(mlb_df)
-                if not payload:
-                    st.warning("Nothing to sync — no rows in today's MLB card.")
+                _mlb_archive_df = _mlb_dataframe_for_play_history(mlb_df)
+                if _mlb_archive_df.empty:
+                    st.warning("Nothing to save — no valid rows on today's card.")
                 else:
-                    result = upsert_mlb_card(payload)
-                    n = len(payload)
-                    rows_back = getattr(result, "data", None) if result is not None else None
-                    if isinstance(rows_back, list) and len(rows_back) > 0:
-                        st.success(
-                            f"**Success:** Upserted **{n}** row(s) to Supabase table `mlb_picks` "
-                            f"(server returned {len(rows_back)} record(s))."
-                        )
-                    else:
-                        st.success(
-                            f"**Success:** Upsert completed for **{n}** pick(s) on table `mlb_picks` "
-                            f"(cloud write finished with no exception)."
-                        )
+                    n_saved = archive_value_plays(_mlb_archive_df, as_of_date=date.today())
+                    _load_play_history_cached.clear()
+                    st.success(f"Saved **{n_saved}** MLB pick(s) to local **play_history** (`data/espn.db`, sport=**MLB**).")
             except Exception as e:
-                st.error(f"**Error:** Supabase sync did not complete — {e}")
+                st.error(f"Could not save picks — {e}")
 
 with tab_mark_results:
     st.subheader("Mark Results")
