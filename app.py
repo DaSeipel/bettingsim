@@ -105,7 +105,7 @@ ENABLE_SCHEDULER = False
 ENABLE_STARTUP_THREAD = False
 
 # Human-readable market labels (replaces h2h, spreads, totals in UI)
-MARKET_LABELS = {"h2h": "Winner", "spreads": "Spread", "totals": "Over/Under"}
+MARKET_LABELS = {"h2h": "Winner", "spreads": "Spread", "totals": "Over/Under", "moneyline": "Moneyline"}
 
 # NBA team full name -> abbreviation
 NBA_TEAM_ABBREV: dict[str, str] = {
@@ -982,6 +982,7 @@ def _render_potd_card_html(
         matchup_html += f' <span class="potd-abbrev">({home_abbrev})</span>'
     commence = str(r.get("commence_time", "") or "").strip()
     tipoff = format_start_time(commence) if commence else (str(r.get("Start Time", "") or "").strip() or "—")
+    _start_lbl = "First pitch" if league and "MLB" in league else "Tip-off"
     badge_text = _potd_badge_text(r)
     reason = r.get("reason")
     if not reason and (feature_matrix is not None or (b2b_teams and len(b2b_teams) > 0)):
@@ -1019,7 +1020,7 @@ def _render_potd_card_html(
     html = f"""
     <div class="potd-card potd-card--{accent}">
         <div class="potd-league">{_html_escape(league)}</div>
-        <div class="potd-tipoff">Tip-off: {_html_escape(tipoff)}</div>
+        <div class="potd-tipoff">{_html_escape(_start_lbl)}: {_html_escape(tipoff)}</div>
         <div class="potd-matchup">{matchup_html}</div>
         <div class="potd-badge-row"><div class="potd-badge">{_html_escape(badge_text)}</div><span class="potd-odds-inline">{odds_str}</span></div>
         {f'<div class="potd-current-line">{_html_escape(current_line)}</div>' if current_line else ''}
@@ -1947,6 +1948,125 @@ def _load_mlb_value_plays_for_today() -> tuple[pd.DataFrame, list[dict]]:
     return pd.DataFrame(filtered), filtered
 
 
+def _ncaab_season_includes_date(d: date) -> bool:
+    """Regular season + tournament: early November through the first week of April (inclusive through Apr 7)."""
+    m, day = d.month, d.day
+    if m in (11, 12, 1, 2, 3):
+        return True
+    if m == 4 and day <= 7:
+        return True
+    return False
+
+
+def _mlb_season_includes_date(d: date) -> bool:
+    """MLB Play of the Day window: April through October (regular season / playoffs)."""
+    return d.month in (4, 5, 6, 7, 8, 9, 10)
+
+
+def _mlb_row_to_potd_dict(row: pd.Series) -> dict:
+    """Shape one MLB value-play row like NCAAB POTD dicts for _render_potd_card_html."""
+    away = str(row.get("away_team", "")).strip()
+    home = str(row.get("home_team", "")).strip()
+    event = f"{away} @ {home}" if away and home else ""
+    market_raw = str(row.get("market", "")).strip().lower()
+    if market_raw in ("moneyline", "h2h"):
+        market_key = "moneyline"
+    elif market_raw in ("spreads", "spread"):
+        market_key = "spreads"
+    elif market_raw in ("totals", "total"):
+        market_key = "totals"
+    else:
+        market_key = market_raw if market_raw else "moneyline"
+    edge_dec = row.get("edge")
+    edge_pct = 0.0
+    if edge_dec is not None and pd.notna(edge_dec):
+        try:
+            edge_pct = float(edge_dec) * 100.0
+        except (TypeError, ValueError):
+            edge_pct = 0.0
+    else:
+        ep = row.get("edge_pct")
+        if ep is not None and pd.notna(ep):
+            try:
+                fv = float(ep)
+                edge_pct = fv if abs(fv) >= 1.0 else fv * 100.0
+            except (TypeError, ValueError):
+                pass
+    point_val = None
+    if market_key == "totals":
+        tl = row.get("total_line")
+        if tl is not None and pd.notna(tl):
+            try:
+                point_val = float(tl)
+            except (TypeError, ValueError):
+                point_val = None
+    elif market_key == "spreads":
+        for k in ("spread", "point", "spread_line"):
+            v = row.get(k)
+            if v is not None and pd.notna(v):
+                try:
+                    point_val = float(v)
+                    break
+                except (TypeError, ValueError):
+                    pass
+    sel = str(row.get("selection", "")).strip()
+    mp = row.get("model_prob")
+    try:
+        mp_f = float(mp) if mp is not None and pd.notna(mp) else None
+    except (TypeError, ValueError):
+        mp_f = None
+    if mp_f is not None:
+        reason = f"Model win probability {mp_f:.1%} vs. implied odds — about {max(0.0, edge_pct):.1f}% expected value."
+    else:
+        reason = f"Model edge about {max(0.0, edge_pct):.1f}% vs. the posted line."
+    ap_away = str(row.get("away_pitcher", "")).strip()
+    ap_home = str(row.get("home_pitcher", "")).strip()
+    if ap_away or ap_home:
+        reason += f" ({ap_away or 'TBD'} @ {ap_home or 'TBD'})."
+    return {
+        "Event": event,
+        "home_team": home,
+        "away_team": away,
+        "Selection": sel,
+        "Market": market_key,
+        "Odds": row.get("odds_american"),
+        "Value (%)": max(0.0, min(99.0, edge_pct)),
+        "point": point_val,
+        "commence_time": str(row.get("commence_time", "") or ""),
+        "Start Time": "",
+        "reason": reason,
+        "high_variance": False,
+        "Recommended Stake": 0,
+        "confidence_tier": "Medium",
+        "Injury Alert": "—",
+        "model_prob": mp_f if mp_f is not None else 0.5,
+    }
+
+
+def _mlb_top_two_potd_picks(mlb_df: pd.DataFrame) -> tuple[Optional[dict], Optional[dict]]:
+    """Top two MLB picks by edge, one row per event_id (or per game time if no event_id)."""
+    if mlb_df is None or mlb_df.empty:
+        return None, None
+    df = mlb_df.copy()
+    if "edge" in df.columns:
+        df["_potd_sort_edge"] = pd.to_numeric(df["edge"], errors="coerce").fillna(0.0).abs() * 100.0
+    elif "edge_pct" in df.columns:
+        ep = pd.to_numeric(df["edge_pct"], errors="coerce").fillna(0.0)
+        df["_potd_sort_edge"] = np.where(np.abs(ep) >= 1.0, np.abs(ep), np.abs(ep) * 100.0)
+    else:
+        return None, None
+    df = df.sort_values("_potd_sort_edge", ascending=False)
+    if "event_id" in df.columns:
+        deduped = df.groupby(df["event_id"].astype(str), sort=False).head(1).reset_index(drop=True)
+    else:
+        subset = [c for c in ("home_team", "away_team", "commence_time") if c in df.columns]
+        deduped = df.drop_duplicates(subset=subset if subset else None, keep="first").reset_index(drop=True)
+    deduped = deduped.sort_values("_potd_sort_edge", ascending=False).reset_index(drop=True)
+    d1 = _mlb_row_to_potd_dict(deduped.iloc[0]) if len(deduped) >= 1 else None
+    d2 = _mlb_row_to_potd_dict(deduped.iloc[1]) if len(deduped) >= 2 else None
+    return d1, d2
+
+
 def _normalize_date_to_iso(raw: str) -> Optional[str]:
     """Parse date from YYYY-MM-DD or MM-DD-YYYY into YYYY-MM-DD; return None if unparseable."""
     s = str(raw).strip()
@@ -2839,13 +2959,13 @@ if _unresolved_stale > 0:
     _slim_alert_html = (
         f'<div class="dashboard-slim-alert">'
         f'⚠️ {_n_plays} {_plays_word} need results marked. '
-        f'<a href="#play-history">Go to Record</a>'
+        f'<a href="#play-history">Go to NCAAB Record</a>'
         f'</div>'
     )
     st.markdown(_slim_alert_html, unsafe_allow_html=True)
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
 tab_overview, tab_ncaab, tab_mlb, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(
-    ["Overview", "NCAAB", "MLB", "NBA (Coming Soon)", "Mark Results", "Record", "Manual Odds", "Game Lookup"]
+    ["Overview", "NCAAB", "MLB", "NBA (Coming Soon)", "Mark Results", "NCAAB Record", "Manual Odds", "Game Lookup"]
 )
 
 with tab_overview:
@@ -2858,29 +2978,56 @@ with tab_overview:
     streak_pick1, streak_pick2 = _get_last_10_potd_results()
     if streak_pick1 or streak_pick2:
         st.markdown(_render_streak_html(streak_pick1, streak_pick2), unsafe_allow_html=True)
-    # ——— Play of the Day (from cache; pipeline runs in scripts/run_pipeline_to_cache.py) ———
+    # ——— Play of the Day (NCAAB: Nov–early Apr; MLB: Apr–Oct) ———
     st.subheader("Play of the Day")
-    pod_1 = potd_picks.get("NCAAB Pick 1")
-    pod_2 = potd_picks.get("NCAAB Pick 2")
-    need_reason_fallback = (pod_1 and not pod_1.get("reason")) or (pod_2 and not pod_2.get("reason"))
-    feature_matrix_potd = _load_feature_matrix_cached(league=None) if need_reason_fallback else None
-    b2b_teams = _get_b2b_teams_cached(datetime.now(ZoneInfo("America/New_York")).date().isoformat(), st.session_state.get("odds_refresh_key", 0)) if need_reason_fallback else frozenset()
-    col_p1, col_p2 = st.columns(2)
-    with col_p1:
-        st.markdown(
-            _render_potd_card_html("NCAAB Pick 1", pod_1, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
-            unsafe_allow_html=True,
-        )
-    with col_p2:
-        st.markdown(
-            _render_potd_card_html("NCAAB Pick 2", pod_2, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
-            unsafe_allow_html=True,
-        )
-    if value_plays_df.empty and pod_1 is None and pod_2 is None:
-        if (odds_api_key or "").strip():
-            st.caption("No Play of the Day: no games or value plays loaded for today. Click **Refresh** below to run the pipeline, or check back later.")
-        else:
-            st.caption("No Play of the Day: set your **Odds API key** in the sidebar and click **Refresh** to run the pipeline.")
+    _overview_cal_day = date.today()
+    _ncaab_potd_season = _ncaab_season_includes_date(_overview_cal_day)
+    _mlb_potd_season = _mlb_season_includes_date(_overview_cal_day)
+    if _ncaab_potd_season:
+        pod_1 = potd_picks.get("NCAAB Pick 1")
+        pod_2 = potd_picks.get("NCAAB Pick 2")
+        need_reason_fallback = (pod_1 and not pod_1.get("reason")) or (pod_2 and not pod_2.get("reason"))
+        feature_matrix_potd = _load_feature_matrix_cached(league=None) if need_reason_fallback else None
+        b2b_teams = _get_b2b_teams_cached(datetime.now(ZoneInfo("America/New_York")).date().isoformat(), st.session_state.get("odds_refresh_key", 0)) if need_reason_fallback else frozenset()
+        st.caption("NCAAB — top two value plays from cache / pipeline.")
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            st.markdown(
+                _render_potd_card_html("NCAAB Pick 1", pod_1, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
+                unsafe_allow_html=True,
+            )
+        with col_p2:
+            st.markdown(
+                _render_potd_card_html("NCAAB Pick 2", pod_2, "orange", feature_matrix=feature_matrix_potd, odds_as_of=datetime.now(timezone.utc), b2b_teams=b2b_teams, march_madness_mode=march_madness_mode),
+                unsafe_allow_html=True,
+            )
+        if value_plays_df.empty and pod_1 is None and pod_2 is None:
+            if (odds_api_key or "").strip():
+                st.caption("No NCAAB Play of the Day: no games or value plays loaded for today. Click **Refresh** below to run the pipeline, or check back later.")
+            else:
+                st.caption("No NCAAB Play of the Day: set your **Odds API key** in the sidebar and click **Refresh** to run the pipeline.")
+    else:
+        st.info("**NCAAB — Season complete.** Picks return in early November through the first week of April.")
+
+    if _mlb_potd_season:
+        st.markdown("##### MLB")
+        st.caption("Top two MLB value plays from `data/cache/mlb_value_plays.json` (same card as NCAAB).")
+        _mlb_df_overview, _ = _load_mlb_value_plays_for_today()
+        mlb_pod_1, mlb_pod_2 = _mlb_top_two_potd_picks(_mlb_df_overview)
+        _mlb_odds_asof = datetime.now(timezone.utc)
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            st.markdown(
+                _render_potd_card_html("MLB Pick 1", mlb_pod_1, "blue", feature_matrix=None, odds_as_of=_mlb_odds_asof, b2b_teams=frozenset(), march_madness_mode=False),
+                unsafe_allow_html=True,
+            )
+        with col_m2:
+            st.markdown(
+                _render_potd_card_html("MLB Pick 2", mlb_pod_2, "blue", feature_matrix=None, odds_as_of=_mlb_odds_asof, b2b_teams=frozenset(), march_madness_mode=False),
+                unsafe_allow_html=True,
+            )
+        if mlb_pod_1 is None and mlb_pod_2 is None:
+            st.caption("No MLB plays in cache for today. Open the **MLB** tab to run the model or update the cache.")
 
     st.divider()
 
@@ -3371,7 +3518,7 @@ with tab_mark_results:
         st.info("No past plays in the last 90 days to mark. Plays from yesterday and earlier appear here once they are archived.")
 
 with tab_play_history:
-    st.subheader("Record")
+    st.subheader("NCAAB Record")
     _record_view = st.radio("View", ["All Picks", "Regular Season", "March Madness"], horizontal=True, label_visibility="collapsed")
     st.caption("NCAAB daily picks & NCAA Tournament value plays (last 30 days).")
     _from = date.today() - timedelta(days=30)
