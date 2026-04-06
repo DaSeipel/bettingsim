@@ -1,147 +1,75 @@
 {
-  "fetched_at_utc": "2026-04-05T14:42:04.768849Z",
+  "fetched_at_utc": "2026-04-06T21:04:58.765606Z",
   "sport_key": "baseball_mlb",
   "source": "statsapi_schedule+web_scrape",
   "bookmaker_title": "VegasInsider (consensus)",
-  "games_date_et": "2026-04-05",
+  "games_date_et": "2026-04-06",
   "games": [
     {
-      "event_id": "824459",
-      "commence_time": "2026-04-05T17:10:00Z",
-      "home_team": "Cleveland Guardians",
+      "event_id": "823002",
+      "commence_time": "2026-04-06T20:10:00Z",
+      "home_team": "Tampa Bay Rays",
       "away_team": "Chicago Cubs",
-      "home_pitcher": "Slade Cecconi",
-      "away_pitcher": "Edward Cabrera",
+      "home_pitcher": "Shane McClanahan",
+      "away_pitcher": "Jameson Taillon",
       "bookmaker_title": "VegasInsider (consensus)",
       "moneyline": {
-        "home_odds": -105,
-        "away_odds": -115
-      },
-      "total": {
-        "line": 7.5,
-        "over_odds": 102,
-        "under_odds": -122
-      }
-    },
-    {
-      "event_id": "824460",
-      "commence_time": "2026-04-05T17:15:00Z",
-      "home_team": "Cleveland Guardians",
-      "away_team": "Chicago Cubs",
-      "home_pitcher": "Parker Messick",
-      "away_pitcher": "Shota Imanaga",
-      "bookmaker_title": "VegasInsider (consensus)",
-      "moneyline": {
-        "home_odds": 103,
-        "away_odds": -124
-      },
-      "total": {
-        "line": 7.5,
-        "over_odds": -110,
-        "under_odds": -110
-      }
-    },
-    {
-      "event_id": "822756",
-      "commence_time": "2026-04-05T17:35:00Z",
-      "home_team": "Washington Nationals",
-      "away_team": "Los Angeles Dodgers",
-      "home_pitcher": "Foster Griffin",
-      "away_pitcher": "Roki Sasaki",
-      "bookmaker_title": "VegasInsider (consensus)",
-      "moneyline": {
-        "home_odds": 179,
-        "away_odds": -219
-      },
-      "total": {
-        "line": 9.0,
-        "over_odds": -118,
-        "under_odds": -102
-      }
-    },
-    {
-      "event_id": "823405",
-      "commence_time": "2026-04-05T17:35:00Z",
-      "home_team": "Pittsburgh Pirates",
-      "away_team": "Baltimore Orioles",
-      "home_pitcher": "Braxton Ashcraft",
-      "away_pitcher": "Chris Bassitt",
-      "bookmaker_title": "VegasInsider (consensus)",
-      "moneyline": {
-        "home_odds": -131,
-        "away_odds": 109
-      },
-      "total": {
-        "line": 8.5,
-        "over_odds": -105,
-        "under_odds": -115
-      }
-    },
-    {
-      "event_id": "824781",
-      "commence_time": "2026-04-05T17:35:00Z",
-      "home_team": "Boston Red Sox",
-      "away_team": "San Diego Padres",
-      "home_pitcher": "Ranger Suarez",
-      "away_pitcher": "Walker Buehler",
-      "bookmaker_title": "VegasInsider (consensus)",
-      "moneyline": {
-        "home_odds": -156,
-        "away_odds": 129
-      },
-      "total": {
-        "line": 9.0,
-        "over_odds": -108,
-        "under_odds": -112
-      }
-    },
-    {
-      "event_id": "823566",
-      "commence_time": "2026-04-05T17:35:00Z",
-      "home_team": "New York Yankees",
-      "away_team": "Miami Marlins",
-      "home_pitcher": "Max Fried",
-      "away_pitcher": "Chris Paddack",
-      "bookmaker_title": "VegasInsider (consensus)",
-      "moneyline": {
-        "home_odds": -271,
-        "away_odds": 218
+        "home_odds": -102,
+        "away_odds": -118
       },
       "total": {
         "line": 8.0,
-        "over_odds": -118,
-        "under_odds": -102
+        "over_odds": -107,
+        "under_odds": -113
       }
     },
     {
-      "event_id": "823729",
-      "commence_time": "2026-04-05T18:10:00Z",
-      "home_team": "Minnesota Twins",
-      "away_team": "Tampa Bay Rays",
-      "home_pitcher": "Simeon Woods Richardson",
-      "away_pitcher": "Nick Martinez",
+      "event_id": "824456",
+      "commence_time": "2026-04-06T22:10:00Z",
+      "home_team": "Cleveland Guardians",
+      "away_team": "Kansas City Royals",
+      "home_pitcher": "Tanner Bibee",
+      "away_pitcher": "Michael Wacha",
       "bookmaker_title": "VegasInsider (consensus)",
       "moneyline": {
-        "home_odds": null,
-        "away_odds": null
+        "home_odds": -115,
+        "away_odds": -105
       },
       "total": {
-        "line": null,
-        "over_odds": null,
-        "under_odds": null
+        "line": 7.5,
+        "over_odds": 100,
+        "under_odds": -120
       }
     },
     {
-      "event_id": "824620",
-      "commence_time": "2026-04-05T18:10:00Z",
-      "home_team": "Chicago White Sox",
-      "away_team": "Toronto Blue Jays",
-      "home_pitcher": "Davis Martin",
-      "away_pitcher": "Eric Lauer",
+      "event_id": "823401",
+      "commence_time": "2026-04-06T22:40:00Z",
+      "home_team": "Pittsburgh Pirates",
+      "away_team": "San Diego Padres",
+      "home_pitcher": "Bubba Chandler",
+      "away_pitcher": "Germ\u00e1n M\u00e1rquez",
       "bookmaker_title": "VegasInsider (consensus)",
       "moneyline": {
-        "home_odds": 119,
-        "away_odds": -143
+        "home_odds": -122,
+        "away_odds": 102
+      },
+      "total": {
+        "line": 8.0,
+        "over_odds": -120,
+        "under_odds": 100
+      }
+    },
+    {
+      "event_id": "823886",
+      "commence_time": "2026-04-06T22:40:00Z",
+      "home_team": "Miami Marlins",
+      "away_team": "Cincinnati Reds",
+      "home_pitcher": "Janson Junk",
+      "away_pitcher": "Brandon Williamson",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": -122,
+        "away_odds": 102
       },
       "total": {
         "line": 8.0,
@@ -150,84 +78,102 @@
       }
     },
     {
-      "event_id": "824131",
-      "commence_time": "2026-04-05T18:10:00Z",
-      "home_team": "Kansas City Royals",
+      "event_id": "822755",
+      "commence_time": "2026-04-06T22:45:00Z",
+      "home_team": "Washington Nationals",
+      "away_team": "St. Louis Cardinals",
+      "home_pitcher": "Zack Littell",
+      "away_pitcher": "Andre Pallante",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": -110,
+        "away_odds": -110
+      },
+      "total": {
+        "line": 8.5,
+        "over_odds": 100,
+        "under_odds": -120
+      }
+    },
+    {
+      "event_id": "824783",
+      "commence_time": "2026-04-06T22:45:00Z",
+      "home_team": "Boston Red Sox",
       "away_team": "Milwaukee Brewers",
-      "home_pitcher": "Kris Bubic",
-      "away_pitcher": "Kyle Harrison",
+      "home_pitcher": "Brayan Bello",
+      "away_pitcher": "Brandon Woodruff",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": -105,
+        "away_odds": -115
+      },
+      "total": {
+        "line": 8.0,
+        "over_odds": -110,
+        "under_odds": -110
+      }
+    },
+    {
+      "event_id": "822832",
+      "commence_time": "2026-04-06T23:07:00Z",
+      "home_team": "Toronto Blue Jays",
+      "away_team": "Los Angeles Dodgers",
+      "home_pitcher": "Max Scherzer",
+      "away_pitcher": "Justin Wrobleski",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": 119,
+        "away_odds": -143
+      },
+      "total": {
+        "line": 8.5,
+        "over_odds": -118,
+        "under_odds": -102
+      }
+    },
+    {
+      "event_id": "823728",
+      "commence_time": "2026-04-06T23:40:00Z",
+      "home_team": "Minnesota Twins",
+      "away_team": "Detroit Tigers",
+      "home_pitcher": "Joe Ryan",
+      "away_pitcher": "Casey Mize",
       "bookmaker_title": "VegasInsider (consensus)",
       "moneyline": {
         "home_odds": -122,
         "away_odds": 102
       },
       "total": {
-        "line": 8.0,
-        "over_odds": 104,
-        "under_odds": -126
+        "line": 7.5,
+        "over_odds": 100,
+        "under_odds": -120
       }
     },
     {
-      "event_id": "822917",
-      "commence_time": "2026-04-05T18:35:00Z",
+      "event_id": "824619",
+      "commence_time": "2026-04-06T23:40:00Z",
+      "home_team": "Chicago White Sox",
+      "away_team": "Baltimore Orioles",
+      "home_pitcher": "Grant Taylor",
+      "away_pitcher": "Brandon Young",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": 123,
+        "away_odds": -149
+      },
+      "total": {
+        "line": 8.5,
+        "over_odds": -115,
+        "under_odds": -105
+      }
+    },
+    {
+      "event_id": "822918",
+      "commence_time": "2026-04-07T00:05:00Z",
       "home_team": "Texas Rangers",
-      "away_team": "Cincinnati Reds",
-      "home_pitcher": "Jack Leiter",
-      "away_pitcher": "Chase Burns",
-      "bookmaker_title": "VegasInsider (consensus)",
-      "moneyline": {
-        "home_odds": -126,
-        "away_odds": 104
-      },
-      "total": {
-        "line": 8.0,
-        "over_odds": -108,
-        "under_odds": -112
-      }
-    },
-    {
-      "event_id": "824379",
-      "commence_time": "2026-04-05T19:10:00Z",
-      "home_team": "Colorado Rockies",
-      "away_team": "Philadelphia Phillies",
-      "home_pitcher": "Tomoyuki Sugano",
-      "away_pitcher": "Taijuan Walker",
-      "bookmaker_title": "VegasInsider (consensus)",
-      "moneyline": {
-        "home_odds": 141,
-        "away_odds": -171
-      },
-      "total": {
-        "line": 11.0,
-        "over_odds": -120,
-        "under_odds": 100
-      }
-    },
-    {
-      "event_id": "825025",
-      "commence_time": "2026-04-05T20:05:00Z",
-      "home_team": "Athletics",
-      "away_team": "Houston Astros",
-      "home_pitcher": "Jacob Lopez",
-      "away_pitcher": "Lance McCullers Jr.",
-      "bookmaker_title": "VegasInsider (consensus)",
-      "moneyline": {
-        "home_odds": 104,
-        "away_odds": -126
-      },
-      "total": {
-        "line": 10.0,
-        "over_odds": -108,
-        "under_odds": -112
-      }
-    },
-    {
-      "event_id": "823238",
-      "commence_time": "2026-04-05T20:05:00Z",
-      "home_team": "San Francisco Giants",
-      "away_team": "New York Mets",
-      "home_pitcher": "Logan Webb",
-      "away_pitcher": "Kodai Senga",
+      "away_team": "Seattle Mariners",
+      "home_pitcher": "Jacob deGrom",
+      "away_pitcher": "Logan Gilbert",
       "bookmaker_title": "VegasInsider (consensus)",
       "moneyline": {
         "home_odds": -120,
@@ -235,62 +181,62 @@
       },
       "total": {
         "line": 7.5,
-        "over_odds": 102,
-        "under_odds": -122
+        "over_odds": -110,
+        "under_odds": -110
       }
     },
     {
-      "event_id": "824053",
-      "commence_time": "2026-04-05T20:07:00Z",
+      "event_id": "824376",
+      "commence_time": "2026-04-07T00:40:00Z",
+      "home_team": "Colorado Rockies",
+      "away_team": "Houston Astros",
+      "home_pitcher": "Ryan Feltner",
+      "away_pitcher": "Cody Bolton",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": 169,
+        "away_odds": -207
+      },
+      "total": {
+        "line": 10.0,
+        "over_odds": -112,
+        "under_odds": -108
+      }
+    },
+    {
+      "event_id": "824052",
+      "commence_time": "2026-04-07T01:38:00Z",
       "home_team": "Los Angeles Angels",
-      "away_team": "Seattle Mariners",
-      "home_pitcher": "Ryan Johnson",
-      "away_pitcher": "Luis Castillo",
-      "bookmaker_title": "VegasInsider (consensus)",
-      "moneyline": {
-        "home_odds": 141,
-        "away_odds": -171
-      },
-      "total": {
-        "line": 9.5,
-        "over_odds": 104,
-        "under_odds": -126
-      }
-    },
-    {
-      "event_id": "825102",
-      "commence_time": "2026-04-05T20:10:00Z",
-      "home_team": "Arizona Diamondbacks",
       "away_team": "Atlanta Braves",
-      "home_pitcher": "Brandon Pfaadt",
-      "away_pitcher": "Mart\u00edn P\u00e9rez",
+      "home_pitcher": "Jos\u00e9 Soriano",
+      "away_pitcher": "Chris Sale",
       "bookmaker_title": "VegasInsider (consensus)",
       "moneyline": {
-        "home_odds": -115,
-        "away_odds": -105
+        "home_odds": 129,
+        "away_odds": -156
       },
       "total": {
-        "line": 9.0,
-        "over_odds": -120,
-        "under_odds": 100
+        "line": 7.5,
+        "over_odds": -115,
+        "under_odds": -105
       }
     },
     {
-      "event_id": "824296",
-      "commence_time": "2026-04-05T23:20:00Z",
-      "home_team": "Detroit Tigers",
-      "away_team": "St. Louis Cardinals",
-      "home_pitcher": "Keider Montero",
-      "away_pitcher": "Kyle Leahy",
+      "event_id": "823237",
+      "commence_time": "2026-04-07T01:45:00Z",
+      "home_team": "San Francisco Giants",
+      "away_team": "Philadelphia Phillies",
+      "home_pitcher": "Adrian Houser",
+      "away_pitcher": "Andrew Painter",
       "bookmaker_title": "VegasInsider (consensus)",
       "moneyline": {
-        "home_odds": -136,
-        "away_odds": 113
+        "home_odds": 100,
+        "away_odds": -120
       },
       "total": {
         "line": 8.0,
-        "over_odds": 100,
-        "under_odds": -120
+        "over_odds": -105,
+        "under_odds": -115
       }
     }
   ]

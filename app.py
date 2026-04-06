@@ -2903,7 +2903,7 @@ def _today_str() -> str:
 
 
 st.title("Bobby Bottle's Betting Model")
-st.caption("NCAAB — college basketball value plays and Play of the Day")
+st.caption("NCAAB & MLB — college basketball value plays and Play of the Day on Overview; MLB value plays on the **MLB** tab.")
 
 # Stat bar: date | plays found | NCAAB | top edge. Use selected slate date and _historical_picks_df when available.
 if not _historical_picks_df.empty:

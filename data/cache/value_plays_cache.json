@@ -7,10 +7,15 @@
     "NCAAB Totals Pick 1": null,
     "NCAAB Totals Pick 2": null
   },
-  "timestamp": "2026-04-02T01:01:38.960919+00:00",
+  "timestamp": "2026-04-06T20:58:19.127999+00:00",
   "odds_source_meta": {
-    "source": "manual_odds",
-    "odds_file": "April_05_2026_Odds.csv"
+    "ncaab_espn_games": 0,
+    "ncaab_espn_rows": 0,
+    "ncaab_rundown_games": 0,
+    "ncaab_rundown_rows": 0,
+    "ncaab_merged_games": 0,
+    "ncaab_odds_rows": 0,
+    "used_ncaab_espn_primary": true
   },
   "value_plays_flagged_count": 0
 }
