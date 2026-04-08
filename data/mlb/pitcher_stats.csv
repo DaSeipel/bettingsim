@@ -2,7 +2,7 @@ odds_name,player_id,full_name,season,era,fip,whip,k9,bb9,innings_pitched
 Mitch Keller,656605,Mitch Keller,blend,2.914,3.475,1.132,6.796,2.56,18.0
 Michael King,650633,Michael King,blend,3.36,4.109,1.2,8.838,3.642,16.667
 Joey Cantillo,676282,Joey Cantillo,blend,2.906,2.834,1.248,11.028,4.102,14.667
-Cole Ragans,666142,Cole Ragans,blend,5.502,3.733,1.384,13.644,3.776,10.667
+Cole Ragans,666142,Cole Ragans,blend,5.166,3.733,1.384,13.644,3.776,10.667
 Sonny Gray,543243,Sonny Gray,blend,3.672,3.302,1.13,8.21,1.794,16.333
 Shane Drohan,675660,Shane Drohan,2026,10.13,6.1,2.63,6.75,13.5,2.667
 Sean Burke,680732,Sean Burke,blend,3.972,3.692,1.292,8.946,3.252,15.0
@@ -21,11 +21,11 @@ Reid Detmers,672282,Reid Detmers,blend,4.216,3.167,1.292,10.694,3.498,15.667
 Grant Holmes,656550,Grant Holmes,blend,3.414,4.355,1.236,8.63,4.17,17.667
 David Peterson,656849,David Peterson,blend,4.988,3.037,1.558,8.236,3.554,14.667
 Ryne Nelson,669194,Ryne Nelson,blend,3.714,4.685,1.07,7.506,2.88,15.0
-Joe Boyle,671212,Joe Boyle,blend,4.074,3.135,1.174,10.152,3.862,11.333
-Colin Rea,607067,Colin Rea,blend,4.074,3.687,1.318,8.85,2.062,6.333
-Eury Pérez,691587,Eury Pérez,blend,4.842,4.839,1.138,9.874,4.104,11.0
-Brady Singer,663903,Brady Singer,blend,4.418,3.828,1.368,9.19,3.108,9.0
-Will Warren,701542,Will Warren,blend,3.744,4.218,1.262,8.928,2.88,10.0
+Joe Boyle,671212,Joe Boyle,blend,4.058,3.595,1.158,9.792,3.914,14.333
+Colin Rea,607067,Colin Rea,blend,3.666,3.591,1.23,8.19,1.926,8.333
+Eury Pérez,691587,Eury Pérez,blend,4.65,4.754,1.198,9.846,4.212,12.0
+Brady Singer,663903,Brady Singer,blend,5.118,3.82,1.516,9.046,3.064,9.333
+Will Warren,701542,Will Warren,blend,3.708,4.122,1.286,9.172,2.856,10.333
 Luis Severino,622663,Luis Severino,blend,5.316,3.875,1.5,8.436,5.118,8.333
 Bailey Ober,641927,Bailey Ober,blend,5.76,4.758,1.332,6.68,2.498,8.0
 Framber Valdez,664285,Framber Valdez,blend,2.496,2.877,1.176,8.262,2.814,12.0

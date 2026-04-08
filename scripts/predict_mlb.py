@@ -3,11 +3,13 @@
 Generate data/cache/mlb_value_plays.json from data/odds/live_mlb_odds.json,
 data/mlb/team_stats.csv (scripts/fetch_mlb_stats.py), and optionally
 data/mlb/pitcher_stats.csv (scripts/fetch_mlb_pitchers.py), and optionally
-data/mlb/recent_form.csv (scripts/fetch_mlb_recent_form.py — run once per day).
+data/mlb/recent_form.csv (scripts/fetch_mlb_recent_form.py — run once per day;
+includes recent_ra_avg for short-term runs allowed and recent_era from last 5 boxscores).
 
 Requires fetch_mlb_odds.py to have run so live_mlb_odds.json exists.
 Best results: run fetch_mlb_pitchers.py after odds so starter FIP/K9/BB9/innings_pitched are available.
-Low-IP starters shrink pitcher weight toward team stats (see PITCH_MATCHUP_WEIGHT / _pitcher_confidence).
+Low-IP starters shrink pitcher weight toward team stats (see PITCH_MATCHUP_WEIGHT / _pitcher_confidence;
+max ~45% pitcher / 55% team when both starters have 100+ IP).
 
 card_date: prefers games_date_et from live odds (MLB calendar day in ET); else America/New_York today.
 """
@@ -29,7 +31,7 @@ _MLB_DEBUG_TEAM_QUALITY = os.environ.get("MLB_DEBUG_TEAM_QUALITY", "").strip().l
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=r".*urllib3 v2 only supports OpenSSL.*")
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -46,7 +48,11 @@ RECENT_FORM_PATH = ROOT / "data" / "mlb" / "recent_form.csv"
 PARK_FACTORS_PATH = ROOT / "data" / "mlb" / "mlb_park_factors.json"
 
 # Recent win% streak adjustment: added to diff_team as (home_bonus - away_bonus).
-FORM_WIN_PCT_COEFF = 0.15
+FORM_WIN_PCT_COEFF = 0.25
+
+# Recent runs-allowed / game (from recent_form.csv, up to 7 games in window vs ~4.5 league avg).
+RECENT_PITCH_RA_COEFF = 0.10
+RECENT_PITCH_RA_TARGET = 4.50
 
 # Edge and probability filters (decimal edge = EV fraction, e.g. 0.03 = 3%).
 MIN_EDGE_DECIMAL = 0.03  # minimum 3% edge to qualify as a play
@@ -61,7 +67,7 @@ JUICE_PENALTY_RATE = 0.003
 PROB_SHRINK_TOWARD_MARKET = 0.25
 
 # When a starter is missing from pitcher_stats.csv, use league-average rate stats and
-# IP=50 → confidence 0.50 → ~30/70 pitcher/team split (not 0/100).
+# IP=50 → confidence 0.50 → pitcher_weight ≈ 0.45×0.5 (not 0/100).
 MISSING_PITCHER_STATS_ROW: dict[str, float] = {
     "fip": 4.25,
     "k9": 8.8,
@@ -71,7 +77,7 @@ MISSING_PITCHER_STATS_ROW: dict[str, float] = {
 
 # Max pitcher share when both starters have 100+ IP (confidence 1.0). Below that,
 # pitcher_weight = PITCH_MATCHUP_WEIGHT * min(home_conf, away_conf), team_weight = 1 - pitcher_weight.
-PITCH_MATCHUP_WEIGHT = 0.6
+PITCH_MATCHUP_WEIGHT = 0.45
 # Softer than 0.58 so wide diff_team (+ larger RD cap) does not pin every mismatch at 0.30/0.70.
 LOGISTIC_K = 0.36
 HOME_WIN_PROB_MIN = 0.30
@@ -229,6 +235,31 @@ def _form_bonus_from_row(stats_row, form_by_team_id: dict[int, dict]) -> tuple[f
     return bonus, rwp
 
 
+def _recent_pitch_adj_from_row(stats_row, form_by_team_id: dict[int, dict]) -> tuple[float, float | None]:
+    """
+    recent_pitch_adj = RECENT_PITCH_RA_COEFF * (RECENT_PITCH_RA_TARGET - recent_ra_avg).
+    recent_ra_avg is mean runs allowed per game over the sample in recent_form (up to 7 games).
+    Returns (adj, recent_ra_avg or None).
+    """
+    if not form_by_team_id or stats_row is None:
+        return 0.0, None
+    try:
+        tid = int(stats_row.get("team_id"))
+    except (TypeError, ValueError):
+        return 0.0, None
+    rec = form_by_team_id.get(tid)
+    if not rec:
+        return 0.0, None
+    try:
+        ra_avg = float(rec.get("recent_ra_avg"))
+    except (TypeError, ValueError):
+        return 0.0, None
+    if ra_avg != ra_avg:  # NaN
+        return 0.0, None
+    adj = RECENT_PITCH_RA_COEFF * (RECENT_PITCH_RA_TARGET - ra_avg)
+    return adj, ra_avg
+
+
 def _find_team_row(stats_df, raw_name: str):
     """Return one stats row for this team name, or None."""
     from engine.mlb_engine import normalize_mlb_team_name_for_join
@@ -287,7 +318,7 @@ def _team_strength_with_bullpen(row) -> float:
 def _team_quality_components(row):
     """
     Same math as _team_quality_for_model; returns values used for debug lines.
-    (final_quality, win_pct_used, run_diff_used, core_strength, mult, team_name)
+    (final_quality, win_pct_used, run_diff_used, core_strength, mult, team_name, rs_bonus)
     """
     core = _team_strength_with_bullpen(row)
     try:
@@ -309,22 +340,30 @@ def _team_quality_components(row):
     rd = max(-RUN_DIFFERENTIAL_CAP, min(RUN_DIFFERENTIAL_CAP, rd))
     rd_bump = rd / 750.0
 
-    final_quality = (core + rd_bump) * mult
+    try:
+        rspg = float(row.get("runs_scored_per_game"))
+    except (TypeError, ValueError):
+        rspg = float("nan")
+    if rspg != rspg:
+        rspg = 4.5
+    rs_bonus = (rspg - 4.5) * 0.15
+
+    final_quality = (core + rd_bump + rs_bonus) * mult
     tname = row.get("team_name") if row is not None else None
-    return final_quality, wp, rd, core, mult, tname
+    return final_quality, wp, rd, core, mult, tname, rs_bonus
 
 
 def _team_quality_for_model(row) -> float:
     """
-    Team signal for win prob: core run prevention/offense + bullpen, then run-differential
-    bump, scaled by win percentage (bad teams damped, good teams boosted).
+    Team signal for win prob: core run prevention/offense + bullpen, run-differential bump,
+    runs-per-game bonus (vs ~league-average 4.5), scaled by win percentage.
     """
-    final_quality, wp, rd, core, mult, tname = _team_quality_components(row)
+    final_quality, wp, rd, core, mult, tname, rs_bonus = _team_quality_components(row)
     if _MLB_DEBUG_TEAM_QUALITY:
         print(
             "[MLB debug _team_quality_for_model] "
             f"team_name={tname!r} win_pct={wp:.6f} run_differential={rd:.2f} "
-            f"core_strength={core:.6f} mult={mult:.6f} final_quality={final_quality:.6f}",
+            f"core_strength={core:.6f} rs_bonus={rs_bonus:.6f} mult={mult:.6f} final_quality={final_quality:.6f}",
             file=sys.stderr,
             flush=True,
         )
@@ -408,6 +447,8 @@ def _pitcher_matchup_diff_home(home_pitcher_row, away_pitcher_row) -> float:
 TOTALS_SCALING_CONSTANT = 2.15
 TOTALS_LEAGUE_AVG_FIP = 4.25
 TOTALS_PITCHER_ADJ_WEIGHT = 0.15
+# Early-season scoring suppression (cold weather, pitch limits, etc.); applied in April only.
+APRIL_TOTALS_ADJUSTMENT = -0.3
 TOTALS_DIFF_THRESHOLD = 0.5
 TOTALS_LOGISTIC_SLOPE = 0.8
 
@@ -434,6 +475,7 @@ def _predict_total(
     Predicted total runs for a game.
     Base: (home_era + away_era) * 0.5 * park_mult * TOTALS_SCALING_CONSTANT
     Adj: pitcher FIP nudge (avg_fip - 4.25) * TOTALS_PITCHER_ADJ_WEIGHT.
+    In April (month <= 4): APRIL_TOTALS_ADJUSTMENT applied to predicted total.
     """
     home_era = _team_era(home_team_row)
     away_era = _team_era(away_team_row)
@@ -443,6 +485,9 @@ def _predict_total(
     a_fip, _, _ = _starter_fip_k_bb(away_pitcher_row)
     pitcher_adj = ((h_fip + a_fip) / 2.0 - TOTALS_LEAGUE_AVG_FIP) * TOTALS_PITCHER_ADJ_WEIGHT
     predicted += pitcher_adj
+
+    if date.today().month <= 4:
+        predicted += APRIL_TOTALS_ADJUSTMENT
 
     return predicted
 
@@ -454,11 +499,14 @@ def _home_win_prob(
     away_pitcher_row,
     home_team_name: str = "",
     form_diff: float = 0.0,
+    recent_pitch_diff: float = 0.0,
 ) -> tuple[float, float]:
     """
     Returns (p_home, park_mult).
     Park factor is applied to the home team quality signal only (not pitcher side).
-    form_diff = home form_bonus minus away form_bonus (recent win% streak), before logistic.
+    form_diff = home form_bonus minus away form_bonus (recent win% streak).
+    recent_pitch_diff = home minus away recent_pitch_adj (short-term runs allowed vs league avg).
+    Both are added to diff_team before logistic.
     """
     diff_pitch = _pitcher_matchup_diff_home(home_pitcher_row, away_pitcher_row)
     rh = _team_quality_for_model(home_team_row)
@@ -467,7 +515,7 @@ def _home_win_prob(
     pm = _park_mult(home_team_name)
     rh *= 1.0 + 0.3 * (pm - 1.0)
 
-    diff_team = (rh - ra) + 0.02 + float(form_diff)
+    diff_team = (rh - ra) + 0.02 + float(form_diff) + float(recent_pitch_diff)
 
     diff_pitch = max(-1.15, min(1.15, diff_pitch))
     diff_team = max(-DIFF_TEAM_CLAMP, min(DIFF_TEAM_CLAMP, diff_team))
@@ -571,11 +619,11 @@ def main() -> int:
                     flush=True,
                 )
                 for r in (ar, hr):
-                    fq, wp, rd_u, core, mult, tname = _team_quality_components(r)
+                    fq, wp, rd_u, core, mult, tname, rs_b = _team_quality_components(r)
                     print(
                         "[MLB debug _team_quality_for_model] "
                         f"team_name={tname!r} win_pct={wp:.6f} run_differential={rd_u:.2f} "
-                        f"core_strength={core:.6f} mult={mult:.6f} final_quality={fq:.6f}",
+                        f"core_strength={core:.6f} rs_bonus={rs_b:.6f} mult={mult:.6f} final_quality={fq:.6f}",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -605,16 +653,31 @@ def main() -> int:
 
         bonus_h, rwp_h = _form_bonus_from_row(hr, form_by_team_id)
         bonus_a, rwp_a = _form_bonus_from_row(ar, form_by_team_id)
+        pitch_h, raa_h = _recent_pitch_adj_from_row(hr, form_by_team_id)
+        pitch_a, raa_a = _recent_pitch_adj_from_row(ar, form_by_team_id)
         for tlabel, b, rwp in ((home, bonus_h, rwp_h), (away, bonus_a, rwp_a)):
             if b != 0.0 and rwp is not None:
                 print(
                     f"[FORM] {tlabel}: recent_win_pct={rwp:.3f} form_bonus={b:+.3f}",
                     flush=True,
                 )
+        for tlabel, adj, raa in ((home, pitch_h, raa_h), (away, pitch_a, raa_a)):
+            if raa is not None:
+                print(
+                    f"[RECENT_PITCH] {tlabel}: recent_ra_avg={raa:.3f} pitch_adj={adj:+.3f}",
+                    flush=True,
+                )
         form_diff = bonus_h - bonus_a
+        recent_pitch_diff = pitch_h - pitch_a
 
         p_home_model, game_park_mult = _home_win_prob(
-            hr, ar, hp, ap, home_team_name=home, form_diff=form_diff
+            hr,
+            ar,
+            hp,
+            ap,
+            home_team_name=home,
+            form_diff=form_diff,
+            recent_pitch_diff=recent_pitch_diff,
         )
 
         fair_home, fair_away = implied_probability_fair_two_sided(

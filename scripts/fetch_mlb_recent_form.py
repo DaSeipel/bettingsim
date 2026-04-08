@@ -3,15 +3,22 @@
 Fetch each team's last up-to-7 completed games from the MLB Stats API schedule
 and write rolling recent form to data/mlb/recent_form.csv.
 
-Uses one GET per team (30 total) plus one teams list call:
+Uses one GET per team for the schedule (30 total) plus one teams list call, and
+one GET per game for the most recent 5 games per team to load boxscores (ERA):
   GET /api/v1/teams?sportId=1&season=2026
   GET /api/v1/schedule?sportId=1&teamId={id}&startDate={start}&endDate={end}
+  GET /api/v1/game/{gamePk}/boxscore
 
 Date window: last 7 calendar days through today (America/New_York) so the
 single schedule call matches the spec. Completed games in that window are
-sorted by game time (newest first); we keep at most 7 for the aggregates.
+sorted by game time (newest first); we keep at most 7 for win% / RS / RA
+averages (predict_mlb uses recent_ra_avg as ~last-7 defensive form).
 
-Columns: team_id, team_name, recent_win_pct, recent_rs_avg, recent_ra_avg, games_counted
+recent_era: team pitching ERA over the last 5 completed games (earned runs and
+outs from each game's boxscore teamStats.pitching).
+
+Columns: team_id, team_name, recent_win_pct, recent_rs_avg, recent_ra_avg,
+recent_era, games_counted
 
 Usage (run once per day before scripts/predict_mlb.py):
   python3 scripts/fetch_mlb_recent_form.py
@@ -35,6 +42,7 @@ APP_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_PATH = APP_ROOT / "data" / "mlb" / "recent_form.csv"
 
 MAX_GAMES = 7
+MAX_GAMES_FOR_ERA = 5
 
 
 def _get_json(url: str) -> dict:
@@ -89,6 +97,71 @@ def _line_for_team_in_game(g: dict, team_id: int) -> tuple[int, int, bool] | Non
     return None
 
 
+def _team_pitching_er_outs_from_boxscore(box: dict, team_id: int) -> tuple[int, int] | None:
+    """
+    Returns (earned_runs, outs) for the given team's combined pitching line in a final game.
+    """
+    for side in ("home", "away"):
+        blk = box.get("teams", {}).get(side) or {}
+        tid = (blk.get("team") or {}).get("id")
+        if tid is None:
+            continue
+        if int(tid) != int(team_id):
+            continue
+        p = (blk.get("teamStats") or {}).get("pitching") or {}
+        try:
+            er = int(p.get("earnedRuns") if p.get("earnedRuns") is not None else 0)
+        except (TypeError, ValueError):
+            er = 0
+        try:
+            outs = int(p.get("outs") or 0)
+        except (TypeError, ValueError):
+            outs = 0
+        if outs <= 0:
+            return None
+        return er, outs
+    return None
+
+
+def _fetch_boxscore(game_pk: int) -> dict | None:
+    url = f"{BASE}/game/{game_pk}/boxscore"
+    try:
+        return _get_json(url)
+    except requests.RequestException:
+        return None
+
+
+def _recent_era_last_n_games(game_dicts: list[dict], team_id: int, n: int) -> float:
+    """
+    ERA = 9 * sum(ER) / sum(IP) using outs from boxscore (IP = outs/3).
+    """
+    take = game_dicts[:n]
+    total_er = 0
+    total_outs = 0
+    for g in take:
+        gpk = g.get("gamePk")
+        if gpk is None:
+            continue
+        try:
+            gpk_i = int(gpk)
+        except (TypeError, ValueError):
+            continue
+        time.sleep(REQUEST_SLEEP_S)
+        box = _fetch_boxscore(gpk_i)
+        if not box:
+            continue
+        er_outs = _team_pitching_er_outs_from_boxscore(box, team_id)
+        if er_outs is None:
+            continue
+        er, outs = er_outs
+        total_er += er
+        total_outs += outs
+    if total_outs <= 0:
+        return float("nan")
+    # ERA = 9 * ER / (outs/3) = 27 * ER / outs
+    return 27.0 * float(total_er) / float(total_outs)
+
+
 def fetch_team_rows(
     season: int,
     days_back: int,
@@ -132,6 +205,7 @@ def fetch_team_rows(
                     "recent_win_pct": 0.5,
                     "recent_rs_avg": float("nan"),
                     "recent_ra_avg": float("nan"),
+                    "recent_era": float("nan"),
                     "games_counted": 0,
                 }
             )
@@ -142,6 +216,8 @@ def fetch_team_rows(
         rs_sum = sum(rs for rs, _ra, _ in lines)
         ra_sum = sum(ra for _rs, ra, _ in lines)
 
+        recent_era = _recent_era_last_n_games(take, tid, MAX_GAMES_FOR_ERA)
+
         rows.append(
             {
                 "team_id": tid,
@@ -149,6 +225,7 @@ def fetch_team_rows(
                 "recent_win_pct": wins / n,
                 "recent_rs_avg": rs_sum / n,
                 "recent_ra_avg": ra_sum / n,
+                "recent_era": round(recent_era, 3) if recent_era == recent_era else float("nan"),
                 "games_counted": n,
             }
         )

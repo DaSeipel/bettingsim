@@ -3,7 +3,8 @@
 Fetch MLB team-level stats from the public MLB Stats API and save to data/mlb/team_stats.csv.
 
 Columns: team_id, team_name, season, wins, losses, win_pct, run_differential,
-era, whip, woba, bullpen_era
+era, whip, woba, runs_scored_per_game (team runs / games played from hitting + standings),
+bullpen_era
 - wins / losses / win_pct / run_differential: regular-season standings via
   /standings?leagueId=103,104&standingsTypes=regularSeason (joined by team_id).
 - era / whip: team season pitching (all pitchers).
@@ -35,7 +36,15 @@ OUTPUT_2026_PATH = APP_ROOT / "data" / "mlb" / "team_stats_2026.csv"
 
 # When blending 2025 + 2026 stats, how much weight goes to current (2026) season.
 BLEND_2026_WEIGHT = 0.40
-BLEND_NUMERIC_COLS = ("era", "whip", "woba", "bullpen_era", "win_pct", "run_differential")
+BLEND_NUMERIC_COLS = (
+    "era",
+    "whip",
+    "woba",
+    "bullpen_era",
+    "win_pct",
+    "run_differential",
+    "runs_scored_per_game",
+)
 
 
 def _get_json(url: str) -> dict:
@@ -116,13 +125,21 @@ def team_pitching_row(team_id: int, season: int) -> dict:
     return {"era": era, "whip": whip}
 
 
-def team_hitting_woba(team_id: int, season: int) -> float:
+def team_hitting_woba_and_runs(team_id: int, season: int) -> tuple[float, float]:
+    """Team season wOBA and runs scored from one hitting stats request (stat.runs from MLB API)."""
     url = f"{BASE}/teams/{team_id}/stats?stats=season&group=hitting&season={season}"
     data = _get_json(url)
     splits = (data.get("stats") or [{}])[0].get("splits") or []
     if not splits:
-        return float("nan")
-    return woba_from_hitting_stat(splits[0].get("stat") or {})
+        return float("nan"), float("nan")
+    st = splits[0].get("stat") or {}
+    woba = woba_from_hitting_stat(st)
+    rs_raw = st.get("runs") if st.get("runs") is not None else st.get("runsScored")
+    try:
+        runs = float(rs_raw) if rs_raw is not None and str(rs_raw).strip() != "" else float("nan")
+    except (TypeError, ValueError):
+        runs = float("nan")
+    return woba, runs
 
 
 def is_reliever_split(stat: dict) -> bool:
@@ -217,7 +234,7 @@ def fetch_mlb_team_stats(season: int) -> pd.DataFrame:
         time.sleep(REQUEST_SLEEP_S)
         pitch = team_pitching_row(tid, season)
         time.sleep(REQUEST_SLEEP_S)
-        woba = team_hitting_woba(tid, season)
+        woba, runs_scored = team_hitting_woba_and_runs(tid, season)
         time.sleep(REQUEST_SLEEP_S)
         bp_era = bullpen_era_for_team(tid, season)
         wl = wl_by_tid.get(tid) or {}
@@ -226,6 +243,10 @@ def fetch_mlb_team_stats(season: int) -> pd.DataFrame:
         gp = w + l_
         wp_f = float(w / gp) if gp > 0 else float("nan")
         rd = wl.get("run_differential")
+        if gp > 0 and runs_scored == runs_scored:
+            runs_pg = round(runs_scored / float(gp), 5)
+        else:
+            runs_pg = float("nan")
         rows.append(
             {
                 "team_id": tid,
@@ -238,6 +259,7 @@ def fetch_mlb_team_stats(season: int) -> pd.DataFrame:
                 "era": pitch["era"],
                 "whip": pitch["whip"],
                 "woba": round(woba, 4) if woba == woba else float("nan"),
+                "runs_scored_per_game": runs_pg,
                 "bullpen_era": round(bp_era, 2) if bp_era == bp_era else float("nan"),
             }
         )
@@ -258,13 +280,17 @@ def fetch_mlb_team_stats_light(season: int) -> pd.DataFrame:
         time.sleep(REQUEST_SLEEP_S)
         pitch = team_pitching_row(tid, season)
         time.sleep(REQUEST_SLEEP_S)
-        woba = team_hitting_woba(tid, season)
+        woba, runs_scored = team_hitting_woba_and_runs(tid, season)
         wl = wl_by_tid.get(tid) or {}
         w = int(wl.get("wins") or 0)
         l_ = int(wl.get("losses") or 0)
         gp = w + l_
         wp_f = float(w / gp) if gp > 0 else float("nan")
         rd = wl.get("run_differential")
+        if gp > 0 and runs_scored == runs_scored:
+            runs_pg = round(runs_scored / float(gp), 5)
+        else:
+            runs_pg = float("nan")
         rows.append(
             {
                 "team_id": tid,
@@ -277,6 +303,7 @@ def fetch_mlb_team_stats_light(season: int) -> pd.DataFrame:
                 "era": pitch["era"],
                 "whip": pitch["whip"],
                 "woba": round(woba, 4) if woba == woba else float("nan"),
+                "runs_scored_per_game": runs_pg,
                 "bullpen_era": pitch["era"],  # team ERA as proxy
             }
         )

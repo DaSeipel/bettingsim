@@ -12,8 +12,8 @@
       "market": "moneyline",
       "selection": "Los Angeles Dodgers",
       "odds_american": -163.0,
-      "model_prob": 0.6449228862866595,
-      "edge": 0.0389984358818968,
+      "model_prob": 0.6468742169258128,
+      "edge": 0.04202411170847066,
       "park_mult": 1.01
     },
     {
@@ -27,9 +27,24 @@
       "market": "moneyline",
       "selection": "Atlanta Braves",
       "odds_american": -131.0,
-      "model_prob": 0.6062385854757489,
-      "edge": 0.06901613164044273,
+      "model_prob": 0.621939385088814,
+      "edge": 0.09670227446958801,
       "park_mult": 1.01
+    },
+    {
+      "card_date": "2026-04-08",
+      "event_id": "823885",
+      "commence_time": "2026-04-08T22:40:00Z",
+      "home_team": "Miami Marlins",
+      "away_team": "Cincinnati Reds",
+      "home_pitcher": "Eury P\u00e9rez",
+      "away_pitcher": "Brady Singer",
+      "market": "moneyline",
+      "selection": "Cincinnati Reds",
+      "odds_american": 113.0,
+      "model_prob": 0.49000338862311743,
+      "edge": 0.04370721776724018,
+      "park_mult": 1.06
     }
   ]
 }
