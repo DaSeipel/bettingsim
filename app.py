@@ -951,8 +951,12 @@ def _render_potd_card_html(
     odds_as_of: Optional[datetime] = None,
     b2b_teams: Optional[set[str]] = None,
     march_madness_mode: bool = False,
+    mlb_park_line: Optional[str] = None,
+    mlb_away_display: Optional[str] = None,
+    mlb_home_display: Optional[str] = None,
 ) -> str:
-    """Return HTML for one Play of the Day card. accent: 'blue' | 'orange' | 'grey'. Grey when no play."""
+    """Return HTML for one Play of the Day card. accent: 'blue' | 'orange' | 'grey'. Grey when no play.
+    Optional MLB Overview: park line + matchup strings with recent-form tags."""
     if row is None or (isinstance(row, pd.Series) and (row.empty or len(row) == 0)) or (isinstance(row, dict) and len(row) == 0):
         html = f"""
         <div class="potd-card potd-card--grey">
@@ -970,15 +974,23 @@ def _render_potd_card_html(
         confidence = "High"
     else:
         confidence = "Medium"
-    away, home = _parse_event_teams(str(r.get("Event", "")))
-    away_abbrev = _team_abbrev(away, league)
-    home_abbrev = _team_abbrev(home, league)
-    matchup_html = f"{_html_escape(away)}"
-    if away_abbrev:
-        matchup_html += f' <span class="potd-abbrev">({away_abbrev})</span>'
-    matchup_html += f' <span class="potd-vs">@</span> {_html_escape(home)}'
-    if home_abbrev:
-        matchup_html += f' <span class="potd-abbrev">({home_abbrev})</span>'
+    if (
+        mlb_away_display
+        and mlb_home_display
+        and league
+        and "MLB" in league
+    ):
+        matchup_html = f'{_html_escape(mlb_away_display)} <span class="potd-vs">@</span> {_html_escape(mlb_home_display)}'
+    else:
+        away, home = _parse_event_teams(str(r.get("Event", "")))
+        away_abbrev = _team_abbrev(away, league)
+        home_abbrev = _team_abbrev(home, league)
+        matchup_html = f"{_html_escape(away)}"
+        if away_abbrev:
+            matchup_html += f' <span class="potd-abbrev">({away_abbrev})</span>'
+        matchup_html += f' <span class="potd-vs">@</span> {_html_escape(home)}'
+        if home_abbrev:
+            matchup_html += f' <span class="potd-abbrev">({home_abbrev})</span>'
     commence = str(r.get("commence_time", "") or "").strip()
     tipoff = format_start_time(commence) if commence else (str(r.get("Start Time", "") or "").strip() or "—")
     _start_lbl = "First pitch" if league and "MLB" in league else "Tip-off"
@@ -1016,11 +1028,16 @@ def _render_potd_card_html(
     potd_tournament_badge = ""
     if march_madness_mode and league and "NCAAB" in league and _is_top_seed_play(r):
         potd_tournament_badge = '<div class="potd-tournament-context">Tournament Context</div>'
+    _mlb_sp = str(r.get("mlb_sp_line", "") or "").strip() if (league and "MLB" in league) else ""
+    _park_html = f'<div class="potd-current-line">{_html_escape(mlb_park_line)}</div>' if mlb_park_line else ""
+    _sp_html = f'<div class="potd-current-line">{_html_escape(_mlb_sp)}</div>' if _mlb_sp else ""
     html = f"""
     <div class="potd-card potd-card--{accent}">
         <div class="potd-league">{_html_escape(league)}</div>
         <div class="potd-tipoff">{_html_escape(_start_lbl)}: {_html_escape(tipoff)}</div>
         <div class="potd-matchup">{matchup_html}</div>
+        {_park_html}
+        {_sp_html}
         <div class="potd-badge-row"><div class="potd-badge">{_html_escape(badge_text)}</div><span class="potd-odds-inline">{odds_str}</span></div>
         {f'<div class="potd-current-line">{_html_escape(current_line)}</div>' if current_line else ''}
         <div class="potd-edge">{edge_pct:.1f}% Edge</div>
@@ -1917,6 +1934,205 @@ HISTORICAL_BETTING_CSV_PATH = _APP_ROOT / "data" / "historical_betting_performan
 # Match prediction script: use 2026 for "today" when filtering CSV
 HISTORICAL_PICKS_YEAR = 2026
 MLB_VALUE_PLAYS_JSON_PATH = _APP_ROOT / "data" / "cache" / "mlb_value_plays.json"
+MLB_PARK_FACTORS_JSON_PATH = _APP_ROOT / "data" / "mlb" / "mlb_park_factors.json"
+# Odds/API home name -> key in mlb_park_factors.json (when it differs).
+MLB_PARK_HOME_NAME_ALIASES: dict[str, str] = {"Oakland Athletics": "Athletics"}
+
+
+def _load_mlb_park_runs_lookup() -> dict[str, int]:
+    """team_name -> raw runs factor (100 = league average). Empty if file missing."""
+    if not MLB_PARK_FACTORS_JSON_PATH.exists():
+        return {}
+    try:
+        with open(MLB_PARK_FACTORS_JSON_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    out: dict[str, int] = {}
+    for k, v in raw.items():
+        if k.startswith("_") or not isinstance(v, dict):
+            continue
+        try:
+            out[k] = int(v.get("runs", 100))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _mlb_park_runs_for_home_team(home_team: str, lookup: dict[str, int]) -> Optional[int]:
+    h = (home_team or "").strip()
+    if not h:
+        return None
+    if h in lookup:
+        return lookup[h]
+    alt = MLB_PARK_HOME_NAME_ALIASES.get(h)
+    if alt and alt in lookup:
+        return lookup[alt]
+    return None
+
+
+def _mlb_park_emoji_for_runs(runs: Optional[int]) -> str:
+    if runs is None:
+        return ""
+    if runs >= 108:
+        return "🔴 "
+    if runs <= 94:
+        return "🔵 "
+    return ""
+
+
+def _mlb_home_display_with_park(home_team: str, lookup: dict[str, int]) -> str:
+    r = _mlb_park_runs_for_home_team(home_team, lookup)
+    em = _mlb_park_emoji_for_runs(r)
+    return f"{em}{home_team.strip()}"
+
+
+def _mlb_park_text_label_for_runs(runs: Optional[int]) -> str:
+    """Overview POTD line: hitter / pitcher / neutral park copy."""
+    if runs is None:
+        return "Neutral Park"
+    if runs >= 108:
+        return "🔴 Hitter's Park"
+    if runs <= 94:
+        return "🔵 Pitcher's Park"
+    return "Neutral Park"
+
+
+MLB_RECENT_FORM_CSV_PATH = _APP_ROOT / "data" / "mlb" / "recent_form.csv"
+
+
+def _load_mlb_recent_form_by_team_name() -> dict[str, dict]:
+    """recent_form.csv rows keyed by team_name (and Oakland → Athletics alias)."""
+    if not MLB_RECENT_FORM_CSV_PATH.exists():
+        return {}
+    try:
+        df = pd.read_csv(MLB_RECENT_FORM_CSV_PATH)
+    except (OSError, ValueError):
+        return {}
+    if df.empty or "team_name" not in df.columns:
+        return {}
+    out: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        tn = str(row.get("team_name", "")).strip()
+        if tn:
+            out[tn] = row.to_dict()
+    if "Athletics" in out:
+        out["Oakland Athletics"] = out["Athletics"]
+    return out
+
+
+def _mlb_recent_form_suffix_next_to_team(team_name: str, form_by_name: dict[str, dict]) -> str:
+    """Append ' 🔥 Hot (5-2)' / ' ❄️ Cold (2-5)' when win% is extreme; else ''."""
+    if not form_by_name or not team_name:
+        return ""
+    key = team_name.strip()
+    rec = form_by_name.get(key)
+    if rec is None and key == "Oakland Athletics":
+        rec = form_by_name.get("Athletics")
+    if not rec:
+        return ""
+    try:
+        rwp = float(rec.get("recent_win_pct", 0.5))
+        n = int(rec.get("games_counted", 0) or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0 or rwp != rwp:
+        return ""
+    wins = int(round(rwp * n))
+    wins = max(0, min(n, wins))
+    losses = n - wins
+    if rwp > 0.650:
+        return f" 🔥 Hot ({wins}-{losses})"
+    if rwp < 0.350:
+        return f" ❄️ Cold ({wins}-{losses})"
+    return ""
+
+
+def _mlb_confidence_from_edge_pct(edge_pct) -> str:
+    if edge_pct is None or (isinstance(edge_pct, float) and pd.isna(edge_pct)):
+        return "—"
+    try:
+        v = float(edge_pct)
+    except (TypeError, ValueError):
+        return "—"
+    if v >= 5.0:
+        return "Strong"
+    if v >= 3.0:
+        return "Lean"
+    return "—"
+
+
+def _mlb_edge_tier_row_style(row: pd.Series) -> list[str]:
+    """Green ≥5% edge, amber 3–5%, else no fill."""
+    n = len(row)
+    try:
+        ev = row.get("Edge %")
+        if ev is None or pd.isna(ev):
+            return [""] * n
+        v = float(ev)
+        if v >= 5.0:
+            return ["background-color: rgba(46, 125, 50, 0.42); color: #e8f5e9"] * n
+        if v >= 3.0:
+            return ["background-color: rgba(255, 193, 7, 0.25); color: #fff8e1"] * n
+    except (TypeError, ValueError):
+        pass
+    return [""] * n
+
+
+def _render_mlb_top_play_card_html(
+    play_row: Optional[pd.Series],
+    park_lookup: dict[str, int],
+) -> str:
+    """POTD-style card for highest-edge moneyline play; grey empty state when None."""
+    if play_row is None or (isinstance(play_row, pd.Series) and play_row.empty):
+        html = """
+        <div class="potd-card potd-card--grey">
+            <div class="potd-league">MLB Top Play</div>
+            <div class="potd-empty-msg">No moneyline play today</div>
+        </div>
+        """
+        return _html_one_line_per_block(html)
+    r = play_row
+    away = str(r.get("away_team", "") or "").strip()
+    home = str(r.get("home_team", "") or "").strip()
+    home_disp = _mlb_home_display_with_park(home, park_lookup)
+    matchup_html = f'{_html_escape(away)} <span class="potd-vs">@</span> {_html_escape(home_disp)}'
+    commence = str(r.get("commence_time", "") or "").strip()
+    tipoff = format_start_time(commence) if commence else "—"
+    pick = str(r.get("selection", "") or "").strip() or "—"
+    try:
+        odds_am = float(r.get("odds_american", 0))
+    except (TypeError, ValueError):
+        odds_am = -110.0
+    odds_str = format_american(odds_am)
+    try:
+        edge_dec = float(r.get("edge", 0))
+    except (TypeError, ValueError):
+        edge_dec = 0.0
+    edge_pct = edge_dec * 100.0
+    try:
+        mp = float(r.get("model_prob", 0.5))
+    except (TypeError, ValueError):
+        mp = 0.5
+    ap = str(r.get("away_pitcher", "") or "").strip() or "TBD"
+    hp = str(r.get("home_pitcher", "") or "").strip() or "TBD"
+    expl = (
+        f"Model win probability {mp * 100.0:.1f}% vs. implied odds — "
+        f"about {edge_pct:.1f}% expected value."
+    )
+    html = f"""
+    <div class="potd-card potd-card--blue">
+        <div class="potd-league">MLB Top Play</div>
+        <div class="potd-tipoff">First pitch: {_html_escape(tipoff)}</div>
+        <div class="potd-matchup">{matchup_html}</div>
+        <div class="potd-badge-row"><div class="potd-badge">{_html_escape(pick)}</div><span class="potd-odds-inline">{_html_escape(odds_str)}</span></div>
+        <div class="potd-edge">{edge_pct:.1f}% Edge</div>
+        <div class="potd-confidence">Model probability: {mp * 100.0:.1f}%</div>
+        <div class="potd-current-line">SP: {_html_escape(ap)} @ {_html_escape(hp)}</div>
+        <div class="potd-reason">{_html_escape(expl)}</div>
+    </div>
+    """
+    return _html_one_line_per_block(html)
 
 
 def _load_mlb_value_plays_for_today() -> tuple[pd.DataFrame, list[dict]]:
@@ -2020,8 +2236,9 @@ def _mlb_row_to_potd_dict(row: pd.Series) -> dict:
         reason = f"Model edge about {max(0.0, edge_pct):.1f}% vs. the posted line."
     ap_away = str(row.get("away_pitcher", "")).strip()
     ap_home = str(row.get("home_pitcher", "")).strip()
+    mlb_sp_line = ""
     if ap_away or ap_home:
-        reason += f" ({ap_away or 'TBD'} @ {ap_home or 'TBD'})."
+        mlb_sp_line = f"SP: {ap_away or 'TBD'} @ {ap_home or 'TBD'}"
     return {
         "Event": event,
         "home_team": home,
@@ -2039,31 +2256,61 @@ def _mlb_row_to_potd_dict(row: pd.Series) -> dict:
         "confidence_tier": "Medium",
         "Injury Alert": "—",
         "model_prob": mp_f if mp_f is not None else 0.5,
+        "mlb_sp_line": mlb_sp_line,
     }
 
 
-def _mlb_top_two_potd_picks(mlb_df: pd.DataFrame) -> tuple[Optional[dict], Optional[dict]]:
-    """Top two MLB picks by edge, one row per event_id (or per game time if no event_id)."""
-    if mlb_df is None or mlb_df.empty:
-        return None, None
-    df = mlb_df.copy()
+def _mlb_overview_sort_key_series(df: pd.DataFrame) -> pd.Series:
     if "edge" in df.columns:
-        df["_potd_sort_edge"] = pd.to_numeric(df["edge"], errors="coerce").fillna(0.0).abs() * 100.0
-    elif "edge_pct" in df.columns:
-        ep = pd.to_numeric(df["edge_pct"], errors="coerce").fillna(0.0)
-        df["_potd_sort_edge"] = np.where(np.abs(ep) >= 1.0, np.abs(ep), np.abs(ep) * 100.0)
+        return pd.to_numeric(df["edge"], errors="coerce").fillna(0.0).abs()
+    ep = pd.to_numeric(df["edge_pct"], errors="coerce").fillna(0.0)
+    arr = np.where(np.abs(ep) >= 1.0, np.abs(ep), np.abs(ep) * 100.0)
+    return pd.Series(arr, index=df.index)
+
+
+def _mlb_dedupe_by_event_sort(df: pd.DataFrame, sort_col: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+    d = df.sort_values(sort_col, ascending=False)
+    if "event_id" in d.columns:
+        return d.groupby(d["event_id"].astype(str), sort=False).head(1).reset_index(drop=True).sort_values(
+            sort_col, ascending=False
+        )
+    subset = [c for c in ("home_team", "away_team", "commence_time") if c in d.columns]
+    return d.drop_duplicates(subset=subset if subset else None, keep="first").reset_index(drop=True).sort_values(
+        sort_col, ascending=False
+    )
+
+
+def _mlb_overview_potd_picks(
+    mlb_df: pd.DataFrame,
+) -> tuple[Optional[dict], Optional[dict], Optional[dict]]:
+    """
+    Overview MLB cards: Pick 1 & 2 = top two moneyline edges (one row per game);
+    Total pick = best O/U edge if any.
+    """
+    if mlb_df is None or mlb_df.empty:
+        return None, None, None
+    if "edge" not in mlb_df.columns and "edge_pct" not in mlb_df.columns:
+        return None, None, None
+    df = mlb_df.copy()
+    df["_potd_sort_edge"] = _mlb_overview_sort_key_series(df)
+
+    if "market" in df.columns:
+        mkt = df["market"].astype(str).str.strip().str.lower()
+        ml_df = df[mkt.isin(("moneyline", "h2h"))].copy()
+        tot_df = df[mkt.isin(("total", "totals"))].copy()
     else:
-        return None, None
-    df = df.sort_values("_potd_sort_edge", ascending=False)
-    if "event_id" in df.columns:
-        deduped = df.groupby(df["event_id"].astype(str), sort=False).head(1).reset_index(drop=True)
-    else:
-        subset = [c for c in ("home_team", "away_team", "commence_time") if c in df.columns]
-        deduped = df.drop_duplicates(subset=subset if subset else None, keep="first").reset_index(drop=True)
-    deduped = deduped.sort_values("_potd_sort_edge", ascending=False).reset_index(drop=True)
-    d1 = _mlb_row_to_potd_dict(deduped.iloc[0]) if len(deduped) >= 1 else None
-    d2 = _mlb_row_to_potd_dict(deduped.iloc[1]) if len(deduped) >= 2 else None
-    return d1, d2
+        ml_df = df.copy()
+        tot_df = pd.DataFrame()
+
+    ml_dedup = _mlb_dedupe_by_event_sort(ml_df, "_potd_sort_edge")
+    tot_dedup = _mlb_dedupe_by_event_sort(tot_df, "_potd_sort_edge")
+
+    d1 = _mlb_row_to_potd_dict(ml_dedup.iloc[0]) if len(ml_dedup) >= 1 else None
+    d2 = _mlb_row_to_potd_dict(ml_dedup.iloc[1]) if len(ml_dedup) >= 2 else None
+    d3 = _mlb_row_to_potd_dict(tot_dedup.iloc[0]) if len(tot_dedup) >= 1 else None
+    return d1, d2, d3
 
 
 def _mlb_dataframe_for_play_history(mlb_df: pd.DataFrame) -> pd.DataFrame:
@@ -3102,22 +3349,80 @@ with tab_overview:
 
     if _mlb_potd_season:
         st.markdown("##### MLB")
-        st.caption("Top two MLB value plays from `data/cache/mlb_value_plays.json` (same card as NCAAB).")
+        st.caption(
+            "Top moneyline plays (by edge) and best over/under play from `data/cache/mlb_value_plays.json` — same card style as NCAAB."
+        )
         _mlb_df_overview, _ = _load_mlb_value_plays_for_today()
-        mlb_pod_1, mlb_pod_2 = _mlb_top_two_potd_picks(_mlb_df_overview)
+        mlb_pod_1, mlb_pod_2, mlb_pod_total = _mlb_overview_potd_picks(_mlb_df_overview)
         _mlb_odds_asof = datetime.now(timezone.utc)
-        col_m1, col_m2 = st.columns(2)
+        _park_ov = _load_mlb_park_runs_lookup()
+        _form_nm = _load_mlb_recent_form_by_team_name()
+
+        def _mlb_overview_card_decorations(pod: Optional[dict]) -> tuple[Optional[str], Optional[str], Optional[str]]:
+            if not pod:
+                return None, None, None
+            a = str(pod.get("away_team", "")).strip()
+            h = str(pod.get("home_team", "")).strip()
+            ad = a + _mlb_recent_form_suffix_next_to_team(a, _form_nm)
+            hd = h + _mlb_recent_form_suffix_next_to_team(h, _form_nm)
+            pruns = _mlb_park_runs_for_home_team(h, _park_ov)
+            pline = _mlb_park_text_label_for_runs(pruns)
+            return ad, hd, pline
+
+        a1, h1, p1 = _mlb_overview_card_decorations(mlb_pod_1)
+        a2, h2, p2 = _mlb_overview_card_decorations(mlb_pod_2)
+        at, ht, pt = _mlb_overview_card_decorations(mlb_pod_total)
+
+        col_m1, col_m2, col_m3 = st.columns(3)
         with col_m1:
             st.markdown(
-                _render_potd_card_html("MLB Pick 1", mlb_pod_1, "blue", feature_matrix=None, odds_as_of=_mlb_odds_asof, b2b_teams=frozenset(), march_madness_mode=False),
+                _render_potd_card_html(
+                    "MLB Pick 1",
+                    mlb_pod_1,
+                    "blue",
+                    feature_matrix=None,
+                    odds_as_of=_mlb_odds_asof,
+                    b2b_teams=frozenset(),
+                    march_madness_mode=False,
+                    mlb_park_line=p1,
+                    mlb_away_display=a1,
+                    mlb_home_display=h1,
+                ),
                 unsafe_allow_html=True,
             )
         with col_m2:
             st.markdown(
-                _render_potd_card_html("MLB Pick 2", mlb_pod_2, "blue", feature_matrix=None, odds_as_of=_mlb_odds_asof, b2b_teams=frozenset(), march_madness_mode=False),
+                _render_potd_card_html(
+                    "MLB Pick 2",
+                    mlb_pod_2,
+                    "blue",
+                    feature_matrix=None,
+                    odds_as_of=_mlb_odds_asof,
+                    b2b_teams=frozenset(),
+                    march_madness_mode=False,
+                    mlb_park_line=p2,
+                    mlb_away_display=a2,
+                    mlb_home_display=h2,
+                ),
                 unsafe_allow_html=True,
             )
-        if mlb_pod_1 is None and mlb_pod_2 is None:
+        with col_m3:
+            st.markdown(
+                _render_potd_card_html(
+                    "MLB Total Pick",
+                    mlb_pod_total,
+                    "blue",
+                    feature_matrix=None,
+                    odds_as_of=_mlb_odds_asof,
+                    b2b_teams=frozenset(),
+                    march_madness_mode=False,
+                    mlb_park_line=pt,
+                    mlb_away_display=at,
+                    mlb_home_display=ht,
+                ),
+                unsafe_allow_html=True,
+            )
+        if mlb_pod_1 is None and mlb_pod_2 is None and mlb_pod_total is None:
             st.caption("No MLB plays in cache for today. Open the **MLB** tab to run the model or update the cache.")
 
     st.divider()
@@ -3336,10 +3641,11 @@ with tab_mlb:
             "(set `card_date` to today or give each play a `card_date`)."
         )
     else:
+        st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
+        _park_lu = _load_mlb_park_runs_lookup()
         disp = mlb_df.copy()
         if "odds_american" in disp.columns:
             disp["Odds"] = disp["odds_american"].apply(format_american)
-        # Edge % = EV in percentage points: (p × decimal_odds) − 1, same as strategies.expected_value_pct × 100
         if "edge" in disp.columns:
             disp["Edge %"] = disp["edge"].apply(lambda x: round(float(x) * 100.0, 2) if pd.notna(x) else None)
         elif "edge_pct" in disp.columns:
@@ -3358,69 +3664,117 @@ with tab_mlb:
         for _, r in disp.iterrows():
             try:
                 o = float(r.get("odds_american", 0))
-                # Kelly: win probability for this pick's side × American odds for that same bet
                 p = float(r.get("model_prob", 0))
                 frac = kelly_fraction(o, p, fraction=kelly_frac)
                 stake_col.append(round(BANKROLL_FOR_STAKES * frac, 2))
             except (TypeError, ValueError):
                 stake_col.append(None)
         disp["Rec. stake ($)"] = stake_col
-        col_rename = {
-            "away_team": "Away",
-            "home_team": "Home",
-            "away_pitcher": "SP (away)",
-            "home_pitcher": "SP (home)",
-            "market": "Market",
-            "selection": "Pick",
-            "total_line": "Total line",
-        }
-        disp = disp.rename(columns={k: v for k, v in col_rename.items() if k in disp.columns})
-        show_cols = [
-            c
-            for c in [
-                "Away",
-                "Home",
-                "SP (away)",
-                "SP (home)",
-                "Market",
-                "Pick",
-                "Odds",
-                "Model prob",
-                "Edge %",
-                "Total line",
-                "Rec. stake ($)",
-            ]
-            if c in disp.columns
-        ]
-        display_df = disp[show_cols].copy()
+        disp["Confidence"] = disp["Edge %"].apply(_mlb_confidence_from_edge_pct)
+        if "away_team" in disp.columns:
+            disp["Away"] = disp["away_team"].astype(str).str.strip()
+        if "home_team" in disp.columns:
+            disp["Home"] = disp["home_team"].apply(lambda h: _mlb_home_display_with_park(str(h).strip(), _park_lu))
+        if "away_pitcher" in disp.columns:
+            disp["SP (away)"] = disp["away_pitcher"]
+        if "home_pitcher" in disp.columns:
+            disp["SP (home)"] = disp["home_pitcher"]
+        if "selection" in disp.columns:
+            disp["Pick"] = disp["selection"]
 
-        def _mlb_edge_row_style(row: pd.Series) -> list[str]:
-            """Green row when Edge % > 5 (% points), i.e. decimal EV > 0.05."""
+        if "market" in disp.columns:
+            _mkt = disp["market"].astype(str).str.strip().str.lower()
+            ml_only = disp[_mkt.eq("moneyline")].copy()
+            tot_only = disp[_mkt.eq("total")].copy()
+        else:
+            ml_only = disp.copy()
+            tot_only = pd.DataFrame()
+
+        top_ml_row = None
+        if not ml_only.empty and "edge" in ml_only.columns:
             try:
-                v = row.get("Edge %")
-                if v is not None and pd.notna(v) and float(v) > 5.0:
-                    return ["background-color: rgba(46, 125, 50, 0.42); color: #e8f5e9"] * len(row)
+                _ei = ml_only["edge"].astype(float)
+                if _ei.notna().any():
+                    top_ml_row = ml_only.loc[_ei.idxmax()]
             except (TypeError, ValueError):
-                pass
-            return [""] * len(row)
+                top_ml_row = None
 
-        fmt_cols: dict[str, str] = {}
-        if "Model prob" in display_df.columns:
-            fmt_cols["Model prob"] = "{:.3f}"
-        if "Edge %" in display_df.columns:
-            fmt_cols["Edge %"] = "{:.2f}"
-        if "Rec. stake ($)" in display_df.columns:
-            fmt_cols["Rec. stake ($)"] = "${:.2f}"
-        if "Total line" in display_df.columns:
-            fmt_cols["Total line"] = "{:.1f}"
+        st.markdown(_render_mlb_top_play_card_html(top_ml_row, _park_lu), unsafe_allow_html=True)
 
-        show_styled = display_df
-        styled = (
-            show_styled.style.apply(_mlb_edge_row_style, axis=1)
-            .format(fmt_cols, na_rep="—")
-            .hide(axis="index")
-        )
-        st.dataframe(styled, use_container_width=True)
+        st.markdown("##### Moneyline Plays")
+        if ml_only.empty:
+            st.caption("No plays today")
+        else:
+            _ml_show = [
+                c
+                for c in [
+                    "Away",
+                    "Home",
+                    "SP (away)",
+                    "SP (home)",
+                    "Pick",
+                    "Odds",
+                    "Model prob",
+                    "Edge %",
+                    "Confidence",
+                    "Rec. stake ($)",
+                ]
+                if c in ml_only.columns
+            ]
+            _ml_df = ml_only[_ml_show].copy()
+            _ml_fmt: dict[str, str] = {}
+            if "Model prob" in _ml_df.columns:
+                _ml_fmt["Model prob"] = "{:.3f}"
+            if "Edge %" in _ml_df.columns:
+                _ml_fmt["Edge %"] = "{:.2f}"
+            if "Rec. stake ($)" in _ml_df.columns:
+                _ml_fmt["Rec. stake ($)"] = "${:.2f}"
+            _ml_styled = (
+                _ml_df.style.apply(_mlb_edge_tier_row_style, axis=1)
+                .format(_ml_fmt, na_rep="—")
+                .hide(axis="index")
+            )
+            st.dataframe(_ml_styled, use_container_width=True)
+
+        st.markdown("##### Over/Under Plays")
+        if tot_only.empty:
+            st.caption("No plays today")
+        else:
+            if "predicted_total" in tot_only.columns:
+                tot_only["Pred. Total"] = tot_only["predicted_total"].apply(
+                    lambda x: round(float(x), 2) if x is not None and pd.notna(x) else None
+                )
+            _ou_show = [
+                c
+                for c in [
+                    "Away",
+                    "Home",
+                    "SP (away)",
+                    "SP (home)",
+                    "Pick",
+                    "Odds",
+                    "Pred. Total",
+                    "Edge %",
+                    "Confidence",
+                    "Rec. stake ($)",
+                ]
+                if c in tot_only.columns
+            ]
+            _ou_df = tot_only[_ou_show].copy()
+            _ou_fmt: dict[str, str] = {}
+            if "Pred. Total" in _ou_df.columns:
+                _ou_fmt["Pred. Total"] = "{:.2f}"
+            if "Edge %" in _ou_df.columns:
+                _ou_fmt["Edge %"] = "{:.2f}"
+            if "Rec. stake ($)" in _ou_df.columns:
+                _ou_fmt["Rec. stake ($)"] = "${:.2f}"
+            _ou_styled = (
+                _ou_df.style.apply(_mlb_edge_tier_row_style, axis=1)
+                .format(_ou_fmt, na_rep="—")
+                .hide(axis="index")
+            )
+            st.dataframe(_ou_styled, use_container_width=True)
+
         if st.button(
             "Save Picks",
             key="mlb_save_play_history",

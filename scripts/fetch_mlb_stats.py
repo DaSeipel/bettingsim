@@ -34,7 +34,7 @@ OUTPUT_2025_PATH = APP_ROOT / "data" / "mlb" / "team_stats_2025.csv"
 OUTPUT_2026_PATH = APP_ROOT / "data" / "mlb" / "team_stats_2026.csv"
 
 # When blending 2025 + 2026 stats, how much weight goes to current (2026) season.
-BLEND_2026_WEIGHT = 0.30
+BLEND_2026_WEIGHT = 0.40
 BLEND_NUMERIC_COLS = ("era", "whip", "woba", "bullpen_era", "win_pct", "run_differential")
 
 

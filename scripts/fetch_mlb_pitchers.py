@@ -45,7 +45,7 @@ OUTPUT_PATH = APP_ROOT / "data" / "mlb" / "pitcher_stats.csv"
 FIP_C_FGM = 3.10
 
 # Blend weight for 2026 rate stats when both seasons are available.
-PITCHER_BLEND_2026_WEIGHT = 0.30
+PITCHER_BLEND_2026_WEIGHT = 0.40
 _PITCHER_BLEND_RATE_COLS = ("era", "fip", "whip", "k9", "bb9")
 
 

@@ -2,7 +2,8 @@
 """
 Generate data/cache/mlb_value_plays.json from data/odds/live_mlb_odds.json,
 data/mlb/team_stats.csv (scripts/fetch_mlb_stats.py), and optionally
-data/mlb/pitcher_stats.csv (scripts/fetch_mlb_pitchers.py).
+data/mlb/pitcher_stats.csv (scripts/fetch_mlb_pitchers.py), and optionally
+data/mlb/recent_form.csv (scripts/fetch_mlb_recent_form.py — run once per day).
 
 Requires fetch_mlb_odds.py to have run so live_mlb_odds.json exists.
 Best results: run fetch_mlb_pitchers.py after odds so starter FIP/K9/BB9/innings_pitched are available.
@@ -36,15 +37,25 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from strategies.strategies import american_to_decimal
+
 ODDS_PATH = ROOT / "data" / "odds" / "live_mlb_odds.json"
 OUT_PATH = ROOT / "data" / "cache" / "mlb_value_plays.json"
 PITCHER_STATS_PATH = ROOT / "data" / "mlb" / "pitcher_stats.csv"
+RECENT_FORM_PATH = ROOT / "data" / "mlb" / "recent_form.csv"
 PARK_FACTORS_PATH = ROOT / "data" / "mlb" / "mlb_park_factors.json"
+
+# Recent win% streak adjustment: added to diff_team as (home_bonus - away_bonus).
+FORM_WIN_PCT_COEFF = 0.15
 
 # Edge and probability filters (decimal edge = EV fraction, e.g. 0.03 = 3%).
 MIN_EDGE_DECIMAL = 0.03  # minimum 3% edge to qualify as a play
 MAX_EDGE_DECIMAL = 0.15  # skip plays above this; prints FLAGGED_HIGH_EDGE
 MIN_MODEL_PROB = 0.42  # skip picks below this win probability; prints SKIP_LOW_PROB
+
+# Moneyline only: shrink effective edge when laying heavy favorite juice (after pick, before filters).
+JUICE_PENALTY_THRESHOLD = -150
+JUICE_PENALTY_RATE = 0.003
 
 # Pull model win prob toward two-way fair implied (after logistic + clamp, before edge).
 PROB_SHRINK_TOWARD_MARKET = 0.25
@@ -147,6 +158,17 @@ def _card_date_iso(blob: dict) -> str:
     return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
 
 
+def _juice_penalized_edge(edge: float, odds_am: float) -> float:
+    """
+    If American odds are at or past JUICE_PENALTY_THRESHOLD (more negative), scale edge down:
+    edge *= (1 - rate * (|odds| - 150)). -150 unchanged; steeper chalk gets larger haircut.
+    """
+    if odds_am > JUICE_PENALTY_THRESHOLD:
+        return edge
+    factor = 1.0 - JUICE_PENALTY_RATE * (abs(float(odds_am)) - 150.0)
+    return edge * max(0.0, factor)
+
+
 def _american_to_float(x) -> float | None:
     if x is None:
         return None
@@ -159,6 +181,52 @@ def _american_to_float(x) -> float | None:
     if v < 0 and v > -100:
         return None
     return v
+
+
+def _load_recent_form_by_team_id() -> dict[int, dict]:
+    """recent_form.csv keyed by team_id; empty if missing or unreadable."""
+    if not RECENT_FORM_PATH.exists():
+        return {}
+    try:
+        import pandas as pd
+
+        df = pd.read_csv(RECENT_FORM_PATH)
+    except Exception as exc:
+        print(f"MLB predict: could not read recent_form.csv: {exc} — no form adjustment.", file=sys.stderr)
+        return {}
+    if df.empty or "team_id" not in df.columns:
+        return {}
+    out: dict[int, dict] = {}
+    for _, row in df.iterrows():
+        try:
+            tid = int(row["team_id"])
+        except (TypeError, ValueError):
+            continue
+        out[tid] = row.to_dict()
+    return out
+
+
+def _form_bonus_from_row(stats_row, form_by_team_id: dict[int, dict]) -> tuple[float, float | None]:
+    """
+    form_bonus = FORM_WIN_PCT_COEFF * (recent_win_pct - 0.5). Returns (bonus, recent_win_pct or None).
+    """
+    if not form_by_team_id or stats_row is None:
+        return 0.0, None
+    try:
+        tid = int(stats_row.get("team_id"))
+    except (TypeError, ValueError):
+        return 0.0, None
+    rec = form_by_team_id.get(tid)
+    if not rec:
+        return 0.0, None
+    try:
+        rwp = float(rec.get("recent_win_pct", 0.5))
+    except (TypeError, ValueError):
+        return 0.0, None
+    if rwp != rwp:  # NaN
+        return 0.0, None
+    bonus = FORM_WIN_PCT_COEFF * (rwp - 0.5)
+    return bonus, rwp
 
 
 def _find_team_row(stats_df, raw_name: str):
@@ -337,16 +405,60 @@ def _pitcher_matchup_diff_home(home_pitcher_row, away_pitcher_row) -> float:
     )
 
 
+TOTALS_SCALING_CONSTANT = 2.15
+TOTALS_LEAGUE_AVG_FIP = 4.25
+TOTALS_PITCHER_ADJ_WEIGHT = 0.15
+TOTALS_DIFF_THRESHOLD = 0.5
+TOTALS_LOGISTIC_SLOPE = 0.8
+
+
+def _team_era(row) -> float:
+    """Blended team ERA from team_stats.csv; defaults to 4.20 if missing."""
+    try:
+        v = float(row.get("era"))
+        if v != v:
+            return 4.20
+        return min(max(v, 2.5), 7.0)
+    except (TypeError, ValueError):
+        return 4.20
+
+
+def _predict_total(
+    home_team_row,
+    away_team_row,
+    home_pitcher_row,
+    away_pitcher_row,
+    park_mult: float,
+) -> float:
+    """
+    Predicted total runs for a game.
+    Base: (home_era + away_era) * 0.5 * park_mult * TOTALS_SCALING_CONSTANT
+    Adj: pitcher FIP nudge (avg_fip - 4.25) * TOTALS_PITCHER_ADJ_WEIGHT.
+    """
+    home_era = _team_era(home_team_row)
+    away_era = _team_era(away_team_row)
+    predicted = (home_era + away_era) * 0.5 * park_mult * TOTALS_SCALING_CONSTANT
+
+    h_fip, _, _ = _starter_fip_k_bb(home_pitcher_row)
+    a_fip, _, _ = _starter_fip_k_bb(away_pitcher_row)
+    pitcher_adj = ((h_fip + a_fip) / 2.0 - TOTALS_LEAGUE_AVG_FIP) * TOTALS_PITCHER_ADJ_WEIGHT
+    predicted += pitcher_adj
+
+    return predicted
+
+
 def _home_win_prob(
     home_team_row,
     away_team_row,
     home_pitcher_row,
     away_pitcher_row,
     home_team_name: str = "",
+    form_diff: float = 0.0,
 ) -> tuple[float, float]:
     """
     Returns (p_home, park_mult).
     Park factor is applied to the home team quality signal only (not pitcher side).
+    form_diff = home form_bonus minus away form_bonus (recent win% streak), before logistic.
     """
     diff_pitch = _pitcher_matchup_diff_home(home_pitcher_row, away_pitcher_row)
     rh = _team_quality_for_model(home_team_row)
@@ -355,7 +467,7 @@ def _home_win_prob(
     pm = _park_mult(home_team_name)
     rh *= 1.0 + 0.3 * (pm - 1.0)
 
-    diff_team = (rh - ra) + 0.02
+    diff_team = (rh - ra) + 0.02 + float(form_diff)
 
     diff_pitch = max(-1.15, min(1.15, diff_pitch))
     diff_team = max(-DIFF_TEAM_CLAMP, min(DIFF_TEAM_CLAMP, diff_team))
@@ -427,6 +539,14 @@ def main() -> int:
     else:
         pitcher_df = pd.DataFrame()
 
+    form_by_team_id = _load_recent_form_by_team_id()
+    if form_by_team_id:
+        print(
+            f"MLB predict: recent_form.csv loaded — {len(form_by_team_id)} team row(s).",
+            file=sys.stderr,
+            flush=True,
+        )
+
     games = blob.get("games") or []
     matched = 0
     plays: list[dict] = []
@@ -483,7 +603,19 @@ def main() -> int:
         if ap is None:
             ap = MISSING_PITCHER_STATS_ROW
 
-        p_home_model, game_park_mult = _home_win_prob(hr, ar, hp, ap, home_team_name=home)
+        bonus_h, rwp_h = _form_bonus_from_row(hr, form_by_team_id)
+        bonus_a, rwp_a = _form_bonus_from_row(ar, form_by_team_id)
+        for tlabel, b, rwp in ((home, bonus_h, rwp_h), (away, bonus_a, rwp_a)):
+            if b != 0.0 and rwp is not None:
+                print(
+                    f"[FORM] {tlabel}: recent_win_pct={rwp:.3f} form_bonus={b:+.3f}",
+                    flush=True,
+                )
+        form_diff = bonus_h - bonus_a
+
+        p_home_model, game_park_mult = _home_win_prob(
+            hr, ar, hp, ap, home_team_name=home, form_diff=form_diff
+        )
 
         fair_home, fair_away = implied_probability_fair_two_sided(
             float(home_odds_am), float(away_odds_am)
@@ -521,6 +653,7 @@ def main() -> int:
             summ = value_summary_moneyline(model_p, odds_used, float(home_odds_am))
 
         edge = float(summ["edge"])
+        edge = _juice_penalized_edge(edge, odds_used)
         # One line per game before edge / MIN_EDGE filtering (stdout so it shows even when stderr is quiet).
         print(
             f"{away} @ {home} | ho={home_odds_am} ao={away_odds_am} | "
@@ -577,8 +710,121 @@ def main() -> int:
             }
         )
 
+    # ——— Totals (over/under) pass ———
+    totals_considered = 0
+    for g in games:
+        if not isinstance(g, dict):
+            continue
+        home = str(g.get("home_team") or "").strip()
+        away = str(g.get("away_team") or "").strip()
+
+        total_data = g.get("total") or {}
+        market_line = total_data.get("line")
+        over_odds_am = _american_to_float(total_data.get("over_odds"))
+        under_odds_am = _american_to_float(total_data.get("under_odds"))
+
+        hr = _find_team_row(stats_df, home)
+        ar = _find_team_row(stats_df, away)
+
+        skip_t: list[str] = []
+        if hr is None:
+            skip_t.append(f"no_team_stats_home({home!r})")
+        if ar is None:
+            skip_t.append(f"no_team_stats_away({away!r})")
+        if market_line is None:
+            skip_t.append("missing_total_line")
+        if over_odds_am is None:
+            skip_t.append("missing_over_odds")
+        if under_odds_am is None:
+            skip_t.append("missing_under_odds")
+        if skip_t:
+            print(f"{away} @ {home} | TOTALS SKIP: {'; '.join(skip_t)}", flush=True)
+            continue
+
+        market_line = float(market_line)
+
+        hp = _find_pitcher_row(pitcher_df, g.get("home_pitcher"))
+        ap = _find_pitcher_row(pitcher_df, g.get("away_pitcher"))
+        if hp is None:
+            hp = MISSING_PITCHER_STATS_ROW
+        if ap is None:
+            ap = MISSING_PITCHER_STATS_ROW
+
+        pm = _park_mult(home)
+        pred_total = _predict_total(hr, ar, hp, ap, pm)
+        total_diff = pred_total - market_line
+
+        over_prob = 1.0 / (1.0 + math.exp(-total_diff * TOTALS_LOGISTIC_SLOPE))
+
+        over_dec = american_to_decimal(float(over_odds_am))
+        under_dec = american_to_decimal(float(under_odds_am))
+        edge_over = over_prob * over_dec - 1.0
+        edge_under = (1.0 - over_prob) * under_dec - 1.0
+
+        if total_diff > TOTALS_DIFF_THRESHOLD:
+            t_side = "over"
+            t_selection = f"Over {market_line}"
+            t_odds_am = float(over_odds_am)
+            t_model_p = over_prob
+            t_edge = edge_over
+        elif total_diff < -TOTALS_DIFF_THRESHOLD:
+            t_side = "under"
+            t_selection = f"Under {market_line}"
+            t_odds_am = float(under_odds_am)
+            t_model_p = 1.0 - over_prob
+            t_edge = edge_under
+        else:
+            print(
+                f"{away} @ {home} | TOTALS NO_PLAY: pred={pred_total:.2f} line={market_line} diff={total_diff:+.2f} (within ±{TOTALS_DIFF_THRESHOLD})",
+                flush=True,
+            )
+            continue
+
+        totals_considered += 1
+        print(
+            f"{away} @ {home} | TOTALS: pred={pred_total:.2f} line={market_line} diff={total_diff:+.2f} "
+            f"side={t_side} prob={t_model_p:.3f} edge={t_edge:.4f} odds={t_odds_am}",
+            flush=True,
+        )
+
+        if t_model_p < MIN_MODEL_PROB:
+            print(f"TOTALS SKIP_LOW_PROB: {t_selection} | model_prob={t_model_p:.3f}", flush=True)
+            continue
+        if t_edge > MAX_EDGE_DECIMAL:
+            print(f"TOTALS FLAGGED_HIGH_EDGE: {t_selection} | edge={t_edge:.3f} exceeds MAX", flush=True)
+            continue
+        if t_edge < MIN_EDGE_DECIMAL:
+            print(
+                f"{away} @ {home} | TOTALS NO_PLAY: edge={t_edge:.4f} < MIN {MIN_EDGE_DECIMAL}",
+                flush=True,
+            )
+            continue
+
+        plays.append(
+            {
+                "card_date": card_date,
+                "event_id": str(g.get("event_id") or ""),
+                "commence_time": str(g.get("commence_time") or ""),
+                "home_team": home,
+                "away_team": away,
+                "home_pitcher": g.get("home_pitcher"),
+                "away_pitcher": g.get("away_pitcher"),
+                "market": "total",
+                "selection": t_selection,
+                "odds_american": t_odds_am,
+                "model_prob": float(t_model_p),
+                "edge": float(t_edge),
+                "park_mult": float(pm),
+                "predicted_total": round(float(pred_total), 2),
+                "total_line": float(market_line),
+            }
+        )
+
+    ml_plays = [p for p in plays if p.get("market") == "moneyline"]
+    tot_plays = [p for p in plays if p.get("market") == "total"]
     print(
-        f"MLB predict: matched {matched} game(s) between odds slate and team_stats (both teams found).",
+        f"MLB predict: matched {matched} game(s) between odds slate and team_stats (both teams found). "
+        f"Moneyline plays: {len(ml_plays)}, Totals plays: {len(tot_plays)}.",
         flush=True,
     )
 
