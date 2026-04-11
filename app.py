@@ -1,6 +1,6 @@
 """
 Bobby Bottle's Betting Model - Streamlit Dashboard
-Daily picks sheet: Play of the Day (NCAAB) and All Value Plays. Dark theme, NCAAB-focused (NBA coming soon).
+Daily picks sheet: Play of the Day (NCAAB) and All Value Plays. Dark theme, NCAAB-focused.
 Live odds from The Odds API; stakes from fractional Kelly.
 """
 
@@ -27,7 +27,6 @@ from engine.engine import (
     get_nba_teams_back_to_back,
     get_team_power_ratings,
     get_schedule_fatigue_penalty,
-    BASKETBALL_NBA,
     BASKETBALL_NCAAB,
     NBA_LEAGUE_AVG_PACE,
     NBA_LEAGUE_AVG_OFF_RATING,
@@ -106,28 +105,11 @@ ENABLE_STARTUP_THREAD = False
 # Human-readable market labels (replaces h2h, spreads, totals in UI)
 MARKET_LABELS = {"h2h": "Winner", "spreads": "Spread", "totals": "Over/Under", "moneyline": "Moneyline"}
 
-# NBA team full name -> abbreviation
-NBA_TEAM_ABBREV: dict[str, str] = {
-    "Atlanta Hawks": "ATL", "Boston Celtics": "BOS", "Brooklyn Nets": "BKN",
-    "Charlotte Hornets": "CHA", "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
-    "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN", "Detroit Pistons": "DET",
-    "Golden State Warriors": "GSW", "Houston Rockets": "HOU", "Indiana Pacers": "IND",
-    "Los Angeles Clippers": "LAC", "Los Angeles Lakers": "LAL", "Memphis Grizzlies": "MEM",
-    "Miami Heat": "MIA", "Milwaukee Bucks": "MIL", "Minnesota Timberwolves": "MIN",
-    "New Orleans Pelicans": "NOP", "New York Knicks": "NYK", "Oklahoma City Thunder": "OKC",
-    "Orlando Magic": "ORL", "Philadelphia 76ers": "PHI", "Phoenix Suns": "PHX",
-    "Portland Trail Blazers": "POR", "Sacramento Kings": "SAC", "San Antonio Spurs": "SAS",
-    "Toronto Raptors": "TOR", "Utah Jazz": "UTA", "Washington Wizards": "WAS",
-}
-
-
-def _team_abbrev(team_name: str, league: str) -> str:
-    """Return abbreviation for team. NBA uses standard 3-letter; NCAAB derives from name."""
+def _team_abbrev(team_name: str, _league: str) -> str:
+    """Return abbreviation for display (NCAAB: derived from school/team name)."""
     s = (team_name or "").strip()
     if not s:
         return ""
-    if str(league).strip().upper() == "NBA":
-        return NBA_TEAM_ABBREV.get(s, s[:8])  # fallback: first 8 chars
     # NCAAB: use first 2 letters of key words (e.g. "SE Missouri St Redhawks" -> "SEMO", "Morehead St Eagles" -> "MOR")
     words = s.replace(".", "").split()
     skip = {"St", "State", "St.", "University", "U", "of", "The", "Eagles", "Redhawks", "Wildcats", "Bearcats", "etc"}
@@ -147,7 +129,7 @@ def _build_pick_explanation(row: pd.Series) -> str:
     stake = row.get("Recommended Stake", 0)
 
     parts = []
-    parts.append(f"Our model identifies **{value_pct:.1f}% expected value** on this play—the highest among today's NBA slate.")
+    parts.append(f"Our model identifies **{value_pct:.1f}% expected value** on this play—the highest among today's college basketball slate.")
     if market == "spreads":
         parts.append("Power ratings and schedule fatigue (back-to-backs) suggest the market is mispricing this spread.")
     elif market == "totals":
@@ -651,7 +633,6 @@ POTD_CARD_CSS = """
     font-family: inherit;
 }
 .vp-card-league { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #90a4ae; margin-bottom: 0.25rem; }
-.vp-card-league.nba { color: #42a5f5; }
 .vp-card-league.ncaab { color: #ffb74d; }
 .vp-matchup { font-size: 1.05rem; font-weight: 700; color: #fafafa; margin-bottom: 0.35rem; }
 .vp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; font-size: 0.9rem; }
@@ -896,7 +877,7 @@ def _is_top_seed_play(row: pd.Series, top_seed_max: int = 6) -> bool:
 def _render_value_play_card_html(row: pd.Series, edge_max_pct: float = 15.0, march_madness_mode: bool = False) -> str:
     """One All Value Plays card: matchup, bet type, edge %, odds, confidence bar, reasoning. Pick = Home/Away [Team]; edge green (Home) or blue (Away)."""
     league = str(row.get("League", ""))
-    league_class = "nba" if league == "NBA" else "ncaab"
+    league_class = "ncaab"
     matchup = _html_escape(str(row.get("Event", "")))
     bet_type = _html_escape(_vp_bet_type_label(row))
     edge_pct = float(row.get("Value (%)", 0))
@@ -1299,7 +1280,7 @@ def _basketball_to_value_plays(
     return pd.DataFrame(rows)
 
 
-# Sport keys for live Best Value Plays (The Odds API). NCAAB only for now; NBA code kept in backend.
+# Sport keys for live Best Value Plays (The Odds API). NCAAB only.
 LIVE_ODDS_SPORT_KEYS = [BASKETBALL_NCAAB]
 
 
@@ -1315,7 +1296,7 @@ MIN_BOOKMAKERS_VALUE_PLAY = 3
 def _aggregate_odds_best_line_avg_implied(odds_df: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate odds across bookmakers: one row per (event, market, selection, point).
-    Limited to NCAAB only to reduce memory; NBA rows are dropped before aggregation.
+    Limited to NCAAB only to reduce memory; non-NCAAB rows are dropped before aggregation.
     """
     if odds_df.empty or "odds" not in odds_df.columns:
         return odds_df
@@ -1674,7 +1655,7 @@ basketball_historical_df = pd.DataFrame(columns=BASKETBALL_HISTORICAL_COLUMNS)
 engine_basketball = BettingEngine(basketball_historical_df, strategy_fn, BANKROLL_FOR_STAKES)
 results_basketball = engine_basketball.run()
 
-# Value plays: live NBA + NCAAB from The Odds API; cached 15 min to stay under 500 requests/month
+# Value plays: live NCAAB from The Odds API; cached 15 min to stay under 500 requests/month
 kelly_frac_val = kelly_frac
 ODDS_CACHE_TTL_SECONDS = 900  # 15 minutes
 
@@ -2405,6 +2386,57 @@ def _mlb_dataframe_for_play_history(mlb_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out_rows)
 
 
+def _wlp_from_result_df(df: pd.DataFrame) -> tuple[int, int, int]:
+    """Count wins, losses, pushes from rows with column result_clean in {W, L, P}."""
+    if df.empty or "result_clean" not in df.columns:
+        return 0, 0, 0
+    s = df["result_clean"].astype(str).str.strip().str.upper()
+    return int((s == "W").sum()), int((s == "L").sum()), int((s == "P").sum())
+
+
+def _dedupe_play_history_natural_key(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep last row per play_history UNIQUE key (same game + bet may be re-archived)."""
+    if df.empty:
+        return df
+    cols = ["date_generated", "sport", "home_team", "away_team", "bet_type", "recommended_side", "spread_or_total"]
+    if not all(c in df.columns for c in cols):
+        return df
+    return df.drop_duplicates(subset=cols, keep="last")
+
+
+def _flat_bet_profit_usd(american_odds, result: str, stake_usd: float = 10.0) -> float:
+    """Profit on a flat stake at American odds (same rules as engine.play_history.update_play_result)."""
+    r = str(result).strip().upper()
+    if r == "P":
+        return 0.0
+    if r == "L":
+        return -float(stake_usd)
+    if r != "W":
+        return 0.0
+    try:
+        a = float(american_odds)
+    except (TypeError, ValueError):
+        return 0.0
+    s = float(stake_usd)
+    if a >= 100:
+        return s * (a / 100.0)
+    if a <= -100:
+        return s * (100.0 / abs(a))
+    return 0.0
+
+
+def _mlb_flat_stake_pl_and_roi(df: pd.DataFrame, stake_usd: float = 10.0) -> tuple[float, float]:
+    """Sum profit and ROI % = profit / (stake × #resolved bets) × 100 for archived odds."""
+    if df.empty:
+        return 0.0, 0.0
+    total = 0.0
+    for _, row in df.iterrows():
+        total += _flat_bet_profit_usd(row.get("market_odds_at_time"), row.get("result_clean"), stake_usd)
+    n = len(df)
+    roi_pct = (total / (stake_usd * n) * 100.0) if n else 0.0
+    return total, roi_pct
+
+
 def _normalize_date_to_iso(raw: str) -> Optional[str]:
     """Parse date from YYYY-MM-DD or MM-DD-YYYY into YYYY-MM-DD; return None if unparseable."""
     s = str(raw).strip()
@@ -3072,7 +3104,7 @@ if not STRIP_DOWN_MODE and not st.session_state.get(_archive_key):
         pass
 
 # -----------------------------------------------------------------------------
-# Main layout — tabbed (Overview = daily picks sheet, NCAAB, NBA)
+# Main layout — tabbed (Overview = daily picks sheet, NCAAB, MLB, …)
 # -----------------------------------------------------------------------------
 
 def _today_str() -> str:
@@ -3082,7 +3114,7 @@ def _today_str() -> str:
 
 
 def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
-    """From value_plays_df (today's data), compute: date_str, total_plays, n_nba, n_ncaab, top_edge_label.
+    """From value_plays_df (today's data), compute: date_str, total_plays, n_ncaab, top_edge_label.
     Uses correlated-play filter: at most 10 plays and no team appears twice."""
     # #region agent log
     import time
@@ -3102,7 +3134,6 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
         return {
             "date_str": date_str,
             "total_plays": 0,
-            "n_nba": 0,
             "n_ncaab": 0,
             "top_edge_label": "—",
         }
@@ -3114,9 +3145,8 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
     )
     diversified = _filter_correlated_plays(best_per_game, max_plays=MAX_TOP_PLAYS_NO_CORRELATION)
     total_plays = len(diversified)
-    n_nba = int((diversified["League"] == "NBA").sum()) if not diversified.empty else 0
     n_ncaab = int((diversified["League"] == "NCAAB").sum()) if not diversified.empty else 0
-    _dbg("summary computed", {"best_per_game_len": len(best_per_game), "total_plays": total_plays, "n_nba": n_nba, "n_ncaab": n_ncaab}, "H3")
+    _dbg("summary computed", {"best_per_game_len": len(best_per_game), "total_plays": total_plays, "n_ncaab": n_ncaab}, "H3")
     if diversified.empty:
         top_edge_label = "—"
     else:
@@ -3137,7 +3167,6 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
     return {
         "date_str": date_str,
         "total_plays": total_plays,
-        "n_nba": n_nba,
         "n_ncaab": n_ncaab,
         "top_edge_label": top_edge_label,
     }
@@ -3162,7 +3191,7 @@ if not _historical_picks_df.empty:
     _n_slate = len(_historical_picks_df)
     _top_ep = _historical_picks_df["Edge_Points"].abs().max() if "Edge_Points" in _historical_picks_df.columns else None
     _top_edge_slate = f"{float(_top_ep) / 3:.1f}%" if _top_ep is not None and pd.notna(_top_ep) else "—"
-    _summary = {"date_str": _date_str, "total_plays": _n_slate, "n_nba": 0, "n_ncaab": _n_slate, "top_edge_label": _top_edge_slate}
+    _summary = {"date_str": _date_str, "total_plays": _n_slate, "n_ncaab": _n_slate, "top_edge_label": _top_edge_slate}
 else:
     _summary = _summary_bar_values(value_plays_df)
     # Top edge must reflect the true max over all value plays and POTD (not just diversified subset)
@@ -3198,7 +3227,7 @@ if _summary["total_plays"] == 0 and (potd_picks.get("NCAAB Pick 1") or potd_pick
     _top_edge = f"{max(abs(e) for e in _potd_edges):.1f}%" if _potd_edges else "—"
     _summary = {**_summary, "total_plays": _n_potd, "n_ncaab": _n_potd, "top_edge_label": _top_edge}
 _plays_text = f"{_summary['total_plays']} play{'s' if _summary['total_plays'] != 1 else ''} found"
-_nba_ncaab = f"{_summary['n_ncaab']} NCAAB"
+_ncaab_stat_label = f"{_summary['n_ncaab']} NCAAB"
 _stat_bar_html = f"""
 <style>
 .dashboard-stat-bar {{ display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
@@ -3216,7 +3245,7 @@ _stat_bar_html = f"""
   <span class="stat-divider">|</span>
   <span><span class="stat-label">Plays</span>{_html_escape(_plays_text)}</span>
   <span class="stat-divider">|</span>
-  <span>{_html_escape(_nba_ncaab)}</span>
+  <span>{_html_escape(_ncaab_stat_label)}</span>
   <span class="stat-divider">|</span>
   <span><span class="stat-label">Top edge</span>{_html_escape(_summary['top_edge_label'])}</span>
 </div>
@@ -3302,8 +3331,8 @@ if _unresolved_stale > 0:
     )
     st.markdown(_slim_alert_html, unsafe_allow_html=True)
 st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
-tab_overview, tab_ncaab, tab_mlb, tab_nba, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(
-    ["Overview", "NCAAB", "MLB", "NBA (Coming Soon)", "Mark Results", "NCAAB Record", "Manual Odds", "Game Lookup"]
+tab_overview, tab_ncaab, tab_mlb, tab_mlb_record, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(
+    ["Overview", "NCAAB", "MLB", "MLB Record", "Mark Results", "NCAAB Record", "Manual Odds", "Game Lookup"]
 )
 
 with tab_overview:
@@ -3791,9 +3820,116 @@ with tab_mlb:
             except Exception as e:
                 st.error(f"Could not save picks — {e}")
 
+with tab_mlb_record:
+    st.subheader("MLB Record")
+    st.caption(
+        "Season-long results for MLB value plays archived to **play_history** (Save Picks on the **MLB** tab). "
+        "Mark Win / Loss / Push on **Mark Results** once games finish. "
+        "**P/L and ROI** assume a flat **$10** bet per resolved play using **American odds** at archive time "
+        "(e.g. +140 → win **$14**, −150 → win **$6.67**, loss **−$10**, push **$0**)."
+    )
+    _mlb_rec_raw = load_play_history(league="MLB")
+    if _mlb_rec_raw.empty:
+        st.info("No MLB plays in the database yet. Open the **MLB** tab and click **Save Picks** to archive today's card.")
+    else:
+        _mlb_rec = _dedupe_play_history_natural_key(_mlb_rec_raw.copy())
+        _mlb_rec["result_clean"] = _mlb_rec["result"].apply(
+            lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
+        )
+        _mlb_resolved = _mlb_rec[_mlb_rec["result_clean"].notna()].copy()
+        _mlb_pending_n = int(_mlb_rec["result_clean"].isna().sum())
+        w_t, l_t, p_t = _wlp_from_result_df(_mlb_resolved)
+        bt_norm = _mlb_resolved["bet_type"].astype(str).str.strip().str.lower()
+        _ou = _mlb_resolved[bt_norm.str.contains("over") & bt_norm.str.contains("under")]
+        _ml = _mlb_resolved[bt_norm == "moneyline"]
+        w_ou, l_ou, p_ou = _wlp_from_result_df(_ou)
+        w_ml, l_ml, p_ml = _wlp_from_result_df(_ml)
+        st.markdown(
+            """
+            <style>
+            .mlb-rec-block { text-align: center; margin-bottom: 1.25rem; }
+            .mlb-rec-title { font-size: 0.85rem; color: rgba(255,255,255,0.55); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.35rem; }
+            .mlb-rec-record { font-size: 2.75rem; font-weight: 900; letter-spacing: 0.04em; line-height: 1.15; }
+            .mlb-rec-record .mlb-w { color: #4caf50; }
+            .mlb-rec-record .mlb-l { color: #f44336; }
+            .mlb-rec-record .mlb-p { color: #9e9e9e; }
+            .mlb-rec-pending { text-align: center; font-size: 0.9rem; color: rgba(255,255,255,0.65); margin-top: -0.25rem; margin-bottom: 0.5rem; }
+            .mlb-rec-note { font-size: 0.8rem; color: rgba(255,255,255,0.45); text-align: center; margin-top: 0.75rem; }
+            .mlb-rec-pl-pos { color: #81c784; font-weight: 800; }
+            .mlb-rec-pl-neg { color: #e57373; font-weight: 800; }
+            .mlb-rec-pl-row { font-size: 1rem; color: rgba(255,255,255,0.88); text-align: center; margin: 0.35rem 0; line-height: 1.45; }
+            .mlb-rec-pl-head { font-size: 0.8rem; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.05em; text-align: center; margin: 1rem 0 0.5rem 0; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        _STAKE = 10.0
+        pl_all, roi_all = _mlb_flat_stake_pl_and_roi(_mlb_resolved, stake_usd=_STAKE)
+        pl_ou, roi_ou = _mlb_flat_stake_pl_and_roi(_ou, stake_usd=_STAKE)
+        pl_ml, roi_ml = _mlb_flat_stake_pl_and_roi(_ml, stake_usd=_STAKE)
+        _n_all = len(_mlb_resolved)
+        _n_ou = len(_ou)
+        _n_ml = len(_ml)
+
+        def _pl_html(v: float) -> str:
+            cls = "mlb-rec-pl-pos" if v >= 0 else "mlb-rec-pl-neg"
+            sign = "+" if v >= 0 else ""
+            return f'<span class="{cls}">{sign}${v:,.2f}</span>'
+
+        st.markdown(
+            f'<div class="mlb-rec-block"><div class="mlb-rec-title">All plays (resolved)</div>'
+            f'<div class="mlb-rec-record"><span class="mlb-w">{w_t}</span>–<span class="mlb-l">{l_t}</span>–<span class="mlb-p">{p_t}</span></div>'
+            f'<div class="mlb-rec-pl-row">Flat ${_STAKE:g} bet: {_pl_html(pl_all)} &nbsp;·&nbsp; <strong>{roi_all:+.1f}%</strong> ROI'
+            f" &nbsp;(${_STAKE:g} × {_n_all} bet{'' if _n_all == 1 else 's'} = ${_STAKE * _n_all:,.0f} staked)</div></div>",
+            unsafe_allow_html=True,
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(
+                f'<div class="mlb-rec-block"><div class="mlb-rec-title">Over / Under</div>'
+                f'<div class="mlb-rec-record"><span class="mlb-w">{w_ou}</span>–<span class="mlb-l">{l_ou}</span>–<span class="mlb-p">{p_ou}</span></div>'
+                + (
+                    f'<div class="mlb-rec-pl-row">{_pl_html(pl_ou)} &nbsp;·&nbsp; <strong>{roi_ou:+.1f}%</strong> ROI'
+                    f" &nbsp;({_n_ou} bet{'' if _n_ou == 1 else 's'})</div>"
+                    if _n_ou
+                    else '<div class="mlb-rec-pl-row">—</div>'
+                )
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(
+                f'<div class="mlb-rec-block"><div class="mlb-rec-title">Moneyline</div>'
+                f'<div class="mlb-rec-record"><span class="mlb-w">{w_ml}</span>–<span class="mlb-l">{l_ml}</span>–<span class="mlb-p">{p_ml}</span></div>'
+                + (
+                    f'<div class="mlb-rec-pl-row">{_pl_html(pl_ml)} &nbsp;·&nbsp; <strong>{roi_ml:+.1f}%</strong> ROI'
+                    f" &nbsp;({_n_ml} bet{'' if _n_ml == 1 else 's'})</div>"
+                    if _n_ml
+                    else '<div class="mlb-rec-pl-row">—</div>'
+                )
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        if _mlb_pending_n:
+            st.markdown(
+                f'<div class="mlb-rec-pending">{_mlb_pending_n} play(s) still <strong>pending</strong> result.</div>',
+                unsafe_allow_html=True,
+            )
+        _spr = _mlb_resolved[bt_norm.str.contains("spread")]
+        if not _spr.empty:
+            w_s, l_s, p_s = _wlp_from_result_df(_spr)
+            st.caption(f"Spread (included in total above): {w_s}–{l_s}–{p_s}.")
+        st.markdown(
+            '<div class="mlb-rec-note">Total uses every resolved MLB pick (moneyline, over/under, and spread).</div>',
+            unsafe_allow_html=True,
+        )
+
 with tab_mark_results:
     st.subheader("Mark Results")
-    st.caption("Mark Win / Loss / Push for plays with **Pending** results only (ignores slate date). You can see Saturday pending games while viewing Sunday's slate.")
+    st.caption(
+        "Mark Win / Loss / Push for **NCAAB** and **MLB** plays with **Pending** results only (ignores slate date). "
+        "You can see Saturday pending games while viewing Sunday's slate."
+    )
     if st.button("🔄 Refresh pending plays", help="Reload play history from the database (clears 30‑min cache so new or updated plays appear)"):
         _load_play_history_cached.clear()
         st.rerun()
@@ -3803,7 +3939,8 @@ with tab_mark_results:
     _mr_history = _load_play_history_cached(from_date_iso=_mr_from.isoformat(), to_date_iso=_yesterday.isoformat())
     if not _mr_history.empty:
         _mr_history = _mr_history.copy()
-        _mr_history = _mr_history[_mr_history["sport"].astype(str).str.strip().str.upper().str.startswith("NCAAB")]
+        _mr_sport_u = _mr_history["sport"].astype(str).str.strip().str.upper()
+        _mr_history = _mr_history[_mr_sport_u.str.startswith("NCAAB") | (_mr_sport_u == "MLB")]
         _mr_history["result_clean"] = _mr_history["result"].apply(
             lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
         )
@@ -4348,12 +4485,13 @@ with tab_manual_odds:
     _manual_odds_path = _manual_cache_dir / "manual_odds.json"
 
     with st.form("manual_odds_form", clear_on_submit=True):
+        st.caption("Entries are saved as **NCAAB** (college basketball).")
         c1, c2 = st.columns(2)
         with c1:
             _home = st.text_input("Home team", placeholder="e.g. Alabama")
         with c2:
             _away = st.text_input("Away team", placeholder="e.g. Tennessee")
-        _sport = st.selectbox("Sport", options=["NCAAB", "NBA"], index=0)
+        _sport = "NCAAB"
         c3, c4, c5 = st.columns(3)
         with c3:
             _spread = st.number_input("Spread (home)", value=None, placeholder="-7.5", step=0.5, format="%.1f")
@@ -4605,74 +4743,3 @@ with tab_game_lookup:
                 st.warning(f"No game today and no team matching **{search_query.strip()}** in team_stats_2026.")
         else:
             st.caption("Enter a team name above to find today's game or view season stats.")
-
-with tab_nba:
-    st.subheader("NBA — Coming Soon")
-    st.info("NBA value plays and totals will return here. Backend is still in place; we're focused on NCAAB for now.")
-    # NBA tab content kept below (commented) for easy re-enable:
-    # nba_value = value_plays_df[value_plays_df["League"] == "NBA"] if not value_plays_df.empty and "League" in value_plays_df.columns else pd.DataFrame()
-    # ... (value plays table, totals tracker)
-    nba_totals_df = pd.DataFrame()
-    if False and not live_odds_df.empty and "sport_key" in live_odds_df.columns:
-        totals_only = live_odds_df[
-            (live_odds_df["sport_key"] == BASKETBALL_NBA) &
-            (live_odds_df["market_type"] == "totals") &
-            (live_odds_df["point"].notna())
-        ]
-        if not totals_only.empty:
-            pace_stats = get_nba_team_pace_stats()
-            b2b_teams = _get_b2b_teams_cached(
-                date.today().isoformat(),
-                refresh_key=st.session_state.get("odds_refresh_key", 0),
-            )
-            seen = set()
-            rows = []
-            for _, r in totals_only.iterrows():
-                eid = r.get("event_id", "")
-                if eid in seen:
-                    continue
-                seen.add(eid)
-                home_team = r.get("home_team", "")
-                away_team = r.get("away_team", "")
-                market_total = float(r.get("point", 0))
-                event_name = r.get("event_name", f"{away_team} @ {home_team}")
-                predicted_total = predict_nba_total(home_team, away_team, pace_stats, b2b_teams=b2b_teams)
-                edge = predicted_total - market_total
-                value = get_totals_value(predicted_total, market_total)
-                value_label = "Value Over" if value == "over" else ("Value Under" if value == "under" else "—")
-                rows.append({
-                    "Game": event_name,
-                    "Market Total (O/U Line)": round(market_total, 1),
-                    "My Projected Total": round(predicted_total, 1),
-                    "Edge": round(edge, 1),
-                    "Value": value_label,
-                })
-            nba_totals_df = pd.DataFrame(rows)
-    # Original NBA totals/value-plays UI kept below for re-enable (run when LIVE_ODDS_SPORT_KEYS includes NBA again)
-    if False and not nba_totals_df.empty:
-        def _edge_color(edge_series: pd.Series) -> list[str]:
-            styles = []
-            for idx in edge_series.index:
-                v = nba_totals_df.loc[idx, "Value"]
-                if v == "Value Over":
-                    styles.append("background-color: rgba(46, 125, 50, 0.45); color: #c8e6c9;")
-                elif v == "Value Under":
-                    styles.append("background-color: rgba(198, 40, 40, 0.45); color: #ffcdd2;")
-                else:
-                    styles.append("")
-            return styles
-        display_totals = nba_totals_df.copy()
-        styled_totals = display_totals.style.apply(_edge_color, subset=["Edge"])
-        st.dataframe(
-            styled_totals,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Game": st.column_config.TextColumn("Game", width="medium"),
-                "Market Total (O/U Line)": st.column_config.NumberColumn("Market Total (O/U Line)", format="%.1f", width="small"),
-                "My Projected Total": st.column_config.NumberColumn("My Projected Total", format="%.1f", width="small"),
-                "Edge": st.column_config.NumberColumn("Edge", format="%+.1f", width="small"),
-                "Value": st.column_config.TextColumn("Value", width="small"),
-            },
-        )
-
