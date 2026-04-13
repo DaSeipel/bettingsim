@@ -3,8 +3,10 @@
 Fetch season pitching stats for probable starters listed in data/odds/live_mlb_odds.json
 (home_pitcher / away_pitcher) from the MLB Stats API.
 
-Writes data/mlb/pitcher_stats.csv with: odds_name, player_id, full_name, season, era, fip, whip,
+Writes data/mlb/pitcher_stats.csv with: odds_name, player_id, full_name, season, era, fip, xfip, whip,
 k9, bb9, innings_pitched
+
+xfip is an HR-regressed approximation: fip + (hr_per_9 - 1.2) * 0.3 (hr_per_9 from homeRuns / IP * 9).
 
 Player lookup:
   GET https://statsapi.mlb.com/api/v1/people/search?names={name}&sportId=1
@@ -46,7 +48,7 @@ FIP_C_FGM = 3.10
 
 # Blend weight for 2026 rate stats when both seasons are available.
 PITCHER_BLEND_2026_WEIGHT = 0.40
-_PITCHER_BLEND_RATE_COLS = ("era", "fip", "whip", "k9", "bb9")
+_PITCHER_BLEND_RATE_COLS = ("era", "fip", "xfip", "whip", "k9", "bb9")
 
 
 def _get_json(url: str) -> dict:
@@ -104,6 +106,20 @@ def compute_fip(st: dict, ip_float: float) -> float | None:
     k = int(st.get("strikeOuts") or st.get("strikeouts") or 0)
     num = (13 * hr) + (3 * (bb + hbp)) - (2 * k)
     return (num / ip_float) + FIP_C_FGM
+
+
+def compute_xfip_approx(fip: float | None, st: dict, ip_float: float) -> float | None:
+    """
+    Simple xFIP-style nudge: regress HR/9 toward league ~1.2 HR/9.
+    xFIP_approx = fip + (hr_per_9 - 1.2) * 0.3
+    """
+    if fip is None:
+        return None
+    if ip_float <= 0:
+        return float(fip)
+    hr = int(st.get("homeRuns") or 0)
+    hr_per_9 = (hr / ip_float) * 9.0
+    return float(fip) + (hr_per_9 - 1.2) * 0.3
 
 
 def best_season_pitching_stat(splits: list, season: str) -> dict | None:
@@ -206,7 +222,11 @@ def fetch_pitcher_season_row(player_id: int, season: int, odds_name: str, full_n
 
     fip = compute_fip(st, ipf)
     if fip is None and era is not None:
-        fip = era
+        fip = float(era)
+
+    xfip = compute_xfip_approx(fip, st, ipf)
+    if xfip is None and fip is not None:
+        xfip = float(fip)
 
     return {
         "odds_name": odds_name,
@@ -215,6 +235,7 @@ def fetch_pitcher_season_row(player_id: int, season: int, odds_name: str, full_n
         "season": season,
         "era": round(era, 3) if era is not None else None,
         "fip": round(fip, 3) if fip is not None else None,
+        "xfip": round(xfip, 3) if xfip is not None else None,
         "whip": round(whip, 3) if whip is not None else None,
         "k9": round(k9, 3) if k9 is not None else None,
         "bb9": round(bb9, 3) if bb9 is not None else None,
@@ -310,6 +331,7 @@ def main() -> int:
                 "season",
                 "era",
                 "fip",
+                "xfip",
                 "whip",
                 "k9",
                 "bb9",

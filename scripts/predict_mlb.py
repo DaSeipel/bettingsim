@@ -7,9 +7,12 @@ data/mlb/recent_form.csv (scripts/fetch_mlb_recent_form.py — run once per day;
 includes recent_ra_avg for short-term runs allowed and recent_era from last 5 boxscores).
 
 Requires fetch_mlb_odds.py to have run so live_mlb_odds.json exists.
-Best results: run fetch_mlb_pitchers.py after odds so starter FIP/K9/BB9/innings_pitched are available.
+Optional: scripts/fetch_mlb_weather.py after odds (writes data/cache/mlb_weather.json) for
+temperature nudge on moneyline team quality and wind nudge on predicted totals.
+
+Best results: run fetch_mlb_pitchers.py after odds so starter FIP/xFIP blend, K9/BB9, and innings_pitched are available.
 Low-IP starters shrink pitcher weight toward team stats (see PITCH_MATCHUP_WEIGHT / _pitcher_confidence;
-max ~45% pitcher / 55% team when both starters have 100+ IP).
+max ~45% pitcher / 55% team when both starters have 50+ IP (full confidence; see _pitcher_confidence).
 
 card_date: prefers games_date_et from live odds (MLB calendar day in ET); else America/New_York today.
 """
@@ -33,6 +36,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=r".*urllib3 v2 only supports OpenSSL.*")
 from datetime import date, datetime
 from pathlib import Path
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -42,44 +46,49 @@ if str(ROOT) not in sys.path:
 from strategies.strategies import american_to_decimal
 
 ODDS_PATH = ROOT / "data" / "odds" / "live_mlb_odds.json"
+WEATHER_PATH = ROOT / "data" / "cache" / "mlb_weather.json"
 OUT_PATH = ROOT / "data" / "cache" / "mlb_value_plays.json"
 PITCHER_STATS_PATH = ROOT / "data" / "mlb" / "pitcher_stats.csv"
 RECENT_FORM_PATH = ROOT / "data" / "mlb" / "recent_form.csv"
 PARK_FACTORS_PATH = ROOT / "data" / "mlb" / "mlb_park_factors.json"
 
 # Recent win% streak adjustment: added to diff_team as (home_bonus - away_bonus).
-FORM_WIN_PCT_COEFF = 0.25
+FORM_WIN_PCT_COEFF = 0.08
 
 # Recent runs-allowed / game (from recent_form.csv, up to 7 games in window vs ~4.5 league avg).
-RECENT_PITCH_RA_COEFF = 0.10
+RECENT_PITCH_RA_COEFF = 0.04
 RECENT_PITCH_RA_TARGET = 4.50
 
-# Edge and probability filters (decimal edge = EV fraction, e.g. 0.03 = 3%).
+# Edge and probability filters (decimal edge = EV fraction, e.g. 0.05 = 5%).
 MIN_EDGE_DECIMAL = 0.03  # minimum 3% edge to qualify as a play
-MAX_EDGE_DECIMAL = 0.15  # skip plays above this; prints FLAGGED_HIGH_EDGE
+MAX_EDGE_DECIMAL = 0.13  # skip plays above this; prints FLAGGED_HIGH_EDGE
 MIN_MODEL_PROB = 0.42  # skip picks below this win probability; prints SKIP_LOW_PROB
 
-# Moneyline only: shrink effective edge when laying heavy favorite juice (after pick, before filters).
+# Moneyline only: hard skip when the chosen side is this heavy or worse (more negative).
+MAX_FAVORITE_ODDS = -160
+
+# Moneyline only: gradual edge shrink for moderate chalk (-160 exclusive through -150 inclusive).
 JUICE_PENALTY_THRESHOLD = -150
 JUICE_PENALTY_RATE = 0.003
 
 # Pull model win prob toward two-way fair implied (after logistic + clamp, before edge).
-PROB_SHRINK_TOWARD_MARKET = 0.25
+PROB_SHRINK_TOWARD_MARKET = 0.15
 
 # When a starter is missing from pitcher_stats.csv, use league-average rate stats and
-# IP=50 → confidence 0.50 → pitcher_weight ≈ 0.45×0.5 (not 0/100).
+# IP=50 → confidence 1.0 with early-season /50 scale → pitcher_weight ≈ 0.45 (not 0/100).
 MISSING_PITCHER_STATS_ROW: dict[str, float] = {
     "fip": 4.25,
+    "xfip": 4.25,
     "k9": 8.8,
     "bb9": 3.2,
     "innings_pitched": 50.0,
 }
 
-# Max pitcher share when both starters have 100+ IP (confidence 1.0). Below that,
+# Max pitcher share when both starters have 50+ IP (confidence 1.0). Below that,
 # pitcher_weight = PITCH_MATCHUP_WEIGHT * min(home_conf, away_conf), team_weight = 1 - pitcher_weight.
 PITCH_MATCHUP_WEIGHT = 0.45
 # Softer than 0.58 so wide diff_team (+ larger RD cap) does not pin every mismatch at 0.30/0.70.
-LOGISTIC_K = 0.36
+LOGISTIC_K = 0.45
 HOME_WIN_PROB_MIN = 0.30
 HOME_WIN_PROB_MAX = 0.70
 DIFF_TEAM_CLAMP = 2.0
@@ -166,10 +175,13 @@ def _card_date_iso(blob: dict) -> str:
 
 def _juice_penalized_edge(edge: float, odds_am: float) -> float:
     """
-    If American odds are at or past JUICE_PENALTY_THRESHOLD (more negative), scale edge down:
-    edge *= (1 - rate * (|odds| - 150)). -150 unchanged; steeper chalk gets larger haircut.
+    For odds in (-160, -150] (more negative than -150 but not past MAX_FAVORITE_ODDS), scale edge down:
+    edge *= (1 - rate * (|odds| - 150)). -150 unchanged; -159 gets a small haircut.
+    Odds past -160 are handled by a hard skip in main(); odds weaker than -150 are unchanged.
     """
     if odds_am > JUICE_PENALTY_THRESHOLD:
+        return edge
+    if odds_am <= MAX_FAVORITE_ODDS:
         return edge
     factor = 1.0 - JUICE_PENALTY_RATE * (abs(float(odds_am)) - 150.0)
     return edge * max(0.0, factor)
@@ -399,15 +411,29 @@ def _starter_innings(row) -> float:
 
 
 def _pitcher_confidence(innings_pitched: float) -> float:
-    """min(1.0, IP/100); 180 IP → 1.0, 50 IP → 0.5."""
-    return min(1.0, max(0.0, innings_pitched) / 100.0)
+    """
+    min(1.0, IP/50); 50+ IP → 1.0, 25 IP → 0.5.
+    Denominator 50 is for April / early season; mid-May onward consider raising to 75 or 100
+    when starters have accumulated more innings (change the literal in the return below).
+    """
+    return min(1.0, max(0.0, innings_pitched) / 50.0)
 
 
-def _starter_fip_k_bb(row) -> tuple[float, float, float]:
-    """Defaults = league-average-ish when stats missing."""
+def _starter_pitcher_rates(row) -> dict[str, float]:
+    """
+    FIP/xFIP blend for pitcher run-prevention signal (used for matchup + totals).
+    blended = 0.5 * fip + 0.5 * xfip after <30 IP regression of both toward 4.25.
+    """
     dflt_fip, dflt_k9, dflt_bb9 = 4.25, 8.8, 3.2
     if row is None:
-        return (dflt_fip, dflt_k9, dflt_bb9)
+        return {
+            "blended": dflt_fip,
+            "k9": dflt_k9,
+            "bb9": dflt_bb9,
+            "fip": dflt_fip,
+            "xfip": dflt_fip,
+            "ip": 0.0,
+        }
 
     def _g(key: str, d: float) -> float:
         try:
@@ -418,22 +444,57 @@ def _starter_fip_k_bb(row) -> tuple[float, float, float]:
         except (TypeError, ValueError):
             return d
 
-    fip = _g("fip", dflt_fip)
+    fip_v = _g("fip", dflt_fip)
+    try:
+        xv_raw = row.get("xfip")
+        if xv_raw is None or (isinstance(xv_raw, float) and xv_raw != xv_raw):
+            xfip_v = fip_v
+        else:
+            xfip_v = float(xv_raw)
+    except (TypeError, ValueError):
+        xfip_v = fip_v
+
     k9 = _g("k9", dflt_k9)
     bb9 = _g("bb9", dflt_bb9)
+    ip = _starter_innings(row)
 
-    if _starter_innings(row) < 30:
-        fip = 0.5 * fip + 0.5 * dflt_fip
+    if ip < 30:
+        fip_v = 0.5 * fip_v + 0.5 * dflt_fip
+        xfip_v = 0.5 * xfip_v + 0.5 * dflt_fip
 
-    fip = min(max(fip, 2.5), 6.0)
+    blended = 0.5 * fip_v + 0.5 * xfip_v
+    blended = min(max(blended, 2.5), 6.0)
     k9 = min(max(k9, 5.0), 13.0)
     bb9 = min(max(bb9, 1.0), 6.5)
-    return (fip, k9, bb9)
+    return {
+        "blended": blended,
+        "k9": k9,
+        "bb9": bb9,
+        "fip": fip_v,
+        "xfip": xfip_v,
+        "ip": ip,
+    }
+
+
+def _starter_fip_k_bb(row) -> tuple[float, float, float]:
+    """Returns (blended_fip, k9, bb9) for matchup and totals."""
+    r = _starter_pitcher_rates(row)
+    return (r["blended"], r["k9"], r["bb9"])
+
+
+def _pitcher_blend_debug_line(display_name: str, row) -> None:
+    """Stdout: FIP, xFIP (after IP regression), blended, IP."""
+    nm = (display_name or "").strip() or "?"
+    r = _starter_pitcher_rates(row)
+    print(
+        f"[PITCHER] {nm}: FIP={r['fip']:.2f}, xFIP={r['xfip']:.2f}, blended={r['blended']:.2f}, IP={r['ip']:.1f}",
+        flush=True,
+    )
 
 
 def _pitcher_matchup_diff_home(home_pitcher_row, away_pitcher_row) -> float:
     """
-    > 0 when home rotation matchup favors the home starter (lower FIP / more Ks / fewer walks).
+    > 0 when home rotation matchup favors the home starter (lower blended FIP/xFIP / more Ks / fewer walks).
     """
     h_fip, h_k9, h_bb9 = _starter_fip_k_bb(home_pitcher_row)
     a_fip, a_k9, a_bb9 = _starter_fip_k_bb(away_pitcher_row)
@@ -464,17 +525,87 @@ def _team_era(row) -> float:
         return 4.20
 
 
+def _load_mlb_weather_by_matchup() -> dict[str, dict]:
+    """Return matchup key 'Away @ Home' -> weather dict from mlb_weather.json; empty if missing."""
+    if not WEATHER_PATH.exists():
+        return {}
+    try:
+        with open(WEATHER_PATH, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        w = raw.get("weather")
+        if isinstance(w, dict):
+            return w
+    except Exception:
+        pass
+    return {}
+
+
+def _matchup_weather_key(away: str, home: str) -> str:
+    return f"{away.strip()} @ {home.strip()}"
+
+
+def _temp_adj_from_weather(wx: Optional[dict]) -> float:
+    """temp_adj = 0.02 * ((temp_f - 72) / 30); cold suppresses offense signal for home acclimation."""
+    if not wx:
+        return 0.0
+    tf = wx.get("temp_f")
+    if tf is None:
+        return 0.0
+    try:
+        t = float(tf)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.02 * ((t - 72.0) / 30.0)
+
+
+def _totals_wind_bonus_mph_deg(wind_speed_mph: float, wind_direction_deg: float) -> float:
+    """
+    Totals-only nudge when wind_speed_mph > 8.
+    Out (carry): direction in [135, 225] deg. In: [315, 360] U [0, 45]. Else crosswind -> 0.
+    """
+    if wind_speed_mph <= 8.0:
+        return 0.0
+    try:
+        d = float(wind_direction_deg) % 360.0
+    except (TypeError, ValueError):
+        return 0.0
+    if 135.0 <= d <= 225.0:
+        return 0.4
+    if d >= 315.0 or d <= 45.0:
+        return -0.4
+    return 0.0
+
+
+def _weather_debug_print(away: str, home: str, wx: Optional[dict]) -> None:
+    if wx and wx.get("temp_f") is not None:
+        try:
+            tf = float(wx["temp_f"])
+            ws = float(wx.get("wind_speed_mph") or 0.0)
+            wd = int(wx.get("wind_direction_deg") or 0)
+            pp = int(wx.get("precip_prob") or 0)
+        except (TypeError, ValueError):
+            print(f"[WEATHER] {away} @ {home}: (invalid weather fields)", flush=True)
+            return
+        print(
+            f"[WEATHER] {away} @ {home}: {tf:.1f}°F, wind {ws:.1f}mph dir={wd}, precip={pp}%",
+            flush=True,
+        )
+    else:
+        print(f"[WEATHER] {away} @ {home}: (no data)", flush=True)
+
+
 def _predict_total(
     home_team_row,
     away_team_row,
     home_pitcher_row,
     away_pitcher_row,
     park_mult: float,
+    wind_bonus: float = 0.0,
 ) -> float:
     """
     Predicted total runs for a game.
     Base: (home_era + away_era) * 0.5 * park_mult * TOTALS_SCALING_CONSTANT
-    Adj: pitcher FIP nudge (avg_fip - 4.25) * TOTALS_PITCHER_ADJ_WEIGHT.
+    Adj: pitcher blended FIP/xFIP nudge (avg_blended - 4.25) * TOTALS_PITCHER_ADJ_WEIGHT.
     In April (month <= 4): APRIL_TOTALS_ADJUSTMENT applied to predicted total.
     """
     home_era = _team_era(home_team_row)
@@ -489,6 +620,7 @@ def _predict_total(
     if date.today().month <= 4:
         predicted += APRIL_TOTALS_ADJUSTMENT
 
+    predicted += float(wind_bonus)
     return predicted
 
 
@@ -500,13 +632,15 @@ def _home_win_prob(
     home_team_name: str = "",
     form_diff: float = 0.0,
     recent_pitch_diff: float = 0.0,
+    weather_temp_adj: float = 0.0,
 ) -> tuple[float, float]:
     """
     Returns (p_home, park_mult).
     Park factor is applied to the home team quality signal only (not pitcher side).
     form_diff = home form_bonus minus away form_bonus (recent win% streak).
     recent_pitch_diff = home minus away recent_pitch_adj (short-term runs allowed vs league avg).
-    Both are added to diff_team before logistic.
+    weather_temp_adj: add to home quality, subtract from away (home acclimation); from mlb_weather.json.
+    All are folded into diff_team before logistic.
     """
     diff_pitch = _pitcher_matchup_diff_home(home_pitcher_row, away_pitcher_row)
     rh = _team_quality_for_model(home_team_row)
@@ -514,6 +648,9 @@ def _home_win_prob(
 
     pm = _park_mult(home_team_name)
     rh *= 1.0 + 0.3 * (pm - 1.0)
+    ta = float(weather_temp_adj)
+    rh += ta
+    ra -= ta
 
     diff_team = (rh - ra) + 0.02 + float(form_diff) + float(recent_pitch_diff)
 
@@ -596,6 +733,14 @@ def main() -> int:
         )
 
     games = blob.get("games") or []
+    weather_by_matchup = _load_mlb_weather_by_matchup()
+    if weather_by_matchup:
+        print(
+            f"MLB predict: loaded weather for {len(weather_by_matchup)} matchup(s) from {WEATHER_PATH}.",
+            file=sys.stderr,
+            flush=True,
+        )
+
     matched = 0
     plays: list[dict] = []
 
@@ -604,6 +749,9 @@ def main() -> int:
             continue
         home = str(g.get("home_team") or "").strip()
         away = str(g.get("away_team") or "").strip()
+        wx = weather_by_matchup.get(_matchup_weather_key(away, home))
+        _weather_debug_print(away, home, wx)
+
         ml = g.get("moneyline") or {}
         home_odds_am = _american_to_float(ml.get("home_odds"))
         away_odds_am = _american_to_float(ml.get("away_odds"))
@@ -651,6 +799,9 @@ def main() -> int:
         if ap is None:
             ap = MISSING_PITCHER_STATS_ROW
 
+        _pitcher_blend_debug_line(str(g.get("away_pitcher") or "away"), ap)
+        _pitcher_blend_debug_line(str(g.get("home_pitcher") or "home"), hp)
+
         bonus_h, rwp_h = _form_bonus_from_row(hr, form_by_team_id)
         bonus_a, rwp_a = _form_bonus_from_row(ar, form_by_team_id)
         pitch_h, raa_h = _recent_pitch_adj_from_row(hr, form_by_team_id)
@@ -669,6 +820,7 @@ def main() -> int:
                 )
         form_diff = bonus_h - bonus_a
         recent_pitch_diff = pitch_h - pitch_a
+        temp_adj = _temp_adj_from_weather(wx)
 
         p_home_model, game_park_mult = _home_win_prob(
             hr,
@@ -678,6 +830,7 @@ def main() -> int:
             home_team_name=home,
             form_diff=form_diff,
             recent_pitch_diff=recent_pitch_diff,
+            weather_temp_adj=temp_adj,
         )
 
         fair_home, fair_away = implied_probability_fair_two_sided(
@@ -716,6 +869,12 @@ def main() -> int:
             summ = value_summary_moneyline(model_p, odds_used, float(home_odds_am))
 
         edge = float(summ["edge"])
+        if odds_used <= MAX_FAVORITE_ODDS:
+            print(
+                f"SKIP_HEAVY_CHALK: {pick} at {odds_used:.0f} exceeds MAX_FAVORITE_ODDS={MAX_FAVORITE_ODDS}",
+                flush=True,
+            )
+            continue
         edge = _juice_penalized_edge(edge, odds_used)
         # One line per game before edge / MIN_EDGE filtering (stdout so it shows even when stderr is quiet).
         print(
@@ -780,6 +939,7 @@ def main() -> int:
             continue
         home = str(g.get("home_team") or "").strip()
         away = str(g.get("away_team") or "").strip()
+        wx_t = weather_by_matchup.get(_matchup_weather_key(away, home))
 
         total_data = g.get("total") or {}
         market_line = total_data.get("line")
@@ -814,7 +974,15 @@ def main() -> int:
             ap = MISSING_PITCHER_STATS_ROW
 
         pm = _park_mult(home)
-        pred_total = _predict_total(hr, ar, hp, ap, pm)
+        wind_bonus = 0.0
+        if wx_t:
+            try:
+                wspd = float(wx_t.get("wind_speed_mph") or 0.0)
+                wdir = float(wx_t.get("wind_direction_deg") or 0.0)
+                wind_bonus = _totals_wind_bonus_mph_deg(wspd, wdir)
+            except (TypeError, ValueError):
+                wind_bonus = 0.0
+        pred_total = _predict_total(hr, ar, hp, ap, pm, wind_bonus=wind_bonus)
         total_diff = pred_total - market_line
 
         over_prob = 1.0 / (1.0 + math.exp(-total_diff * TOTALS_LOGISTIC_SLOPE))
