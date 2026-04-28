@@ -3944,15 +3944,14 @@ with tab_mark_results:
     st.subheader("Mark Results")
     st.caption(
         "Mark Win / Loss / Push for **NCAAB** and **MLB** plays with **Pending** results only (ignores slate date). "
-        "You can see Saturday pending games while viewing Sunday's slate."
+        "Includes pending plays through today so same-day MLB finals can be logged immediately."
     )
     if st.button("🔄 Refresh pending plays", help="Reload play history from the database (clears 30‑min cache so new or updated plays appear)"):
         _load_play_history_cached.clear()
         st.rerun()
     _today = date.today()
-    _yesterday = _today - timedelta(days=1)
     _mr_from = _today - timedelta(days=90)  # load last 90 days to find pending
-    _mr_history = _load_play_history_cached(from_date_iso=_mr_from.isoformat(), to_date_iso=_yesterday.isoformat())
+    _mr_history = _load_play_history_cached(from_date_iso=_mr_from.isoformat(), to_date_iso=_today.isoformat())
     if not _mr_history.empty:
         _mr_history = _mr_history.copy()
         _mr_sport_u = _mr_history["sport"].astype(str).str.strip().str.upper()
