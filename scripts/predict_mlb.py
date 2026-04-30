@@ -60,8 +60,8 @@ RECENT_PITCH_RA_COEFF = 0.04
 RECENT_PITCH_RA_TARGET = 4.50
 
 # Edge and probability filters (decimal edge = EV fraction, e.g. 0.05 = 5%).
-MIN_EDGE_DECIMAL = 0.03  # minimum 3% edge to qualify as a play
-MAX_EDGE_DECIMAL = 0.13  # skip plays above this; prints FLAGGED_HIGH_EDGE
+MIN_EDGE_DECIMAL = 0.05  # minimum 5% edge to qualify as a play
+MAX_EDGE_DECIMAL = 0.17  # skip plays above this; prints FLAGGED_HIGH_EDGE
 MIN_MODEL_PROB = 0.42  # skip picks below this win probability; prints SKIP_LOW_PROB
 
 # Moneyline only: hard skip when the chosen side is this heavy or worse (more negative).

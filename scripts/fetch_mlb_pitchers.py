@@ -309,6 +309,11 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Fetch MLB pitcher stats for starters in live_mlb_odds.json")
     p.add_argument("--odds", type=Path, default=DEFAULT_ODDS_PATH, help="Path to live_mlb_odds.json")
     p.add_argument("--season", type=int, default=None, help="Season year (default: from odds games_date_et or 2025)")
+    p.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Ignore existing pitcher_stats.csv and rebuild from current run only.",
+    )
     args = p.parse_args()
 
     if not args.odds.exists():
@@ -340,6 +345,15 @@ def main() -> int:
         ).to_csv(OUTPUT_PATH, index=False)
         print(f"Wrote empty {OUTPUT_PATH}")
         return 0
+
+    # Load existing CSV for cumulative upsert unless --rebuild is requested.
+    existing_df = pd.DataFrame()
+    if not args.rebuild and OUTPUT_PATH.exists():
+        try:
+            existing_df = pd.read_csv(OUTPUT_PATH)
+        except Exception as e:
+            print(f"Could not read existing {OUTPUT_PATH}: {e} (continuing with empty base)", file=sys.stderr)
+            existing_df = pd.DataFrame()
 
     blend_2026 = season >= 2026
     rows: list[dict] = []
@@ -384,10 +398,69 @@ def main() -> int:
             print(f"No pitching data for {odds_name!r} (id={pid})", file=sys.stderr)
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(rows)
-    df.to_csv(OUTPUT_PATH, index=False)
+    fetched_df = pd.DataFrame(rows)
+
+    # Keep canonical output column order stable across rebuild/upsert.
+    output_cols = [
+        "odds_name",
+        "player_id",
+        "full_name",
+        "season",
+        "era",
+        "fip",
+        "xfip",
+        "whip",
+        "k9",
+        "bb9",
+        "innings_pitched",
+    ]
+
+    if args.rebuild or existing_df.empty:
+        merged_df = fetched_df.copy()
+        added = len(merged_df)
+        updated = 0
+    else:
+        # Ensure key columns can be indexed consistently.
+        existing_df = existing_df.copy()
+        fetched_df = fetched_df.copy()
+        if "player_id" in existing_df.columns:
+            existing_df["player_id"] = pd.to_numeric(existing_df["player_id"], errors="coerce")
+            existing_df = existing_df[existing_df["player_id"].notna()].copy()
+            existing_df["player_id"] = existing_df["player_id"].astype(int)
+        if not fetched_df.empty and "player_id" in fetched_df.columns:
+            fetched_df["player_id"] = pd.to_numeric(fetched_df["player_id"], errors="coerce")
+            fetched_df = fetched_df[fetched_df["player_id"].notna()].copy()
+            fetched_df["player_id"] = fetched_df["player_id"].astype(int)
+
+        existing_ids = set(existing_df["player_id"].tolist()) if "player_id" in existing_df.columns else set()
+        fetched_ids = set(fetched_df["player_id"].tolist()) if "player_id" in fetched_df.columns else set()
+        updated = len(existing_ids & fetched_ids)
+        added = len(fetched_ids - existing_ids)
+
+        merged_by_id = {}
+        if "player_id" in existing_df.columns:
+            for _, r in existing_df.iterrows():
+                pid = int(r["player_id"])
+                merged_by_id[pid] = r.to_dict()
+        if not fetched_df.empty and "player_id" in fetched_df.columns:
+            for _, r in fetched_df.iterrows():
+                pid = int(r["player_id"])
+                # Latest fetched row wins (including updated odds_name spelling).
+                merged_by_id[pid] = r.to_dict()
+        merged_df = pd.DataFrame(list(merged_by_id.values()))
+
+    # Ensure all expected columns exist (for empty/rebuild edge cases).
+    for c in output_cols:
+        if c not in merged_df.columns:
+            merged_df[c] = None
+    merged_df = merged_df[output_cols]
+    merged_df.to_csv(OUTPUT_PATH, index=False)
+
     label = f"blended 2025+2026 ({PITCHER_BLEND_2026_WEIGHT:.0%}/{1 - PITCHER_BLEND_2026_WEIGHT:.0%})" if blend_2026 else f"season={season}"
-    print(f"Saved {len(df)} pitcher(s) to {OUTPUT_PATH} ({label})")
+    print(f"Saved {len(merged_df)} pitcher(s) to {OUTPUT_PATH} ({label})")
+    print(
+        f"Run summary: fetched={len(fetched_df)} added={added} updated={updated} total_csv={len(merged_df)}"
+    )
     return 0
 
 

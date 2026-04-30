@@ -2437,6 +2437,28 @@ def _mlb_flat_stake_pl_and_roi(df: pd.DataFrame, stake_usd: float = 10.0) -> tup
     return total, roi_pct
 
 
+def _mlb_manual_preapp_log_df() -> pd.DataFrame:
+    """Manual MLB paper-trading log (pre-app tracking) for April 1-29, 2026."""
+    rows = [
+        {"Day": "1-5", "Date": "Apr 1-4", "Picks": 51, "W": 27, "L": 24, "Day P/L": 61.53},
+        {"Day": "6", "Date": "Apr 5", "Picks": 6, "W": 1, "L": 5, "Day P/L": -40.00},
+        {"Day": "7", "Date": "Apr 6", "Picks": 6, "W": 3, "L": 3, "Day P/L": -2.62},
+        {"Day": "8", "Date": "Apr 7", "Picks": 5, "W": 2, "L": 3, "Day P/L": -11.00},
+        {"Day": "9", "Date": "Apr 10", "Picks": 8, "W": 3, "L": 5, "Day P/L": -11.86},
+        {"Day": "10", "Date": "Apr 11", "Picks": 6, "W": 3, "L": 3, "Day P/L": 4.20},
+        {"Day": "11", "Date": "Apr 12", "Picks": 5, "W": 1, "L": 4, "Day P/L": -25.60},
+        {"Day": "13", "Date": "Apr 14", "Picks": 5, "W": 4, "L": 1, "Day P/L": 49.30},
+        {"Day": "14", "Date": "Apr 15", "Picks": 4, "W": 3, "L": 1, "Day P/L": 19.54},
+        {"Day": "15", "Date": "Apr 16", "Picks": 3, "W": 2, "L": 1, "Day P/L": 20.90},
+        {"Day": "18", "Date": "Apr 21", "Picks": 4, "W": 3, "L": 1, "Day P/L": 29.60},
+        {"Day": "19", "Date": "Apr 25", "Picks": 6, "W": 2, "L": 4, "Day P/L": -21.39},
+        {"Day": "20", "Date": "Apr 27", "Picks": 1, "W": 0, "L": 1, "Day P/L": -10.00},
+        {"Day": "21", "Date": "Apr 28", "Picks": 4, "W": 2, "L": 2, "Day P/L": 6.30},
+        {"Day": "22", "Date": "Apr 29", "Picks": 3, "W": 2, "L": 1, "Day P/L": 15.30},
+    ]
+    return pd.DataFrame(rows)
+
+
 def _normalize_date_to_iso(raw: str) -> Optional[str]:
     """Parse date from YYYY-MM-DD or MM-DD-YYYY into YYYY-MM-DD; return None if unparseable."""
     s = str(raw).strip()
@@ -3839,106 +3861,329 @@ with tab_mlb:
 with tab_mlb_record:
     st.subheader("MLB Record")
     st.caption(
-        "Season-long results for MLB value plays archived to **play_history** (Save Picks on the **MLB** tab). "
-        "Mark Win / Loss / Push on **Mark Results** once games finish. "
-        "**P/L and ROI** assume a flat **$10** bet per resolved play using **American odds** at archive time "
-        "(e.g. +140 → win **$14**, −150 → win **$6.67**, loss **−$10**, push **$0**)."
+        "Primary display is your manual full-season baseline. App-tracked results build from today forward "
+        "as outcomes are marked on the **Mark Results** tab."
     )
-    _mlb_rec_raw = load_play_history(league="MLB")
-    if _mlb_rec_raw.empty:
-        st.info("No MLB plays in the database yet. Open the **MLB** tab and click **Save Picks** to archive today's card.")
+    _STAKE = 10.0
+    _today = date.today()
+    _today_iso = _today.isoformat()
+    _yesterday_iso = (_today - timedelta(days=1)).isoformat()
+    _app_tracking_start = _today
+
+    _mlb_all_raw = load_play_history(league="MLB")
+    if _mlb_all_raw.empty:
+        _mlb_all = pd.DataFrame()
     else:
-        _mlb_rec = _dedupe_play_history_natural_key(_mlb_rec_raw.copy())
-        _mlb_rec["result_clean"] = _mlb_rec["result"].apply(
+        _mlb_all = _dedupe_play_history_natural_key(_mlb_all_raw.copy())
+        _mlb_all["result_clean"] = _mlb_all["result"].apply(
             lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
         )
-        _mlb_resolved = _mlb_rec[_mlb_rec["result_clean"].notna()].copy()
-        _mlb_pending_n = int(_mlb_rec["result_clean"].isna().sum())
-        w_t, l_t, p_t = _wlp_from_result_df(_mlb_resolved)
-        bt_norm = _mlb_resolved["bet_type"].astype(str).str.strip().str.lower()
-        _ou = _mlb_resolved[bt_norm.str.contains("over") & bt_norm.str.contains("under")]
-        _ml = _mlb_resolved[bt_norm == "moneyline"]
-        w_ou, l_ou, p_ou = _wlp_from_result_df(_ou)
-        w_ml, l_ml, p_ml = _wlp_from_result_df(_ml)
-        st.markdown(
-            """
-            <style>
-            .mlb-rec-block { text-align: center; margin-bottom: 1.25rem; }
-            .mlb-rec-title { font-size: 0.85rem; color: rgba(255,255,255,0.55); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.35rem; }
-            .mlb-rec-record { font-size: 2.75rem; font-weight: 900; letter-spacing: 0.04em; line-height: 1.15; }
-            .mlb-rec-record .mlb-w { color: #4caf50; }
-            .mlb-rec-record .mlb-l { color: #f44336; }
-            .mlb-rec-record .mlb-p { color: #9e9e9e; }
-            .mlb-rec-pending { text-align: center; font-size: 0.9rem; color: rgba(255,255,255,0.65); margin-top: -0.25rem; margin-bottom: 0.5rem; }
-            .mlb-rec-note { font-size: 0.8rem; color: rgba(255,255,255,0.45); text-align: center; margin-top: 0.75rem; }
-            .mlb-rec-pl-pos { color: #81c784; font-weight: 800; }
-            .mlb-rec-pl-neg { color: #e57373; font-weight: 800; }
-            .mlb-rec-pl-row { font-size: 1rem; color: rgba(255,255,255,0.88); text-align: center; margin: 0.35rem 0; line-height: 1.45; }
-            .mlb-rec-pl-head { font-size: 0.8rem; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.05em; text-align: center; margin: 1rem 0 0.5rem 0; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        _STAKE = 10.0
-        pl_all, roi_all = _mlb_flat_stake_pl_and_roi(_mlb_resolved, stake_usd=_STAKE)
-        pl_ou, roi_ou = _mlb_flat_stake_pl_and_roi(_ou, stake_usd=_STAKE)
-        pl_ml, roi_ml = _mlb_flat_stake_pl_and_roi(_ml, stake_usd=_STAKE)
-        _n_all = len(_mlb_resolved)
-        _n_ou = len(_ou)
-        _n_ml = len(_ml)
 
-        def _pl_html(v: float) -> str:
-            cls = "mlb-rec-pl-pos" if v >= 0 else "mlb-rec-pl-neg"
-            sign = "+" if v >= 0 else ""
-            return f'<span class="{cls}">{sign}${v:,.2f}</span>'
+    # Status strip: today's card size, yesterday backlog, and total pending in app-tracked window.
+    if _mlb_all.empty:
+        _today_pick_count = 0
+        _yday_unmarked = 0
+        _pending_total = 0
+    else:
+        _date_s = _mlb_all["date_generated"].astype(str).str.strip()
+        _pending_mask = _mlb_all["result_clean"].isna()
+        _today_pick_count = int((_date_s == _today_iso).sum())
+        _date_parsed_for_status = pd.to_datetime(_date_s, errors="coerce").dt.date
+        _app_window_mask = _date_parsed_for_status >= _app_tracking_start
+        _yday_unmarked = int(((_date_s == _yesterday_iso) & _pending_mask & _app_window_mask).sum())
+        _pending_total = int((_pending_mask & _app_window_mask).sum())
+    _status_c1, _status_c2, _status_c3 = st.columns(3)
+    _status_c1.metric("Today's Picks", _today_pick_count)
+    _status_c2.metric("Yesterday Unmarked", _yday_unmarked)
+    _status_c3.metric("Total Pending", _pending_total)
 
-        st.markdown(
-            f'<div class="mlb-rec-block"><div class="mlb-rec-title">All plays (resolved)</div>'
-            f'<div class="mlb-rec-record"><span class="mlb-w">{w_t}</span>–<span class="mlb-l">{l_t}</span>–<span class="mlb-p">{p_t}</span></div>'
-            f'<div class="mlb-rec-pl-row">Flat ${_STAKE:g} bet: {_pl_html(pl_all)} &nbsp;·&nbsp; <strong>{roi_all:+.1f}%</strong> ROI'
-            f" &nbsp;(${_STAKE:g} × {_n_all} bet{'' if _n_all == 1 else 's'} = ${_STAKE * _n_all:,.0f} staked)</div></div>",
-            unsafe_allow_html=True,
-        )
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(
-                f'<div class="mlb-rec-block"><div class="mlb-rec-title">Over / Under</div>'
-                f'<div class="mlb-rec-record"><span class="mlb-w">{w_ou}</span>–<span class="mlb-l">{l_ou}</span>–<span class="mlb-p">{p_ou}</span></div>'
-                + (
-                    f'<div class="mlb-rec-pl-row">{_pl_html(pl_ou)} &nbsp;·&nbsp; <strong>{roi_ou:+.1f}%</strong> ROI'
-                    f" &nbsp;({_n_ou} bet{'' if _n_ou == 1 else 's'})</div>"
-                    if _n_ou
-                    else '<div class="mlb-rec-pl-row">—</div>'
+    # Manual baseline (pre-app tracking)
+    _manual_total_w = 58
+    _manual_total_l = 59
+    _manual_total_p = 0
+    _manual_total_pl = 84.20
+    _manual_roi_display = 7.2
+    _manual_staked = 1570.0
+    _manual_total_resolved = _manual_total_w + _manual_total_l + _manual_total_p
+    _manual_win_pct = (_manual_total_w / _manual_total_resolved * 100.0) if _manual_total_resolved else 0.0
+
+    st.markdown("#### Full Season Log (Manual Pre-App)")
+    st.caption(
+        "Manual paper-trading log from April 1-29, 2026 (flat $10 bets), tracked before in-app result archiving."
+    )
+    _manual_top1, _manual_top2, _manual_top3 = st.columns(3)
+    _manual_top1.metric("Record", f"{_manual_total_w}-{_manual_total_l}")
+    _manual_top2.metric("P/L", f"${_manual_total_pl:+.2f}")
+    _manual_top3.metric("ROI", f"{_manual_roi_display:+.1f}%")
+    st.caption(
+        f"Baseline win rate: {_manual_win_pct:.1f}% ({_manual_total_w}/{_manual_total_resolved}) · "
+        f"Manual wagered: ${_manual_staked:,.0f}"
+    )
+    _mlb_manual_df = _mlb_manual_preapp_log_df()
+    _manual_daily_rows = [
+        {"Date": date(2026, 4, 4), "Date Label": "Apr 1-4", "Picks": 51, "W": 27, "L": 24, "P/L": 61.53},
+        {"Date": date(2026, 4, 5), "Date Label": "Apr 5", "Picks": 6, "W": 1, "L": 5, "P/L": -40.00},
+        {"Date": date(2026, 4, 6), "Date Label": "Apr 6", "Picks": 6, "W": 3, "L": 3, "P/L": -2.62},
+        {"Date": date(2026, 4, 7), "Date Label": "Apr 7", "Picks": 5, "W": 2, "L": 3, "P/L": -11.00},
+        {"Date": date(2026, 4, 10), "Date Label": "Apr 10", "Picks": 8, "W": 3, "L": 5, "P/L": -11.86},
+        {"Date": date(2026, 4, 11), "Date Label": "Apr 11", "Picks": 6, "W": 3, "L": 3, "P/L": 4.20},
+        {"Date": date(2026, 4, 12), "Date Label": "Apr 12", "Picks": 5, "W": 1, "L": 4, "P/L": -25.60},
+        {"Date": date(2026, 4, 14), "Date Label": "Apr 14", "Picks": 5, "W": 4, "L": 1, "P/L": 49.30},
+        {"Date": date(2026, 4, 15), "Date Label": "Apr 15", "Picks": 4, "W": 3, "L": 1, "P/L": 19.54},
+        {"Date": date(2026, 4, 16), "Date Label": "Apr 16", "Picks": 3, "W": 2, "L": 1, "P/L": 20.90},
+        {"Date": date(2026, 4, 21), "Date Label": "Apr 21", "Picks": 4, "W": 3, "L": 1, "P/L": 29.60},
+        {"Date": date(2026, 4, 25), "Date Label": "Apr 25", "Picks": 6, "W": 2, "L": 4, "P/L": -21.39},
+        {"Date": date(2026, 4, 27), "Date Label": "Apr 27", "Picks": 1, "W": 0, "L": 1, "P/L": -10.00},
+        {"Date": date(2026, 4, 28), "Date Label": "Apr 28", "Picks": 4, "W": 2, "L": 2, "P/L": 6.30},
+        {"Date": date(2026, 4, 29), "Date Label": "Apr 29", "Picks": 3, "W": 2, "L": 1, "P/L": 15.30},
+    ]
+    _manual_daily_df = pd.DataFrame(_manual_daily_rows)
+
+    _tier_labels = ["< 3%", "3-5%", "5-10%", "10-15%", "15%+"]
+    if not _mlb_all.empty:
+        _mlb_all["date_parsed"] = pd.to_datetime(_mlb_all["date_generated"], errors="coerce")
+        _mlb_all = _mlb_all[_mlb_all["date_parsed"].notna()].copy()
+        _mlb_all["date_only"] = _mlb_all["date_parsed"].dt.date
+        _mlb_all["_edge_abs"] = pd.to_numeric(_mlb_all["my_edge_pct"], errors="coerce").fillna(0).abs()
+        _mlb_all["_edge_tier"] = pd.cut(
+            _mlb_all["_edge_abs"],
+            bins=[-float("inf"), 3, 5, 10, 15, float("inf")],
+            labels=_tier_labels,
+            right=False,
+        ).astype(str)
+    _default_start = _today - timedelta(days=13)
+    _date_range = st.date_input(
+        "Daily Log Filters",
+        value=(_default_start, _today),
+        min_value=date(2026, 1, 1),
+        max_value=_today,
+        key="mlb_record_filters_date_range",
+    )
+    if isinstance(_date_range, tuple) and len(_date_range) == 2:
+        _flt_start, _flt_end = _date_range
+    else:
+        _flt_start = _flt_end = _today
+    _selected_tiers = st.multiselect(
+        "Edge tiers",
+        options=_tier_labels,
+        default=_tier_labels,
+        key="mlb_record_filters_edge_tiers",
+    )
+
+    if _mlb_all.empty:
+        _mlb_filt = pd.DataFrame()
+    else:
+        _mask_date = (_mlb_all["date_only"] >= _flt_start) & (_mlb_all["date_only"] <= _flt_end)
+        _mask_tier = _mlb_all["_edge_tier"].isin(_selected_tiers) if _selected_tiers else False
+        _mlb_filt = _mlb_all[_mask_date & _mask_tier].copy()
+    _mlb_resolved_all = _mlb_filt[_mlb_filt["result_clean"].notna()].copy() if not _mlb_filt.empty else pd.DataFrame()
+
+    with st.expander("Cumulative P&L", expanded=True):
+        _manual_chart = _manual_daily_df[["Date", "P/L"]].rename(columns={"Date": "day", "P/L": "pnl_usd"}).copy()
+        if _mlb_resolved_all.empty:
+            _chart_df = _manual_chart
+        else:
+            _mlb_resolved_all["pnl_usd"] = _mlb_resolved_all.apply(
+                lambda r: _flat_bet_profit_usd(r.get("market_odds_at_time"), r.get("result_clean"), _STAKE), axis=1
+            )
+            _app_chart = _mlb_resolved_all.groupby("date_only")["pnl_usd"].sum().reset_index().rename(columns={"date_only": "day"})
+            _chart_df = pd.concat([_manual_chart, _app_chart], ignore_index=True)
+        if _chart_df.empty:
+            st.info("Cumulative P/L chart will appear after manual/app history is available.")
+        else:
+            _daily = _chart_df.groupby("day")["pnl_usd"].sum().reset_index()
+            _start_day = _daily["day"].min()
+            _end_day = _daily["day"].max()
+            _calendar = pd.date_range(_start_day, _end_day, freq="D")
+            _daily = _daily.set_index("day").reindex(_calendar.date, fill_value=0.0).rename_axis("day").reset_index()
+            _daily["cum_pnl"] = _daily["pnl_usd"].cumsum()
+            _fig = go.Figure()
+            _fig.add_trace(
+                go.Scatter(
+                    x=_daily["day"],
+                    y=_daily["cum_pnl"],
+                    mode="lines+markers",
+                    line=dict(color="#4caf50", width=3),
+                    marker=dict(size=5),
                 )
-                + "</div>",
-                unsafe_allow_html=True,
             )
-        with c2:
-            st.markdown(
-                f'<div class="mlb-rec-block"><div class="mlb-rec-title">Moneyline</div>'
-                f'<div class="mlb-rec-record"><span class="mlb-w">{w_ml}</span>–<span class="mlb-l">{l_ml}</span>–<span class="mlb-p">{p_ml}</span></div>'
-                + (
-                    f'<div class="mlb-rec-pl-row">{_pl_html(pl_ml)} &nbsp;·&nbsp; <strong>{roi_ml:+.1f}%</strong> ROI'
-                    f" &nbsp;({_n_ml} bet{'' if _n_ml == 1 else 's'})</div>"
-                    if _n_ml
-                    else '<div class="mlb-rec-pl-row">—</div>'
+            _fig.add_hline(y=0, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.4)")
+            _fig.update_layout(
+                height=320,
+                margin=dict(t=15, b=30, l=30, r=10),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(255,255,255,0.04)",
+                font=dict(color="rgba(255,255,255,0.9)", size=12),
+                xaxis=dict(title="Date", gridcolor="rgba(255,255,255,0.08)"),
+                yaxis=dict(title="Cumulative Profit ($)", gridcolor="rgba(255,255,255,0.08)", zeroline=False),
+                showlegend=False,
+            )
+            st.plotly_chart(_fig, use_container_width=True)
+
+    with st.expander("Edge Tier Breakdown", expanded=True):
+        st.caption("Edge tier breakdown excludes Days 1-5 (aggregated, no per-pick edge data).")
+        _tier_rows = []
+        if _mlb_resolved_all.empty:
+            for _tier in _tier_labels:
+                _tier_rows.append(
+                    {"Tier": _tier, "Picks": 0, "W-L": "0-0", "Win %": 0.0, "Total Wagered": 0.0, "P/L": 0.0, "ROI": 0.0}
                 )
-                + "</div>",
-                unsafe_allow_html=True,
+        else:
+            for _tier in _tier_labels:
+                _g = _mlb_resolved_all[_mlb_resolved_all["_edge_tier"] == _tier]
+                _picks = len(_g)
+                _w = int((_g["result_clean"] == "W").sum())
+                _l = int((_g["result_clean"] == "L").sum())
+                _wl_denom = _w + _l
+                _win_pct = (100.0 * _w / _wl_denom) if _wl_denom else 0.0
+                _wagered = float(_picks * _STAKE)
+                _pl, _roi = _mlb_flat_stake_pl_and_roi(_g, stake_usd=_STAKE)
+                _tier_rows.append(
+                    {
+                        "Tier": _tier,
+                        "Picks": _picks,
+                        "W-L": f"{_w}-{_l}",
+                        "Win %": _win_pct,
+                        "Total Wagered": _wagered,
+                        "P/L": _pl,
+                        "ROI": _roi,
+                    }
+                )
+        _tier_df = pd.DataFrame(_tier_rows)
+        _tier_show = _tier_df.copy()
+        _tier_show["Win %"] = _tier_show["Win %"].map(lambda x: f"{x:.1f}%")
+        _tier_show["Total Wagered"] = _tier_show["Total Wagered"].map(lambda x: f"${x:,.0f}")
+        _tier_show["P/L"] = _tier_show["P/L"].map(lambda x: f"${x:+.2f}")
+        _tier_show["ROI"] = _tier_show["ROI"].map(lambda x: f"{x:+.1f}%")
+
+        def _roi_cell_style(row: pd.Series) -> list[str]:
+            styles = [""] * len(row)
+            try:
+                roi_raw = float(_tier_df.loc[row.name, "ROI"])
+            except Exception:
+                roi_raw = 0.0
+            roi_idx = list(row.index).index("ROI")
+            styles[roi_idx] = "color: #81c784; font-weight: 700;" if roi_raw > 0 else ("color: #e57373; font-weight: 700;" if roi_raw < 0 else "")
+            return styles
+
+        st.dataframe(_tier_show.style.apply(_roi_cell_style, axis=1).hide(axis="index"), use_container_width=True)
+
+    with st.expander("Team Performance", expanded=False):
+        if _mlb_resolved_all.empty:
+            st.info("No resolved picks in the selected filters.")
+        else:
+            _team_rows = []
+            for _team, _g in _mlb_resolved_all.groupby(_mlb_resolved_all["recommended_side"].astype(str).str.strip()):
+                _picks = len(_g)
+                if _picks < 3:
+                    continue
+                _w = int((_g["result_clean"] == "W").sum())
+                _l = int((_g["result_clean"] == "L").sum())
+                _wl_denom = _w + _l
+                _win_pct = (100.0 * _w / _wl_denom) if _wl_denom else 0.0
+                _, _roi = _mlb_flat_stake_pl_and_roi(_g, stake_usd=_STAKE)
+                _team_rows.append({"Team": _team, "Picks": _picks, "W-L": f"{_w}-{_l}", "Win %": _win_pct, "ROI": _roi})
+            if not _team_rows:
+                st.info("No teams with 3+ resolved picks in the selected filters.")
+            else:
+                _team_df = pd.DataFrame(_team_rows).sort_values(["Picks", "ROI"], ascending=[False, False]).reset_index(drop=True)
+                _team_show = _team_df.copy()
+                _team_show["Win %"] = _team_show["Win %"].map(lambda x: f"{x:.1f}%")
+                _team_show["ROI"] = _team_show["ROI"].map(lambda x: f"{x:+.1f}%")
+                st.dataframe(_team_show, use_container_width=True, hide_index=True)
+
+    with st.expander("Daily Log", expanded=False):
+        _daily_rows = []
+        _manual_filt = _manual_daily_df[(_manual_daily_df["Date"] >= _flt_start) & (_manual_daily_df["Date"] <= _flt_end)].copy()
+        for _, _r in _manual_filt.iterrows():
+            _picks = int(_r["Picks"])
+            _pl = float(_r["P/L"])
+            _roi = (_pl / (_picks * _STAKE) * 100.0) if _picks else 0.0
+            _daily_rows.append(
+                {
+                    "Date": _r["Date"].strftime("%Y-%m-%d"),
+                    "Picks": _picks,
+                    "W-L": f"{int(_r['W'])}-{int(_r['L'])}",
+                    "P/L": f"${_pl:+.2f}",
+                    "ROI": f"{_roi:+.1f}%",
+                }
             )
-        if _mlb_pending_n:
-            st.markdown(
-                f'<div class="mlb-rec-pending">{_mlb_pending_n} play(s) still <strong>pending</strong> result.</div>',
-                unsafe_allow_html=True,
-            )
-        _spr = _mlb_resolved[bt_norm.str.contains("spread")]
-        if not _spr.empty:
-            w_s, l_s, p_s = _wlp_from_result_df(_spr)
-            st.caption(f"Spread (included in total above): {w_s}–{l_s}–{p_s}.")
-        st.markdown(
-            '<div class="mlb-rec-note">Total uses every resolved MLB pick (moneyline, over/under, and spread).</div>',
-            unsafe_allow_html=True,
+        if not _mlb_filt.empty:
+            for _d, _g in _mlb_filt.groupby("date_only"):
+                _picks = len(_g)
+                _resolved = _g[_g["result_clean"].notna()].copy()
+                _pending_n = int(_g["result_clean"].isna().sum())
+                _w = int((_resolved["result_clean"] == "W").sum())
+                _l = int((_resolved["result_clean"] == "L").sum())
+                _pl, _roi = _mlb_flat_stake_pl_and_roi(_resolved, stake_usd=_STAKE)
+                if _pending_n > 0 and _resolved.empty:
+                    _wl_text = f"Pending ({_pending_n})"
+                    _pl_text = "Pending"
+                    _roi_text = "Pending"
+                else:
+                    _wl_text = f"{_w}-{_l}" + (f" (+{_pending_n} pending)" if _pending_n > 0 else "")
+                    _pl_text = f"${_pl:+.2f}"
+                    _roi_text = f"{_roi:+.1f}%"
+                _daily_rows.append({"Date": _d.strftime("%Y-%m-%d"), "Picks": _picks, "W-L": _wl_text, "P/L": _pl_text, "ROI": _roi_text})
+        if not _daily_rows:
+            st.info("No MLB picks in the selected filters/date range.")
+        else:
+            _daily_df = pd.DataFrame(_daily_rows).drop_duplicates(subset=["Date"], keep="last").sort_values("Date", ascending=False).reset_index(drop=True)
+            st.dataframe(_daily_df, use_container_width=True, hide_index=True)
+
+    _mlb_manual_show = _mlb_manual_df.copy()
+    _mlb_manual_show["Day P/L"] = _mlb_manual_show["Day P/L"].map(lambda x: f"${x:+.2f}")
+    st.dataframe(_mlb_manual_show, use_container_width=True, hide_index=True)
+    st.caption(
+        "Notes: Days 12, 16, and 17 were skipped (no model run). "
+        "Days 1-5 are aggregated because individual picks were not available."
+    )
+
+    st.divider()
+    st.markdown("#### App-Tracked Results (From Today Forward)")
+    _app_rec_raw = load_play_history(league="MLB", from_date=date.today())
+    if _app_rec_raw.empty:
+        _app_w = _app_l = _app_p = 0
+        _app_pl = 0.0
+        _app_roi = 0.0
+        _app_pending_n = 0
+    else:
+        _app_rec = _dedupe_play_history_natural_key(_app_rec_raw.copy())
+        _app_rec["result_clean"] = _app_rec["result"].apply(
+            lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
         )
+        _app_resolved = _app_rec[_app_rec["result_clean"].notna()].copy()
+        _app_pending_n = int(_app_rec["result_clean"].isna().sum())
+        _app_w, _app_l, _app_p = _wlp_from_result_df(_app_resolved)
+        _app_pl, _app_roi = _mlb_flat_stake_pl_and_roi(_app_resolved, stake_usd=_STAKE)
+
+    _app_total_resolved = _app_w + _app_l + _app_p
+    _app_staked = _app_total_resolved * _STAKE
+    _app_col1, _app_col2, _app_col3 = st.columns(3)
+    _app_col1.metric("Record", f"{_app_w}-{_app_l}-{_app_p}")
+    _app_col2.metric("P/L", f"${_app_pl:+.2f}")
+    _app_col3.metric("ROI", f"{_app_roi:+.1f}%")
+    st.caption(
+        f"Resolved app-tracked bets: {_app_total_resolved} · Pending from today onward: {_app_pending_n} · "
+        f"App-tracked staked: ${_app_staked:,.0f}"
+    )
+
+    st.divider()
+    st.markdown("#### Combined Totals (Manual + App-Tracked)")
+    _combined_w = _manual_total_w + _app_w
+    _combined_l = _manual_total_l + _app_l
+    _combined_p = _manual_total_p + _app_p
+    _combined_pl = _manual_total_pl + _app_pl
+    _combined_staked = _manual_staked + _app_staked
+    _combined_roi = (_combined_pl / _combined_staked * 100.0) if _combined_staked else 0.0
+    _combined_col1, _combined_col2, _combined_col3 = st.columns(3)
+    _combined_col1.metric("Combined Record", f"{_combined_w}-{_combined_l}-{_combined_p}")
+    _combined_col2.metric("Combined P/L", f"${_combined_pl:+.2f}")
+    _combined_col3.metric("Combined ROI", f"{_combined_roi:+.1f}%")
+    st.caption(
+        f"Combined wagered: ${_combined_staked:,.0f} "
+        f"(${_manual_staked:,.0f} manual + ${_app_staked:,.0f} app-tracked)."
+    )
 
 with tab_mark_results:
     st.subheader("Mark Results")
