@@ -2404,6 +2404,22 @@ def _dedupe_play_history_natural_key(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop_duplicates(subset=cols, keep="last")
 
 
+def _mark_results_sport_selection_mask(sport_series: pd.Series, allowed_sports: list[str]) -> pd.Series:
+    """True rows where sport is MLB or NCAAB-prefix, limited to labels in allowed_sports (e.g. ['MLB','NCAAB'])."""
+    if sport_series.empty:
+        return pd.Series(dtype=bool)
+    allowed = allowed_sports or []
+    if not allowed:
+        return pd.Series(False, index=sport_series.index)
+    u = sport_series.astype(str).str.strip().str.upper()
+    m = pd.Series(False, index=sport_series.index)
+    if "MLB" in allowed:
+        m |= u == "MLB"
+    if "NCAAB" in allowed:
+        m |= u.str.startswith("NCAAB")
+    return m
+
+
 def _flat_bet_profit_usd(american_odds, result: str, stake_usd: float = 10.0) -> float:
     """Profit on a flat stake at American odds (same rules as engine.play_history.update_play_result)."""
     r = str(result).strip().upper()
@@ -3332,6 +3348,11 @@ if not STRIP_DOWN_MODE and "auto_result_run" not in st.session_state:
     st.session_state["auto_result_run"] = True
 
 # Persistent banner: unresolved plays older than 24 hours (skip DB load in strip-down mode)
+if "mr_pending_sports" not in st.session_state:
+    st.session_state["mr_pending_sports"] = ["MLB"]
+if "mr_show_all_pending" not in st.session_state:
+    st.session_state["mr_show_all_pending"] = False
+
 _ph_all = pd.DataFrame() if STRIP_DOWN_MODE else _load_play_history_cached()
 _cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24)
 _unresolved_stale = 0
@@ -3341,14 +3362,18 @@ if not _ph_all.empty:
     )
     _ph_all["date_parsed"] = pd.to_datetime(_ph_all["date_generated"], errors="coerce", utc=True)
     _unresolved = _ph_all[_ph_all["result_clean"].isna()]
-    _unresolved_stale = (_unresolved["date_parsed"] < _cutoff).sum()
+    _stale_mask = _unresolved["date_parsed"] < _cutoff
+    if not st.session_state.get("mr_show_all_pending"):
+        _banner_allowed = list(st.session_state.get("mr_pending_sports") or [])
+        _stale_mask = _stale_mask & _mark_results_sport_selection_mask(_unresolved["sport"], _banner_allowed)
+    _unresolved_stale = int(_stale_mask.sum())
 if _unresolved_stale > 0:
     _n_plays = int(_unresolved_stale)
     _plays_word = "play" if _n_plays == 1 else "plays"
     _slim_alert_html = (
         f'<div class="dashboard-slim-alert">'
         f'⚠️ {_n_plays} {_plays_word} need results marked. '
-        f'<a href="#play-history">Go to NCAAB Record</a>'
+        f'<a href="#mark-results-section">Open Mark Results</a>'
         f'</div>'
     )
     st.markdown(_slim_alert_html, unsafe_allow_html=True)
@@ -4186,11 +4211,27 @@ with tab_mlb_record:
     )
 
 with tab_mark_results:
+    st.markdown('<span id="mark-results-section"></span>', unsafe_allow_html=True)
     st.subheader("Mark Results")
     st.caption(
         "Mark Win / Loss / Push for **NCAAB** and **MLB** plays with **Pending** results only (ignores slate date). "
         "Includes pending plays through today so same-day MLB finals can be logged immediately."
     )
+    _mr_ctrl_left, _mr_ctrl_right = st.columns([3, 1])
+    with _mr_ctrl_left:
+        st.multiselect(
+            "Show pending plays for sport(s)",
+            options=["MLB", "NCAAB"],
+            key="mr_pending_sports",
+            help="Filter which sports appear below. Default hides off-season NCAAB until you include it.",
+        )
+    with _mr_ctrl_right:
+        with st.expander("Show all pending", expanded=False):
+            st.checkbox(
+                "Show every pending play (ignore sport filter)",
+                key="mr_show_all_pending",
+                help="Shows all pending NCAAB and MLB plays. Use for off-season cleanup or unusual cases.",
+            )
     if st.button("🔄 Refresh pending plays", help="Reload play history from the database (clears 30‑min cache so new or updated plays appear)"):
         _load_play_history_cached.clear()
         st.rerun()
@@ -4206,6 +4247,14 @@ with tab_mark_results:
         )
         # Show only Pending rows (ignore sidebar date) so user can mark Saturday games while viewing Sunday
         _mr_history = _mr_history[_mr_history["result_clean"].isna()]
+        _any_pending_unfiltered = not _mr_history.empty
+        _show_all_mr = bool(st.session_state.get("mr_show_all_pending"))
+        if not _show_all_mr:
+            _mr_allowed = list(st.session_state.get("mr_pending_sports") or [])
+            if not _mr_allowed:
+                _mr_history = _mr_history.iloc[0:0].copy()
+            else:
+                _mr_history = _mr_history[_mark_results_sport_selection_mask(_mr_history["sport"], _mr_allowed)].copy()
 
         def _mr_matchup_key(row: pd.Series) -> str:
             d = row["date_generated"]
@@ -4229,7 +4278,19 @@ with tab_mark_results:
             ["date_generated", "my_edge_pct"], ascending=[False, False]
         )
         if _mr_list.empty:
-            st.info("No pending plays. All plays in the last 90 days have been marked Win / Loss / Push.")
+            if not _any_pending_unfiltered:
+                st.info("No pending plays. All plays in the last 90 days have been marked Win / Loss / Push.")
+            elif not _show_all_mr and not (st.session_state.get("mr_pending_sports") or []):
+                st.warning(
+                    "Select at least one sport above, or open **Show all pending** to see every pending play."
+                )
+            elif not _show_all_mr:
+                st.info(
+                    "No pending plays for the selected sport(s). Add a sport in the multiselect or use "
+                    "**Show all pending** to see other pending plays."
+                )
+            else:
+                st.info("No pending plays. All plays in the last 90 days have been marked Win / Loss / Push.")
         else:
             st.markdown("""
         <style>
