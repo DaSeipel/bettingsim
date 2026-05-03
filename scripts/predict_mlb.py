@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import sqlite3
 import sys
 import warnings
 
@@ -43,11 +44,17 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from strategies.strategies import american_to_decimal
+from engine.play_history import archive_value_plays
+from strategies.strategies import american_to_decimal, kelly_fraction
 
 ODDS_PATH = ROOT / "data" / "odds" / "live_mlb_odds.json"
 WEATHER_PATH = ROOT / "data" / "cache" / "mlb_weather.json"
 OUT_PATH = ROOT / "data" / "cache" / "mlb_value_plays.json"
+PLAY_HISTORY_DB_PATH = ROOT / "data" / "espn.db"
+
+# Staking for archive rows — must match app.py `_mlb_dataframe_for_play_history` / Save Picks.
+BANKROLL_FOR_STAKES = 1000.0
+_KELLY_FRAC_FOR_ARCHIVE = 0.25
 PITCHER_STATS_PATH = ROOT / "data" / "mlb" / "pitcher_stats.csv"
 RECENT_FORM_PATH = ROOT / "data" / "mlb" / "recent_form.csv"
 PARK_FACTORS_PATH = ROOT / "data" / "mlb" / "mlb_park_factors.json"
@@ -667,6 +674,120 @@ def _home_win_prob(
     return min(HOME_WIN_PROB_MAX, max(HOME_WIN_PROB_MIN, p)), pm
 
 
+def _count_mlb_play_history_rows_for_date(db_path: Path, date_iso: str) -> int:
+    """Rows already archived for this calendar date and MLB (any bet_type)."""
+    if not db_path.is_file():
+        return 0
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM play_history WHERE date_generated = ? AND sport = ?",
+            (date_iso, "MLB"),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def _mlb_plays_dicts_to_archive_df(plays: list[dict]) -> "pd.DataFrame":
+    """
+    Same row shape as app.py `_mlb_dataframe_for_play_history` for `archive_value_plays`.
+    Input must be the same dicts written to mlb_value_plays.json (moneyline / total only).
+    """
+    import pandas as pd
+
+    if not plays:
+        return pd.DataFrame()
+    mlb_df = pd.DataFrame(plays)
+    out_rows: list[dict] = []
+    for _, r in mlb_df.iterrows():
+        away = str(r.get("away_team", "")).strip()
+        home = str(r.get("home_team", "")).strip()
+        if not away or not home:
+            continue
+        sel = str(r.get("selection", "")).strip()
+        market_raw = str(r.get("market", "")).strip().lower()
+        point_val = None
+        if market_raw in ("moneyline", "h2h"):
+            market = "h2h"
+        elif market_raw in ("spreads", "spread"):
+            market = "spreads"
+            for k in ("spread", "point", "spread_line"):
+                v = r.get(k)
+                if v is not None and pd.notna(v):
+                    try:
+                        point_val = float(v)
+                        break
+                    except (TypeError, ValueError):
+                        pass
+        elif market_raw in ("totals", "total"):
+            market = "totals"
+            tl = r.get("total_line")
+            if tl is not None and pd.notna(tl):
+                try:
+                    point_val = float(tl)
+                except (TypeError, ValueError):
+                    point_val = None
+        else:
+            market = "h2h"
+        edge_dec = r.get("edge")
+        if edge_dec is not None and pd.notna(edge_dec):
+            try:
+                val_pct = float(edge_dec) * 100.0
+            except (TypeError, ValueError):
+                val_pct = 0.0
+        else:
+            val_pct = 0.0
+            ep = r.get("edge_pct")
+            if ep is not None and pd.notna(ep):
+                try:
+                    fv = float(ep)
+                    val_pct = fv if abs(fv) >= 1.0 else fv * 100.0
+                except (TypeError, ValueError):
+                    pass
+        try:
+            odds = float(r.get("odds_american", -110) or -110)
+        except (TypeError, ValueError):
+            odds = -110.0
+        try:
+            mp = float(r.get("model_prob", 0.5) or 0.5)
+        except (TypeError, ValueError):
+            mp = 0.5
+        try:
+            frac = kelly_fraction(odds, mp, fraction=_KELLY_FRAC_FOR_ARCHIVE)
+            rec_stake = round(BANKROLL_FOR_STAKES * frac, 2)
+        except (TypeError, ValueError):
+            rec_stake = None
+        parts: list[str] = []
+        ap_a = str(r.get("away_pitcher", "")).strip()
+        ap_h = str(r.get("home_pitcher", "")).strip()
+        if ap_a or ap_h:
+            parts.append(f"SP: {ap_a or 'TBD'} @ {ap_h or 'TBD'}")
+        eid = r.get("event_id")
+        if eid is not None and str(eid).strip():
+            parts.append(f"event_id={eid}")
+        reasoning = " · ".join(parts) if parts else None
+        out_rows.append(
+            {
+                "League": "MLB",
+                "Event": f"{away} @ {home}",
+                "Selection": sel or "—",
+                "Market": market,
+                "Odds": odds,
+                "Value (%)": max(0.0, min(99.0, val_pct)),
+                "model_prob": mp,
+                "home_team": home,
+                "away_team": away,
+                "point": point_val,
+                "Recommended Stake": rec_stake,
+                "confidence_tier": "Medium",
+                "reasoning_summary": reasoning,
+            }
+        )
+    return pd.DataFrame(out_rows)
+
+
 def main() -> int:
     import pandas as pd
 
@@ -1064,6 +1185,25 @@ def main() -> int:
     with open(OUT_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     print(f"Wrote {OUT_PATH} ({len(plays)} play(s)), card_date={card_date}.")
+
+    as_of = date.today()
+    date_iso = as_of.isoformat()
+    plays_for_ph = [p for p in plays if str(p.get("market", "")).strip().lower() in ("moneyline", "total")]
+    existing_mlb = _count_mlb_play_history_rows_for_date(PLAY_HISTORY_DB_PATH, date_iso)
+    if existing_mlb > 0:
+        ph_status = f"skipped, already archived ({existing_mlb} MLB row(s) for date_generated={date_iso})"
+        n_archived = 0
+    elif not plays_for_ph:
+        ph_status = "0 rows archived (no moneyline/total plays in JSON)"
+        n_archived = 0
+    else:
+        _archive_df = _mlb_plays_dicts_to_archive_df(plays_for_ph)
+        n_archived = archive_value_plays(_archive_df, db_path=PLAY_HISTORY_DB_PATH, as_of_date=as_of)
+        ph_status = f"archived {n_archived} row(s) to play_history for date_generated={date_iso}"
+
+    print(f"play_history summary: JSON written → {OUT_PATH}", flush=True)
+    print(f"play_history summary: {ph_status}", flush=True)
+
     return 0
 
 
