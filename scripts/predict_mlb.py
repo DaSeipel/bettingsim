@@ -66,6 +66,9 @@ FORM_WIN_PCT_COEFF = 0.08
 RECENT_PITCH_RA_COEFF = 0.04
 RECENT_PITCH_RA_TARGET = 4.50
 
+# Totals model is uncalibrated as of May 2026; disable until recalibrated. Set True after recalibration is verified.
+ENABLE_TOTALS = False
+
 # Edge and probability filters (decimal edge = EV fraction, e.g. 0.05 = 5%).
 MIN_EDGE_DECIMAL = 0.05  # minimum 5% edge to qualify as a play
 MAX_EDGE_DECIMAL = 0.17  # skip plays above this; prints FLAGGED_HIGH_EDGE
@@ -1054,129 +1057,131 @@ def main() -> int:
         )
 
     # ——— Totals (over/under) pass ———
-    totals_considered = 0
-    for g in games:
-        if not isinstance(g, dict):
-            continue
-        home = str(g.get("home_team") or "").strip()
-        away = str(g.get("away_team") or "").strip()
-        wx_t = weather_by_matchup.get(_matchup_weather_key(away, home))
+    if ENABLE_TOTALS:
+        totals_considered = 0
+        for g in games:
+            if not isinstance(g, dict):
+                continue
+            home = str(g.get("home_team") or "").strip()
+            away = str(g.get("away_team") or "").strip()
+            wx_t = weather_by_matchup.get(_matchup_weather_key(away, home))
 
-        total_data = g.get("total") or {}
-        market_line = total_data.get("line")
-        over_odds_am = _american_to_float(total_data.get("over_odds"))
-        under_odds_am = _american_to_float(total_data.get("under_odds"))
+            total_data = g.get("total") or {}
+            market_line = total_data.get("line")
+            over_odds_am = _american_to_float(total_data.get("over_odds"))
+            under_odds_am = _american_to_float(total_data.get("under_odds"))
 
-        hr = _find_team_row(stats_df, home)
-        ar = _find_team_row(stats_df, away)
+            hr = _find_team_row(stats_df, home)
+            ar = _find_team_row(stats_df, away)
 
-        skip_t: list[str] = []
-        if hr is None:
-            skip_t.append(f"no_team_stats_home({home!r})")
-        if ar is None:
-            skip_t.append(f"no_team_stats_away({away!r})")
-        if market_line is None:
-            skip_t.append("missing_total_line")
-        if over_odds_am is None:
-            skip_t.append("missing_over_odds")
-        if under_odds_am is None:
-            skip_t.append("missing_under_odds")
-        if skip_t:
-            print(f"{away} @ {home} | TOTALS SKIP: {'; '.join(skip_t)}", flush=True)
-            continue
+            skip_t: list[str] = []
+            if hr is None:
+                skip_t.append(f"no_team_stats_home({home!r})")
+            if ar is None:
+                skip_t.append(f"no_team_stats_away({away!r})")
+            if market_line is None:
+                skip_t.append("missing_total_line")
+            if over_odds_am is None:
+                skip_t.append("missing_over_odds")
+            if under_odds_am is None:
+                skip_t.append("missing_under_odds")
+            if skip_t:
+                print(f"{away} @ {home} | TOTALS SKIP: {'; '.join(skip_t)}", flush=True)
+                continue
 
-        market_line = float(market_line)
+            market_line = float(market_line)
 
-        hp = _find_pitcher_row(pitcher_df, g.get("home_pitcher"))
-        ap = _find_pitcher_row(pitcher_df, g.get("away_pitcher"))
-        if hp is None:
-            hp = MISSING_PITCHER_STATS_ROW
-        if ap is None:
-            ap = MISSING_PITCHER_STATS_ROW
+            hp = _find_pitcher_row(pitcher_df, g.get("home_pitcher"))
+            ap = _find_pitcher_row(pitcher_df, g.get("away_pitcher"))
+            if hp is None:
+                hp = MISSING_PITCHER_STATS_ROW
+            if ap is None:
+                ap = MISSING_PITCHER_STATS_ROW
 
-        pm = _park_mult(home)
-        wind_bonus = 0.0
-        if wx_t:
-            try:
-                wspd = float(wx_t.get("wind_speed_mph") or 0.0)
-                wdir = float(wx_t.get("wind_direction_deg") or 0.0)
-                wind_bonus = _totals_wind_bonus_mph_deg(wspd, wdir)
-            except (TypeError, ValueError):
-                wind_bonus = 0.0
-        pred_total = _predict_total(hr, ar, hp, ap, pm, wind_bonus=wind_bonus)
-        total_diff = pred_total - market_line
+            pm = _park_mult(home)
+            wind_bonus = 0.0
+            if wx_t:
+                try:
+                    wspd = float(wx_t.get("wind_speed_mph") or 0.0)
+                    wdir = float(wx_t.get("wind_direction_deg") or 0.0)
+                    wind_bonus = _totals_wind_bonus_mph_deg(wspd, wdir)
+                except (TypeError, ValueError):
+                    wind_bonus = 0.0
+            pred_total = _predict_total(hr, ar, hp, ap, pm, wind_bonus=wind_bonus)
+            total_diff = pred_total - market_line
 
-        over_prob = 1.0 / (1.0 + math.exp(-total_diff * TOTALS_LOGISTIC_SLOPE))
+            over_prob = 1.0 / (1.0 + math.exp(-total_diff * TOTALS_LOGISTIC_SLOPE))
 
-        over_dec = american_to_decimal(float(over_odds_am))
-        under_dec = american_to_decimal(float(under_odds_am))
-        edge_over = over_prob * over_dec - 1.0
-        edge_under = (1.0 - over_prob) * under_dec - 1.0
+            over_dec = american_to_decimal(float(over_odds_am))
+            under_dec = american_to_decimal(float(under_odds_am))
+            edge_over = over_prob * over_dec - 1.0
+            edge_under = (1.0 - over_prob) * under_dec - 1.0
 
-        if total_diff > TOTALS_DIFF_THRESHOLD:
-            t_side = "over"
-            t_selection = f"Over {market_line}"
-            t_odds_am = float(over_odds_am)
-            t_model_p = over_prob
-            t_edge = edge_over
-        elif total_diff < -TOTALS_DIFF_THRESHOLD:
-            t_side = "under"
-            t_selection = f"Under {market_line}"
-            t_odds_am = float(under_odds_am)
-            t_model_p = 1.0 - over_prob
-            t_edge = edge_under
-        else:
+            if total_diff > TOTALS_DIFF_THRESHOLD:
+                t_side = "over"
+                t_selection = f"Over {market_line}"
+                t_odds_am = float(over_odds_am)
+                t_model_p = over_prob
+                t_edge = edge_over
+            elif total_diff < -TOTALS_DIFF_THRESHOLD:
+                t_side = "under"
+                t_selection = f"Under {market_line}"
+                t_odds_am = float(under_odds_am)
+                t_model_p = 1.0 - over_prob
+                t_edge = edge_under
+            else:
+                print(
+                    f"{away} @ {home} | TOTALS NO_PLAY: pred={pred_total:.2f} line={market_line} diff={total_diff:+.2f} (within ±{TOTALS_DIFF_THRESHOLD})",
+                    flush=True,
+                )
+                continue
+
+            totals_considered += 1
             print(
-                f"{away} @ {home} | TOTALS NO_PLAY: pred={pred_total:.2f} line={market_line} diff={total_diff:+.2f} (within ±{TOTALS_DIFF_THRESHOLD})",
+                f"{away} @ {home} | TOTALS: pred={pred_total:.2f} line={market_line} diff={total_diff:+.2f} "
+                f"side={t_side} prob={t_model_p:.3f} edge={t_edge:.4f} odds={t_odds_am}",
                 flush=True,
             )
-            continue
 
-        totals_considered += 1
-        print(
-            f"{away} @ {home} | TOTALS: pred={pred_total:.2f} line={market_line} diff={total_diff:+.2f} "
-            f"side={t_side} prob={t_model_p:.3f} edge={t_edge:.4f} odds={t_odds_am}",
-            flush=True,
-        )
+            if t_model_p < MIN_MODEL_PROB:
+                print(f"TOTALS SKIP_LOW_PROB: {t_selection} | model_prob={t_model_p:.3f}", flush=True)
+                continue
+            if t_edge > MAX_EDGE_DECIMAL:
+                print(f"TOTALS FLAGGED_HIGH_EDGE: {t_selection} | edge={t_edge:.3f} exceeds MAX", flush=True)
+                continue
+            if t_edge < MIN_EDGE_DECIMAL:
+                print(
+                    f"{away} @ {home} | TOTALS NO_PLAY: edge={t_edge:.4f} < MIN {MIN_EDGE_DECIMAL}",
+                    flush=True,
+                )
+                continue
 
-        if t_model_p < MIN_MODEL_PROB:
-            print(f"TOTALS SKIP_LOW_PROB: {t_selection} | model_prob={t_model_p:.3f}", flush=True)
-            continue
-        if t_edge > MAX_EDGE_DECIMAL:
-            print(f"TOTALS FLAGGED_HIGH_EDGE: {t_selection} | edge={t_edge:.3f} exceeds MAX", flush=True)
-            continue
-        if t_edge < MIN_EDGE_DECIMAL:
-            print(
-                f"{away} @ {home} | TOTALS NO_PLAY: edge={t_edge:.4f} < MIN {MIN_EDGE_DECIMAL}",
-                flush=True,
+            plays.append(
+                {
+                    "card_date": card_date,
+                    "event_id": str(g.get("event_id") or ""),
+                    "commence_time": str(g.get("commence_time") or ""),
+                    "home_team": home,
+                    "away_team": away,
+                    "home_pitcher": g.get("home_pitcher"),
+                    "away_pitcher": g.get("away_pitcher"),
+                    "market": "total",
+                    "selection": t_selection,
+                    "odds_american": t_odds_am,
+                    "model_prob": float(t_model_p),
+                    "edge": float(t_edge),
+                    "park_mult": float(pm),
+                    "predicted_total": round(float(pred_total), 2),
+                    "total_line": float(market_line),
+                }
             )
-            continue
-
-        plays.append(
-            {
-                "card_date": card_date,
-                "event_id": str(g.get("event_id") or ""),
-                "commence_time": str(g.get("commence_time") or ""),
-                "home_team": home,
-                "away_team": away,
-                "home_pitcher": g.get("home_pitcher"),
-                "away_pitcher": g.get("away_pitcher"),
-                "market": "total",
-                "selection": t_selection,
-                "odds_american": t_odds_am,
-                "model_prob": float(t_model_p),
-                "edge": float(t_edge),
-                "park_mult": float(pm),
-                "predicted_total": round(float(pred_total), 2),
-                "total_line": float(market_line),
-            }
-        )
 
     ml_plays = [p for p in plays if p.get("market") == "moneyline"]
     tot_plays = [p for p in plays if p.get("market") == "total"]
+    _totals_log = f"Totals plays: {len(tot_plays)}" if ENABLE_TOTALS else "Totals: disabled"
     print(
         f"MLB predict: matched {matched} game(s) between odds slate and team_stats (both teams found). "
-        f"Moneyline plays: {len(ml_plays)}, Totals plays: {len(tot_plays)}.",
+        f"Moneyline plays: {len(ml_plays)}, {_totals_log}.",
         flush=True,
     )
 
@@ -1188,13 +1193,18 @@ def main() -> int:
 
     as_of = date.today()
     date_iso = as_of.isoformat()
-    plays_for_ph = [p for p in plays if str(p.get("market", "")).strip().lower() in ("moneyline", "total")]
+    plays_for_ph = [
+        p
+        for p in plays
+        if str(p.get("market", "")).strip().lower() in ("moneyline", "h2h")
+        or (ENABLE_TOTALS and str(p.get("market", "")).strip().lower() == "total")
+    ]
     existing_mlb = _count_mlb_play_history_rows_for_date(PLAY_HISTORY_DB_PATH, date_iso)
     if existing_mlb > 0:
         ph_status = f"skipped, already archived ({existing_mlb} MLB row(s) for date_generated={date_iso})"
         n_archived = 0
     elif not plays_for_ph:
-        ph_status = "0 rows archived (no moneyline/total plays in JSON)"
+        ph_status = "0 rows archived (no moneyline plays in JSON)"
         n_archived = 0
     else:
         _archive_df = _mlb_plays_dicts_to_archive_df(plays_for_ph)
