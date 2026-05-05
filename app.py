@@ -3676,61 +3676,6 @@ with tab_mlb:
             "MLB pipeline finished: odds, weather (optional), and `predict_mlb.py` have run. "
             "Reloaded picks below."
         )
-    _mlb_live_odds_path = _APP_ROOT / "data" / "odds" / "live_mlb_odds.json"
-    if st.button(
-        "🚀 Run MLB Model",
-        key="mlb_run_model",
-        help="Run fetch_mlb_odds.py → fetch_mlb_weather.py → predict_mlb.py (refreshes odds, weather cache, value plays)",
-    ):
-        with st.spinner("Running fetch_mlb_odds.py → fetch_mlb_weather.py → predict_mlb.py…"):
-            _root = str(_APP_ROOT)
-            _fetch = _APP_ROOT / "scripts" / "fetch_mlb_odds.py"
-            _weather = _APP_ROOT / "scripts" / "fetch_mlb_weather.py"
-            _predict = _APP_ROOT / "scripts" / "predict_mlb.py"
-            try:
-                r1 = subprocess.run(
-                    [sys.executable, str(_fetch)],
-                    cwd=_root,
-                    capture_output=True,
-                    text=True,
-                    timeout=180,
-                    shell=False,
-                )
-                if r1.returncode != 0:
-                    err = (r1.stderr or r1.stdout or "").strip() or f"exit {r1.returncode}"
-                    st.error(f"fetch_mlb_odds.py failed: {err}")
-                else:
-                    r_w = subprocess.run(
-                        [sys.executable, str(_weather)],
-                        cwd=_root,
-                        capture_output=True,
-                        text=True,
-                        timeout=300,
-                        shell=False,
-                    )
-                    if r_w.returncode != 0:
-                        err_w = (r_w.stderr or r_w.stdout or "").strip() or f"exit {r_w.returncode}"
-                        st.warning(f"fetch_mlb_weather.py failed (predict continues without weather): {err_w}")
-                    r2 = subprocess.run(
-                        [sys.executable, str(_predict)],
-                        cwd=_root,
-                        capture_output=True,
-                        text=True,
-                        timeout=180,
-                        shell=False,
-                    )
-                    if r2.returncode != 0:
-                        err = (r2.stderr or r2.stdout or "").strip() or f"exit {r2.returncode}"
-                        st.error(f"predict_mlb.py failed: {err}")
-                    elif _mlb_live_odds_path.is_file():
-                        st.session_state["mlb_model_success_msg"] = True
-                        st.rerun()
-                    else:
-                        st.error("Pipeline reported success but `data/odds/live_mlb_odds.json` was not found.")
-            except subprocess.TimeoutExpired:
-                st.error("MLB pipeline timed out after 3 minutes.")
-            except Exception as e:
-                st.error(f"MLB pipeline error: {e}")
     mlb_df, mlb_plays_raw = _load_mlb_value_plays_for_today()
     if not mlb_df.empty and "market" in mlb_df.columns:
         _mkt_tab = mlb_df["market"].astype(str).str.strip().str.lower()
