@@ -1,50 +1,20 @@
 {
-  "card_date": "2026-05-06",
+  "card_date": "2026-05-07",
   "plays": [
     {
-      "card_date": "2026-05-06",
-      "event_id": "822985",
-      "commence_time": "2026-05-06T17:10:00Z",
-      "home_team": "Tampa Bay Rays",
-      "away_team": "Toronto Blue Jays",
-      "home_pitcher": "Shane McClanahan",
-      "away_pitcher": "Patrick Corbin",
+      "card_date": "2026-05-07",
+      "event_id": "823306",
+      "commence_time": "2026-05-08T02:10:00Z",
+      "home_team": "San Diego Padres",
+      "away_team": "St. Louis Cardinals",
+      "home_pitcher": "Michael King",
+      "away_pitcher": "Matthew Liberatore",
       "market": "moneyline",
-      "selection": "Toronto Blue Jays",
-      "odds_american": 123.0,
-      "model_prob": 0.49009442196802155,
-      "edge": 0.092910560988688,
-      "park_mult": 0.97
-    },
-    {
-      "card_date": "2026-05-06",
-      "event_id": "823141",
-      "commence_time": "2026-05-06T20:10:00Z",
-      "home_team": "Seattle Mariners",
-      "away_team": "Atlanta Braves",
-      "home_pitcher": "Bryan Woo",
-      "away_pitcher": "Mart\u00edn P\u00e9rez",
-      "market": "moneyline",
-      "selection": "Atlanta Braves",
-      "odds_american": 113.0,
-      "model_prob": 0.5252864419164246,
-      "edge": 0.11886012128198442,
-      "park_mult": 0.92
-    },
-    {
-      "card_date": "2026-05-06",
-      "event_id": "825091",
-      "commence_time": "2026-05-07T01:40:00Z",
-      "home_team": "Arizona Diamondbacks",
-      "away_team": "Pittsburgh Pirates",
-      "home_pitcher": "Michael Soroka",
-      "away_pitcher": "Paul Skenes",
-      "market": "moneyline",
-      "selection": "Arizona Diamondbacks",
-      "odds_american": 129.0,
-      "model_prob": 0.5042957935927592,
-      "edge": 0.1548373673274186,
-      "park_mult": 1.03
+      "selection": "St. Louis Cardinals",
+      "odds_american": 144.0,
+      "model_prob": 0.4522508359154437,
+      "edge": 0.10349203963368248,
+      "park_mult": 0.96
     }
   ]
 }
