@@ -15,6 +15,9 @@ Low-IP starters shrink pitcher weight toward team stats (see PITCH_MATCHUP_WEIGH
 max ~45% pitcher / 55% team when both starters have 50+ IP (full confidence; see _pitcher_confidence).
 
 card_date: prefers games_date_et from live odds (MLB calendar day in ET); else America/New_York today.
+
+When at least one play is written, also copies mlb_value_plays.json to
+data/cache/mlb_archive/YYYY-MM-DD.json (same slate key as fetch_mlb_odds.py: valid games_date_et or ET today).
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import shutil
 import sqlite3
 import sys
 import warnings
@@ -50,7 +55,9 @@ from strategies.strategies import american_to_decimal, kelly_fraction
 ODDS_PATH = ROOT / "data" / "odds" / "live_mlb_odds.json"
 WEATHER_PATH = ROOT / "data" / "cache" / "mlb_weather.json"
 OUT_PATH = ROOT / "data" / "cache" / "mlb_value_plays.json"
+CACHE_ARCHIVE_DIR = ROOT / "data" / "cache" / "mlb_archive"
 PLAY_HISTORY_DB_PATH = ROOT / "data" / "espn.db"
+_SLATE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # Staking for archive rows — must match app.py `_mlb_dataframe_for_play_history` / Save Picks.
 BANKROLL_FOR_STAKES = 1000.0
@@ -181,6 +188,24 @@ def _card_date_iso(blob: dict) -> str:
     if gde:
         return gde
     return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+
+
+def _slate_date_iso_for_archive(blob: dict) -> str:
+    """Align with scripts/fetch_mlb_odds._slate_date_iso_for_archive — YYYY-MM-DD filename key."""
+    raw = str(blob.get("games_date_et") or "").strip()
+    if raw and _SLATE_DATE_RE.fullmatch(raw):
+        return raw
+    return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+
+
+def _archive_mlb_value_plays_json(slate_iso: str, plays: list) -> None:
+    """Copy live JSON to data/cache/mlb_archive/YYYY-MM-DD.json when there is ≥1 play."""
+    if len(plays) < 1:
+        return
+    CACHE_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    dest = CACHE_ARCHIVE_DIR / f"{slate_iso}.json"
+    shutil.copy2(OUT_PATH, dest)
+    print(f"Archived picks → data/cache/mlb_archive/{slate_iso}.json", flush=True)
 
 
 def _juice_penalized_edge(edge: float, odds_am: float) -> float:
@@ -1190,6 +1215,7 @@ def main() -> int:
     with open(OUT_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     print(f"Wrote {OUT_PATH} ({len(plays)} play(s)), card_date={card_date}.")
+    _archive_mlb_value_plays_json(_slate_date_iso_for_archive(blob), plays)
 
     as_of = date.today()
     date_iso = as_of.isoformat()

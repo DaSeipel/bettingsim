@@ -4,6 +4,8 @@ Fetch today's MLB schedule + probable pitchers (MLB Stats API via statsapi, no k
 and consensus moneylines / totals from public VegasInsider HTML (no paid API).
 
 Writes data/odds/live_mlb_odds.json (same schema as before for the rest of the app).
+When the slate has at least one game, also copies that file to
+data/odds/mlb_archive/YYYY-MM-DD.json (games_date_et; ET today if missing/invalid).
 
 If the file was modified within the last 30 minutes, skips network calls and prints
 'Data is fresh.'
@@ -21,6 +23,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import warnings
 
@@ -43,7 +46,9 @@ os.chdir(APP_ROOT)
 from engine.mlb_engine import MLB_TEAM_NAME_ALIASES, normalize_mlb_team_name_for_join
 
 OUTPUT_PATH = APP_ROOT / "data" / "odds" / "live_mlb_odds.json"
+ARCHIVE_DIR = APP_ROOT / "data" / "odds" / "mlb_archive"
 FRESHNESS_SECONDS = 30 * 60
+_SLATE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SPORT_KEY = "baseball_mlb"
 
 VEGAS_INSIDER_MLB_ODDS = "https://www.vegasinsider.com/mlb/odds/las-vegas/"
@@ -473,6 +478,26 @@ def load_schedule_statsapi(date_et: datetime) -> list[dict]:
     return out
 
 
+def _slate_date_iso_for_archive(payload: dict) -> str:
+    """Use games_date_et when valid YYYY-MM-DD; else America/New_York today."""
+    raw = str(payload.get("games_date_et") or "").strip()
+    if raw and _SLATE_DATE_RE.fullmatch(raw):
+        return raw
+    return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+
+
+def _archive_live_odds_copy(payload: dict) -> None:
+    """Copy live file to data/odds/mlb_archive/YYYY-MM-DD.json when slate has ≥1 game."""
+    games = payload.get("games") or []
+    if not isinstance(games, list) or len(games) < 1:
+        return
+    slate = _slate_date_iso_for_archive(payload)
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    dest = ARCHIVE_DIR / f"{slate}.json"
+    shutil.copy2(OUTPUT_PATH, dest)
+    print(f"Archived odds → data/odds/mlb_archive/{slate}.json")
+
+
 def build_payload() -> dict:
     now_et = datetime.now(ZoneInfo("America/New_York"))
     date_str = now_et.date().isoformat()
@@ -569,6 +594,7 @@ def main() -> int:
 
     n = len(payload.get("games") or [])
     print(f"Wrote {n} game(s) to {OUTPUT_PATH}")
+    _archive_live_odds_copy(payload)
     return 0
 
 
