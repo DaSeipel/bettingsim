@@ -1,0 +1,20 @@
+{
+  "card_date": "2026-05-11",
+  "plays": [
+    {
+      "card_date": "2026-05-11",
+      "event_id": "822901",
+      "commence_time": "2026-05-12T00:05:00Z",
+      "home_team": "Texas Rangers",
+      "away_team": "Arizona Diamondbacks",
+      "home_pitcher": "Nathan Eovaldi",
+      "away_pitcher": "Michael Soroka",
+      "market": "moneyline",
+      "selection": "Arizona Diamondbacks",
+      "odds_american": 119.0,
+      "model_prob": 0.5000109208579973,
+      "edge": 0.09502391667901389,
+      "park_mult": 1.02
+    }
+  ]
+}

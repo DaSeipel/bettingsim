@@ -1,0 +1,117 @@
+{
+  "fetched_at_utc": "2026-05-11T20:23:27.371371Z",
+  "sport_key": "baseball_mlb",
+  "source": "statsapi_schedule+web_scrape",
+  "bookmaker_title": "VegasInsider (consensus)",
+  "games_date_et": "2026-05-11",
+  "games": [
+    {
+      "event_id": "824441",
+      "commence_time": "2026-05-11T22:10:00Z",
+      "home_team": "Cleveland Guardians",
+      "away_team": "Los Angeles Angels",
+      "home_pitcher": "Joey Cantillo",
+      "away_pitcher": "Brent Suter",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": -181,
+        "away_odds": 149
+      },
+      "total": {
+        "line": 8.0,
+        "over_odds": -118,
+        "under_odds": -102
+      }
+    },
+    {
+      "event_id": "824844",
+      "commence_time": "2026-05-11T22:35:00Z",
+      "home_team": "Baltimore Orioles",
+      "away_team": "New York Yankees",
+      "home_pitcher": "Brandon Young",
+      "away_pitcher": "Ryan Weathers",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": 153,
+        "away_odds": -186
+      },
+      "total": {
+        "line": 9.0,
+        "over_odds": -110,
+        "under_odds": -110
+      }
+    },
+    {
+      "event_id": "822818",
+      "commence_time": "2026-05-11T23:07:00Z",
+      "home_team": "Toronto Blue Jays",
+      "away_team": "Tampa Bay Rays",
+      "home_pitcher": "Kevin Gausman",
+      "away_pitcher": "Drew Rasmussen",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": -143,
+        "away_odds": 119
+      },
+      "total": {
+        "line": 7.5,
+        "over_odds": 102,
+        "under_odds": -122
+      }
+    },
+    {
+      "event_id": "822901",
+      "commence_time": "2026-05-12T00:05:00Z",
+      "home_team": "Texas Rangers",
+      "away_team": "Arizona Diamondbacks",
+      "home_pitcher": "Nathan Eovaldi",
+      "away_pitcher": "Michael Soroka",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": -143,
+        "away_odds": 119
+      },
+      "total": {
+        "line": 8.0,
+        "over_odds": -102,
+        "under_odds": -118
+      }
+    },
+    {
+      "event_id": "824199",
+      "commence_time": "2026-05-12T00:10:00Z",
+      "home_team": "Houston Astros",
+      "away_team": "Seattle Mariners",
+      "home_pitcher": "Peter Lambert",
+      "away_pitcher": "George Kirby",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": 113,
+        "away_odds": -136
+      },
+      "total": {
+        "line": 8.5,
+        "over_odds": -106,
+        "under_odds": -114
+      }
+    },
+    {
+      "event_id": "823953",
+      "commence_time": "2026-05-12T02:10:00Z",
+      "home_team": "Los Angeles Dodgers",
+      "away_team": "San Francisco Giants",
+      "home_pitcher": "Roki Sasaki",
+      "away_pitcher": "Trevor McDonald",
+      "bookmaker_title": "VegasInsider (consensus)",
+      "moneyline": {
+        "home_odds": -175,
+        "away_odds": 144
+      },
+      "total": {
+        "line": 9.5,
+        "over_odds": -105,
+        "under_odds": -115
+      }
+    }
+  ]
+}
