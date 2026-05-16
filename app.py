@@ -3099,17 +3099,24 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
     }
 
 
-# Load full historical CSV; sidebar "Select Slate Date" (default = most recent); filter to that date for Overview
+# Load full historical CSV; sidebar "Select Slate Date" (default = today); filter to that date for Overview
 _historical_full_df = _load_historical_betting_performance_all()
 _unique_slate_dates = _historical_unique_dates(_historical_full_df)
+_today_iso = date.today().strftime("%Y-%m-%d")
 if not _unique_slate_dates:
-    _unique_slate_dates = [date.today().strftime("%Y-%m-%d")]
+    _unique_slate_dates = [_today_iso]
+elif _today_iso not in _unique_slate_dates:
+    _unique_slate_dates.insert(0, _today_iso)
+_default_slate_idx = _unique_slate_dates.index(_today_iso)
+if st.session_state.get("_slate_default_date") != _today_iso:
+    st.session_state["select_slate_date"] = _today_iso
+    st.session_state["_slate_default_date"] = _today_iso
 _selected_slate_date = st.sidebar.selectbox(
     "Select Slate Date",
     options=_unique_slate_dates,
-    index=0,
+    index=_default_slate_idx,
     key="select_slate_date",
-    help="Slate to show on Overview (POTD and value plays). Default is most recent date in your record.",
+    help="Slate to show on Overview (POTD and value plays). Defaults to today.",
 )
 _normalized_slate = _historical_full_df["Date"].astype(str).apply(_normalize_date_to_iso) if not _historical_full_df.empty else pd.Series(dtype=object)
 _historical_picks_df = _historical_full_df[_normalized_slate == _selected_slate_date].copy() if not _historical_full_df.empty else pd.DataFrame()
@@ -3226,28 +3233,18 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
     }
 
 
-# Cross-platform "March 1" style date (no zero-padded day)
-def _today_str() -> str:
-    d = date.today()
-    return d.strftime("%B ") + str(d.day)  # "March 1"
-
-
 st.title("Bobby Bottle's Betting Model")
 st.caption("NCAAB & MLB — college basketball value plays and Play of the Day on Overview; MLB value plays on the **MLB** tab.")
 
-# Stat bar: date | plays found | NCAAB | top edge. Use selected slate date and _historical_picks_df when available.
-if not _historical_picks_df.empty:
-    try:
-        _slate_d = datetime.strptime(_selected_slate_date, "%Y-%m-%d")
-        _date_str = _slate_d.strftime("%B ") + str(_slate_d.day)
-    except (ValueError, TypeError):
-        _date_str = _selected_slate_date
+# Stat bar: date | plays found | NCAAB | top edge. Date is always today; stats use today's slate when selected.
+if not _historical_picks_df.empty and _selected_slate_date == _today_iso:
     _n_slate = len(_historical_picks_df)
     _top_ep = _historical_picks_df["Edge_Points"].abs().max() if "Edge_Points" in _historical_picks_df.columns else None
     _top_edge_slate = f"{float(_top_ep) / 3:.1f}%" if _top_ep is not None and pd.notna(_top_ep) else "—"
-    _summary = {"date_str": _date_str, "total_plays": _n_slate, "n_ncaab": _n_slate, "top_edge_label": _top_edge_slate}
+    _summary = {"date_str": _today_str(), "total_plays": _n_slate, "n_ncaab": _n_slate, "top_edge_label": _top_edge_slate}
 else:
     _summary = _summary_bar_values(value_plays_df)
+    _summary = {**_summary, "date_str": _today_str()}
     # Top edge must reflect the true max over all value plays and POTD (not just diversified subset)
     _vp_edges = []
     if not value_plays_df.empty and "Value (%)" in value_plays_df.columns:
