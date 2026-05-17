@@ -3795,14 +3795,18 @@ with tab_mlb:
 
 with tab_mlb_record:
     st.subheader("MLB Record")
+    # Pre-May 3 picks ran during a broken pipeline (pitcher CSV overwritten daily, no cumulative starter data).
+    # Tracked picks below reflect only the cleanly-piped model.
+    MLB_PIPELINE_START_DATE = "2026-05-03"
     st.caption(
-        "Tracking moneyline picks with edge ≥ 5%. Picks below 5% are excluded from the record."
+        "Tracking moneyline picks with edge ≥ 5% from May 3, 2026 onward "
+        "(when the pitcher data pipeline was fixed)."
     )
     _STAKE = 10.0
     _today = date.today()
     _today_iso = _today.isoformat()
     _yesterday_iso = (_today - timedelta(days=1)).isoformat()
-    _app_tracking_start = _today
+    _mlb_pipeline_start = date.fromisoformat(MLB_PIPELINE_START_DATE)
 
     _mlb_all_raw = load_play_history(league="MLB")
     if _mlb_all_raw.empty:
@@ -3813,7 +3817,7 @@ with tab_mlb_record:
             lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
         )
 
-    # Status strip: today's card size, yesterday backlog, and total pending (all bet types).
+    # Status strip: today's card, yesterday backlog, total pending (MLB ML, edge ≥ 5%, on/after pipeline start).
     if _mlb_record_all_bets.empty:
         _today_pick_count = 0
         _yday_unmarked = 0
@@ -3821,17 +3825,22 @@ with tab_mlb_record:
     else:
         _date_s = _mlb_record_all_bets["date_generated"].astype(str).str.strip()
         _pending_mask = _mlb_record_all_bets["result_clean"].isna()
-        _today_pick_count = int((_date_s == _today_iso).sum())
         _date_parsed_for_status = pd.to_datetime(_date_s, errors="coerce").dt.date
-        _app_window_mask = _date_parsed_for_status >= _app_tracking_start
-        _yday_unmarked = int(((_date_s == _yesterday_iso) & _pending_mask & _app_window_mask).sum())
-        _pending_total = int((_pending_mask & _app_window_mask).sum())
+        _pipeline_date_ok = _date_parsed_for_status >= _mlb_pipeline_start
+        _sport_ok_status = _mlb_record_all_bets["sport"].astype(str).str.strip().str.upper().eq("MLB")
+        _sot_status = pd.to_numeric(_mlb_record_all_bets["spread_or_total"], errors="coerce")
+        _ml_line_status = np.isclose(_sot_status, -999.0, rtol=0.0, atol=0.01)
+        _edge_status = pd.to_numeric(_mlb_record_all_bets["my_edge_pct"], errors="coerce") >= 5.0
+        _status_base = _sport_ok_status & _ml_line_status & _edge_status & _pipeline_date_ok
+        _today_pick_count = int((_status_base & (_date_s == _today_iso)).sum())
+        _yday_unmarked = int((_status_base & (_date_s == _yesterday_iso) & _pending_mask).sum())
+        _pending_total = int((_status_base & _pending_mask).sum())
     _status_c1, _status_c2, _status_c3 = st.columns(3)
     _status_c1.metric("Today's Picks", _today_pick_count)
     _status_c2.metric("Yesterday Unmarked", _yday_unmarked)
     _status_c3.metric("Total Pending", _pending_total)
 
-    # Headline + chart + tiers: MLB moneyline (spread_or_total sentinel -999), resolved W/L only, edge ≥ 5%.
+    # Headline + chart + tiers: MLB moneyline (spread_or_total sentinel -999), resolved W/L only, edge ≥ 5%, on/after pipeline start.
     _mlb_record_view = pd.DataFrame()
     if not _mlb_record_all_bets.empty:
         _sport_ok = _mlb_record_all_bets["sport"].astype(str).str.strip().str.upper().eq("MLB")
@@ -3840,7 +3849,11 @@ with tab_mlb_record:
         _edge_num = pd.to_numeric(_mlb_record_all_bets["my_edge_pct"], errors="coerce")
         _resolved_wl = _mlb_record_all_bets["result_clean"].isin(("W", "L"))
         _edge_ok = _edge_num >= 5.0
-        _mlb_record_view = _mlb_record_all_bets[_sport_ok & _ml_line & _resolved_wl & _edge_ok].copy()
+        _date_parsed_record = pd.to_datetime(_mlb_record_all_bets["date_generated"], errors="coerce")
+        _pipeline_date_ok_record = _date_parsed_record.dt.date >= _mlb_pipeline_start
+        _mlb_record_view = _mlb_record_all_bets[
+            _sport_ok & _ml_line & _resolved_wl & _edge_ok & _pipeline_date_ok_record
+        ].copy()
         if not _mlb_record_view.empty:
             _mlb_record_view["date_parsed"] = pd.to_datetime(_mlb_record_view["date_generated"], errors="coerce")
             _mlb_record_view = _mlb_record_view[_mlb_record_view["date_parsed"].notna()].copy()
