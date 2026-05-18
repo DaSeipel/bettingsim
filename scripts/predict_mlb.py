@@ -83,6 +83,7 @@ MIN_MODEL_PROB = 0.42  # skip picks below this win probability; prints SKIP_LOW_
 
 # Moneyline only: hard skip when the chosen side is this heavy or worse (more negative).
 MAX_FAVORITE_ODDS = -160
+MIN_FAVORITE_EDGE_DECIMAL = 0.10  # Added 2026-05-18: diagnostic showed favorites at 5-10% edge ran 3-9, -55.6% ROI across 12 picks. Model overconfident on small-edge favorites.
 
 # Moneyline only: gradual edge shrink for moderate chalk (-160 exclusive through -150 inclusive).
 JUICE_PENALTY_THRESHOLD = -150
@@ -1061,6 +1062,14 @@ def main() -> int:
                     f"(edge_h={edge_h:.4f} edge_a={edge_a:.4f})",
                     flush=True,
                 )
+            continue
+
+        if odds_used < 0 and edge < MIN_FAVORITE_EDGE_DECIMAL:
+            print(
+                f"{away} @ {home} | SKIP_FAVORITE_LOW_EDGE: {pick} at {odds_used:.0f} | "
+                f"edge={edge:.3f} below MIN_FAVORITE_EDGE_DECIMAL={MIN_FAVORITE_EDGE_DECIMAL}",
+                flush=True,
+            )
             continue
 
         plays.append(
