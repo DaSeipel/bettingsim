@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """
-Fetch today's MLB schedule + probable pitchers (MLB Stats API via statsapi, no key)
-and consensus moneylines / totals from public VegasInsider HTML (no paid API).
+Fetch today's MLB schedule + probable pitchers (MLB Stats API via statsapi)
+and consensus moneylines / totals from The Odds API (https://the-odds-api.com).
 
-Writes data/odds/live_mlb_odds.json (same schema as before for the rest of the app).
-When the slate has at least one game, also copies that file to
-data/odds/mlb_archive/YYYY-MM-DD.json (games_date_et; ET today if missing/invalid).
+Writes data/odds/live_mlb_odds.json with the same schema as the prior scraper version.
+When the slate has >=1 game, archives to data/odds/mlb_archive/YYYY-MM-DD.json.
 
-If the file was modified within the last 30 minutes, skips network calls and prints
-'Data is fresh.'
+Freshness: if the file was modified in the last 30 minutes, skips the API call
+unless --force is passed.
 
-Fallback: if VegasInsider scrape yields no lines, games still include teams/times/pitchers
-from statsapi with null odds.
+Consensus method: for each event, aggregates moneylines and totals across all
+US bookmakers returned by the API. Takes the median of implied probabilities
+per side and converts back to American odds. Totals lines are median-snapped to
+the nearest half-run, and prices are medianed across books near that line.
+
+Loud failures: prints HTTP errors, API credit usage on every run, and warns
+if zero moneylines were retrieved.
 
 Usage:
   python3 scripts/fetch_mlb_odds.py
+  python3 scripts/fetch_mlb_odds.py --force
 """
 
 from __future__ import annotations
@@ -24,11 +29,11 @@ import json
 import os
 import re
 import shutil
+import statistics
 import sys
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
-# Must not import urllib3 before this — import triggers NotOpenSSLWarning on LibreSSL/macOS.
 warnings.filterwarnings("ignore", message=r".*urllib3 v2 only supports OpenSSL.*")
 
 from datetime import datetime, timezone
@@ -36,7 +41,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
-from bs4 import BeautifulSoup
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 if str(APP_ROOT) not in sys.path:
@@ -47,32 +51,63 @@ from engine.mlb_engine import MLB_TEAM_NAME_ALIASES, normalize_mlb_team_name_for
 
 OUTPUT_PATH = APP_ROOT / "data" / "odds" / "live_mlb_odds.json"
 ARCHIVE_DIR = APP_ROOT / "data" / "odds" / "mlb_archive"
+SECRETS_PATH = APP_ROOT / ".streamlit" / "secrets.toml"
 FRESHNESS_SECONDS = 30 * 60
 _SLATE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SPORT_KEY = "baseball_mlb"
+ODDS_API_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
 
-VEGAS_INSIDER_MLB_ODDS = "https://www.vegasinsider.com/mlb/odds/las-vegas/"
-ODDS_SHARK_MLB_ODDS = "https://www.oddsshark.com/mlb/odds"
 
-# VegasInsider nicknames / abbreviations → expand for fuzzy match vs statsapi full names.
-VI_TEAM_LABEL_HINTS: dict[str, str] = {
-    "d-backs": "Arizona Diamondbacks",
-    "dbacks": "Arizona Diamondbacks",
-    "diamondbacks": "Arizona Diamondbacks",
-    "jays": "Toronto Blue Jays",
-    "m's": "Seattle Mariners",
-    "ms": "Seattle Mariners",
-}
+# ---------- API key loading ----------
 
-REQUEST_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
+def _read_odds_api_key() -> str:
+    """Read The Odds API key from the [the_odds_api] section of secrets.toml.
+    Falls back to ODDS_API_KEY env var."""
+    if SECRETS_PATH.exists():
+        text = SECRETS_PATH.read_text()
+        m = re.search(
+            r"\[the_odds_api\][^\[]*?api_key\s*=\s*['\"]([^'\"]+)['\"]",
+            text,
+            re.S,
+        )
+        if m:
+            return m.group(1).strip()
+    return os.environ.get("ODDS_API_KEY", "").strip()
 
+
+# ---------- Odds math helpers ----------
+
+def _american_to_prob(odds):
+    if odds is None:
+        return None
+    try:
+        o = float(odds)
+    except (TypeError, ValueError):
+        return None
+    if o == 0:
+        return None
+    if o > 0:
+        return 100.0 / (o + 100.0)
+    return abs(o) / (abs(o) + 100.0)
+
+
+def _prob_to_american(p):
+    if p is None or p <= 0 or p >= 1:
+        return None
+    if p >= 0.5:
+        return int(round(-(p / (1 - p)) * 100))
+    return int(round((1 - p) / p * 100))
+
+
+def _median_american(prices):
+    probs = [_american_to_prob(p) for p in prices]
+    probs = [p for p in probs if p is not None]
+    if not probs:
+        return None
+    return _prob_to_american(statistics.median(probs))
+
+
+# ---------- Freshness / archive ----------
 
 def _is_fresh(path: Path) -> bool:
     if not path.exists():
@@ -81,405 +116,10 @@ def _is_fresh(path: Path) -> bool:
         mtime = path.stat().st_mtime
     except OSError:
         return False
-    age = datetime.now().timestamp() - mtime
-    return age < FRESHNESS_SECONDS
-
-
-def _fetch_html(url: str) -> str | None:
-    try:
-        r = requests.get(url, headers=REQUEST_HEADERS, timeout=35)
-        r.raise_for_status()
-        return r.text
-    except requests.RequestException:
-        return None
-
-
-def _consensus_int(cell_text: str) -> int | None:
-    s = cell_text.strip().replace(" ", "")
-    if s.lower() in ("even", "ev", "pk", "pick"):
-        return 100
-    m = re.fullmatch(r"([+-]?\d+)", s)
-    if not m:
-        return None
-    try:
-        v = int(m.group(1))
-        if abs(v) < 100 and v != 0:
-            return None
-        return v
-    except ValueError:
-        return None
-
-
-def _vi_row_team_label(first_cell: str) -> str | None:
-    """First column like '957 Twins' or '958 Orioles' → team nickname 'Twins'."""
-    s = first_cell.strip()
-    if not s or s.lower() in ("time", "open") or s.startswith("›"):
-        return None
-    m = re.match(r"^(\d+)\s+(.+)$", s)
-    if m:
-        return m.group(2).strip()
-    return s
-
-
-def _vi_label_strip_pitcher_suffix(vi_label: str) -> str:
-    """
-    VI row labels often include probable pitcher: 'Dodgers Sheehan (R)', 'Red Sox Gray (R)'.
-    Matching uses only the team nickname; strip trailing 'LastName (L)' / '(R)'.
-    With ≥3 tokens and last token like '(R)', drop the last two tokens so multi-word
-    nicknames stay intact ('Blue Jays Cease (R)' → 'Blue Jays').
-    """
-    s = " ".join(vi_label.split())
-    if not s:
-        return s
-    toks = s.split()
-    while len(toks) >= 3 and re.fullmatch(r"\([lLrR]\)", toks[-1] or ""):
-        toks = toks[:-2]
-    return " ".join(toks)
-
-
-def _vi_label_matches_statsapi_team(vi_label: str, statsapi_full_name: str) -> bool:
-    """
-    True when VI's first-column label refers to the same club as statsapi's full name.
-    VI often uses the bare nickname ('Rays', 'Brewers'); statsapi uses city + name.
-    Pitcher suffixes on VI labels are stripped first (see _vi_label_strip_pitcher_suffix).
-    """
-    sched = normalize_mlb_team_name_for_join(statsapi_full_name)
-    alias = MLB_TEAM_NAME_ALIASES.get(sched, sched)
-    raw = _vi_label_strip_pitcher_suffix(vi_label.strip())
-    if not raw or not alias:
-        return False
-    expanded = VI_TEAM_LABEL_HINTS.get(raw.lower(), raw)
-    v = " ".join(expanded.split()).lower()
-    a = " ".join(alias.split()).lower()
-    if v == a or v in a:
-        return True
-    toks = a.split()
-    if len(toks) >= 2 and v == f"{toks[-2]} {toks[-1]}":
-        return True
-    if toks and v == toks[-1]:
-        return True
-    return False
-
-
-def _team_match_score(vi_label: str, statsapi_full_name: str) -> int:
-    """How well a VI row label matches statsapi away_name / home_name."""
-    if _vi_label_matches_statsapi_team(vi_label, statsapi_full_name):
-        return 100
-    try:
-        from thefuzz import fuzz
-    except ImportError:
-        fuzz = None
-    sched = normalize_mlb_team_name_for_join(statsapi_full_name)
-    alias = MLB_TEAM_NAME_ALIASES.get(sched, sched)
-    vi = _vi_label_strip_pitcher_suffix(vi_label.strip())
-    expanded = VI_TEAM_LABEL_HINTS.get(vi.lower(), vi)
-    if not fuzz:
-        a, b = expanded.lower(), alias.lower()
-        if a in b or b.endswith(a.split()[-1].lower()):
-            return 85
-        return max(50, 100 - 10 * abs(len(a) - len(b)))
-    return max(
-        fuzz.token_sort_ratio(expanded, alias),
-        fuzz.token_sort_ratio(vi, alias),
-        fuzz.token_sort_ratio(expanded, sched),
-    )
-
-
-def _resolve_pair_to_away_home_ml(
-    away_team: str, home_team: str, pair: tuple[tuple[str, int], tuple[str, int]]
-) -> tuple[int, int, float] | None:
-    """
-    Map a scraped ((teamA, mlA), (teamB, mlB)) to (away_ml, home_ml) using name match.
-    Returns (away_ml, home_ml, confidence) or None if match is too weak.
-    """
-    (t1, m1), (t2, m2) = pair
-    s1a = _team_match_score(t1, away_team)
-    s1h = _team_match_score(t1, home_team)
-    s2a = _team_match_score(t2, away_team)
-    s2h = _team_match_score(t2, home_team)
-    o1 = s1a + s2h
-    o2 = s1h + s2a
-    min_side = 62
-
-    if o1 >= o2 and s1a >= min_side and s2h >= min_side:
-        return m1, m2, float(o1)
-    if o2 > o1 and s1h >= min_side and s2a >= min_side:
-        return m2, m1, float(o2)
-    return None
-
-
-def _assign_moneylines_and_total_indices(
-    sched: list[dict],
-    ml_pairs: list[tuple[tuple[str, int], tuple[str, int]]],
-) -> list[tuple[int | None, int | None, int | None]]:
-    """
-    For each schedule game (statsapi order), pick an unused VI pair that best matches
-    away_name / home_name. Returns parallel list: (away_ml, home_ml, vi_pair_index).
-
-    vi_pair_index aligns with parse_vegasinsider_totals order (same table pairing).
-    """
-    n = len(sched)
-    out: list[tuple[int | None, int | None, int | None]] = [(None, None, None)] * n
-    used: set[int] = set()
-    for i, g in enumerate(sched):
-        away = str(g.get("away_name") or "").strip()
-        home = str(g.get("home_name") or "").strip()
-        if not away or not home:
-            continue
-        best_j: int | None = None
-        best_sc = -1.0
-        best_mls: tuple[int, int] = (0, 0)
-        for j, pair in enumerate(ml_pairs):
-            if j in used:
-                continue
-            resolved = _resolve_pair_to_away_home_ml(away, home, pair)
-            if resolved is None:
-                continue
-            aml, hml, sc = resolved
-            if sc > best_sc:
-                best_sc = sc
-                best_j = j
-                best_mls = (aml, hml)
-        if best_j is not None:
-            used.add(best_j)
-            out[i] = (best_mls[0], best_mls[1], best_j)
-    return out
-
-
-def _odds_cell_for_row(tds: list) -> str:
-    """VegasInsider uses column 1 for consensus; older layouts used last column."""
-    if len(tds) >= 2:
-        c1 = tds[1].get_text(" ", strip=True)
-        if c1:
-            return c1
-    return tds[-1].get_text(" ", strip=True) if tds else ""
-
-
-def debug_vegasinsider_moneyline_rows(html: str) -> list[dict[str, str | int]]:
-    """
-    Each scraped ML table row before pairing: rotation+team cell, consensus cell, parsed label/ML.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    out: list[dict[str, str | int]] = []
-    for tr in soup.find_all("tr"):
-        tds = tr.find_all("td")
-        if len(tds) < 2:
-            continue
-        first = tds[0].get_text(" ", strip=True)
-        label = _vi_row_team_label(first)
-        if not label:
-            continue
-        cell = _odds_cell_for_row(tds)
-        cl = cell.lower()
-        if re.match(r"^[ou]\d", cl):
-            continue
-        if re.search(r"\d+\.\d", cl):
-            continue
-        ci = _consensus_int(cell)
-        if ci is None:
-            continue
-        out.append(
-            {
-                "first_cell": first,
-                "consensus_cell": cell.strip(),
-                "label": label,
-                "ml": ci,
-            }
-        )
-    return out
-
-
-def _pair_labels_lower(pair: tuple[tuple[str, int], tuple[str, int]]) -> set[str]:
-    return {pair[0][0].lower(), pair[1][0].lower()}
-
-
-def _pair_matches_substrs(
-    pair: tuple[tuple[str, int], tuple[str, int]], a: str, b: str
-) -> bool:
-    labs = _pair_labels_lower(pair)
-    return any(a in x for x in labs) and any(b in x for x in labs)
-
-
-def print_raw_vi_moneylines_for_verification(html: str) -> None:
-    """Stdout: numbered rows, sequential pairs, then spotlight NYM@STL and WSH@PHI (pre-schedule match)."""
-    rows = debug_vegasinsider_moneyline_rows(html)
-    pairs = parse_vegasinsider_moneyline_pairs(html, max_pairs=None)
-
-    print("--- VegasInsider raw ML rows (consensus column, before schedule pairing) ---")
-    for i, r in enumerate(rows):
-        print(
-            f"  row[{i:3d}] first_cell={r['first_cell']!r} | "
-            f"consensus={r['consensus_cell']!r} → label={r['label']!r} ml={r['ml']}"
-        )
-
-    print("\n--- Sequential pairs (row[2k], row[2k+1]) — VI table order, not statsapi ---")
-    for j, p in enumerate(pairs):
-        (t1, m1), (t2, m2) = p
-        print(f"  pair[{j:3d}] ({t1!r}, {m1})  |  ({t2!r}, {m2})")
-
-    print("\n--- Spotlight: Mets @ Cardinals (look for Mets + Cardinals in same pair) ---")
-    mets_stl = [
-        (j, p)
-        for j, p in enumerate(pairs)
-        if _pair_matches_substrs(p, "mets", "cardinal")
-    ]
-    if not mets_stl:
-        print("  (no pair with both Mets and Cardinals labels)")
-    for j, p in mets_stl:
-        (t1, m1), (t2, m2) = p
-        print(f"  pair[{j}] order not away/home: {t1} {m1:+d}  |  {t2} {m2:+d}")
-
-    print("\n--- Spotlight: Nationals @ Phillies (look for Nationals + Phillies in same pair) ---")
-    was_phi = [
-        (j, p)
-        for j, p in enumerate(pairs)
-        if _pair_matches_substrs(p, "national", "phillie")
-    ]
-    if not was_phi:
-        print("  (no pair with both Nationals and Phillies labels)")
-    for j, p in was_phi:
-        (t1, m1), (t2, m2) = p
-        print(f"  pair[{j}] order not away/home: {t1} {m1:+d}  |  {t2} {m2:+d}")
-
-    print(
-        "\n(Home/away on each side is determined only after matching this pair to statsapi "
-        "away_name/home_name; first row in a pair is not necessarily away.)"
-    )
-
-
-def parse_vegasinsider_moneyline_pairs(
-    html: str, max_pairs: int | None = None
-) -> list[tuple[tuple[str, int], tuple[str, int]]]:
-    """
-    Parse VI MLB table: each moneyline row has rotation + team in col0, consensus ML in col1.
-    Returns [((team_label, ml), (team_label, ml)), ...] — one tuple per game (two teams).
-    Skips over/under and run-line rows (not plain integer ML in consensus cell).
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    rows: list[tuple[str, int]] = []
-    for tr in soup.find_all("tr"):
-        tds = tr.find_all("td")
-        if len(tds) < 2:
-            continue
-        first = tds[0].get_text(" ", strip=True)
-        label = _vi_row_team_label(first)
-        if not label:
-            continue
-        cell = _odds_cell_for_row(tds)
-        cl = cell.lower()
-        if re.match(r"^[ou]\d", cl):
-            continue
-        if re.search(r"\d+\.\d", cl):
-            continue
-        ci = _consensus_int(cell)
-        if ci is None:
-            continue
-        rows.append((label, ci))
-    pairs: list[tuple[tuple[str, int], tuple[str, int]]] = []
-    for i in range(0, len(rows) - 1, 2):
-        pairs.append((rows[i], rows[i + 1]))
-    if max_pairs is not None and len(pairs) > max_pairs:
-        pairs = pairs[:max_pairs]
-    return pairs
-
-
-def parse_vegasinsider_totals(html: str, max_games: int | None = None) -> list[dict[str, float | int | None]]:
-    """
-    Parse o/u rows (consensus column: 'o9 -102', 'u9 -118', 'o8.5 +102', etc.).
-    Returns one dict per game: line, over_odds, under_odds (consensus).
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    rows: list[tuple[str, float, int]] = []
-    for tr in soup.find_all("tr"):
-        tds = tr.find_all("td")
-        if not tds:
-            continue
-        cell = _odds_cell_for_row(tds)
-        m = re.match(
-            r"^([ou])(\d+(?:\.\d+)?)\s+([+-]?\d+|even|Even|EVEN|pick|Pick|PK|pk)\s*$",
-            cell.replace(" ", " "),
-            re.I,
-        )
-        if not m:
-            m = re.match(r"^([ou])(\d+(?:\.\d+)?)\s*([+-]?\d+|even)\s*$", cell.strip(), re.I)
-        if not m:
-            continue
-        side, line_s, odds_s = m.group(1).lower(), m.group(2), m.group(3)
-        line = float(line_s)
-        os_low = odds_s.strip().lower()
-        if os_low in ("even", "ev", "pick", "pk"):
-            oi = 100
-        else:
-            try:
-                oi = int(odds_s)
-            except ValueError:
-                continue
-        rows.append((side, line, oi))
-
-    games: list[dict[str, float | int | None]] = []
-    i = 0
-    while i + 1 < len(rows):
-        a, b = rows[i], rows[i + 1]
-        if a[0] == "o" and b[0] == "u" and abs(a[1] - b[1]) < 0.01:
-            games.append(
-                {
-                    "line": a[1],
-                    "over_odds": a[2],
-                    "under_odds": b[2],
-                }
-            )
-            i += 2
-        else:
-            i += 1
-    if max_games is not None and len(games) > max_games:
-        games = games[:max_games]
-    return games
-
-
-def scrape_odds_pages(
-    max_pairs_hint: int,
-) -> tuple[list[tuple[tuple[str, int], tuple[str, int]]], list[dict[str, float | int | None]], str]:
-    """
-    Try VegasInsider first, then OddsShark. ML pairs include team labels for schedule matching.
-    Parse extra pairs (up to 2x slate) so reordering vs statsapi still matches; cap for safety.
-    """
-    cap = None
-    if max_pairs_hint > 0:
-        cap = min(60, max_pairs_hint * 2 + 8)
-    html = _fetch_html(VEGAS_INSIDER_MLB_ODDS)
-    if html:
-        ml = parse_vegasinsider_moneyline_pairs(html, max_pairs=cap)
-        tot = parse_vegasinsider_totals(html, max_games=cap)
-        if ml:
-            return ml, tot, "VegasInsider (consensus)"
-    html2 = _fetch_html(ODDS_SHARK_MLB_ODDS)
-    if html2:
-        ml2 = parse_vegasinsider_moneyline_pairs(html2, max_pairs=cap)
-        tot2 = parse_vegasinsider_totals(html2, max_games=cap)
-        if ml2:
-            return ml2, tot2, "OddsShark (consensus-style)"
-    return [], [], ""
-
-
-def load_schedule_statsapi(date_et: datetime) -> list[dict]:
-    import statsapi
-
-    d = date_et.date().isoformat()
-    games = statsapi.schedule(date=d) or []
-    out: list[dict] = []
-    for g in games:
-        if not isinstance(g, dict):
-            continue
-        st = str(g.get("status") or "")
-        if st in ("Cancelled", "Postponed"):
-            continue
-        out.append(g)
-    out.sort(key=lambda x: str(x.get("game_datetime") or ""))
-    return out
+    return (datetime.now().timestamp() - mtime) < FRESHNESS_SECONDS
 
 
 def _slate_date_iso_for_archive(payload: dict) -> str:
-    """Use games_date_et when valid YYYY-MM-DD; else America/New_York today."""
     raw = str(payload.get("games_date_et") or "").strip()
     if raw and _SLATE_DATE_RE.fullmatch(raw):
         return raw
@@ -487,7 +127,6 @@ def _slate_date_iso_for_archive(payload: dict) -> str:
 
 
 def _archive_live_odds_copy(payload: dict) -> None:
-    """Copy live file to data/odds/mlb_archive/YYYY-MM-DD.json when slate has ≥1 game."""
     games = payload.get("games") or []
     if not isinstance(games, list) or len(games) < 1:
         return
@@ -495,40 +134,183 @@ def _archive_live_odds_copy(payload: dict) -> None:
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     dest = ARCHIVE_DIR / f"{slate}.json"
     shutil.copy2(OUTPUT_PATH, dest)
-    print(f"Archived odds → data/odds/mlb_archive/{slate}.json")
+    print(f"Archived odds -> data/odds/mlb_archive/{slate}.json")
 
 
-def build_payload() -> dict:
+# ---------- Schedule (statsapi) ----------
+
+def load_schedule_statsapi(date_et: datetime) -> list:
+    import statsapi
+
+    d = date_et.date().isoformat()
+    games = statsapi.schedule(date=d) or []
+    out = []
+    for g in games:
+        if not isinstance(g, dict):
+            continue
+        if str(g.get("status") or "") in ("Cancelled", "Postponed"):
+            continue
+        out.append(g)
+    out.sort(key=lambda x: str(x.get("game_datetime") or ""))
+    return out
+
+
+# ---------- Team name matching ----------
+
+def _norm_team(name: str) -> str:
+    """Normalize a team name via the existing MLB alias layer so statsapi and
+    Odds API names join cleanly even if minor drift exists."""
+    n = (name or "").strip()
+    if not n:
+        return ""
+    base = normalize_mlb_team_name_for_join(n)
+    return MLB_TEAM_NAME_ALIASES.get(base, base).strip().lower()
+
+
+# ---------- The Odds API fetch ----------
+
+def fetch_odds_from_api(api_key: str):
+    """Return (odds_by_matchup, bookmaker_label, x-requests-remaining, x-requests-used).
+    odds_by_matchup key = (normalized_away, normalized_home) -> dict with away_ml/home_ml/total."""
+    if not api_key:
+        print(
+            "[odds_api] No API key found in secrets.toml or ODDS_API_KEY env var.",
+            file=sys.stderr,
+        )
+        return {}, "", "?", "?"
+
+    params = {
+        "regions": "us",
+        "markets": "h2h,totals",
+        "oddsFormat": "american",
+        "apiKey": api_key,
+    }
+    try:
+        resp = requests.get(ODDS_API_URL, params=params, timeout=20)
+    except requests.RequestException as e:
+        print(f"[odds_api] HTTP error: {e}", file=sys.stderr)
+        return {}, "", "?", "?"
+
+    remaining = resp.headers.get("x-requests-remaining", "?")
+    used = resp.headers.get("x-requests-used", "?")
+
+    if resp.status_code != 200:
+        print(
+            f"[odds_api] HTTP {resp.status_code}: {resp.text[:300]}",
+            file=sys.stderr,
+        )
+        return {}, "", remaining, used
+
+    try:
+        events = resp.json() or []
+    except json.JSONDecodeError:
+        print("[odds_api] Failed to parse JSON response body.", file=sys.stderr)
+        return {}, "", remaining, used
+
+    if not isinstance(events, list):
+        print(
+            f"[odds_api] Unexpected response type: {type(events).__name__}",
+            file=sys.stderr,
+        )
+        return {}, "", remaining, used
+
+    odds_by_matchup = {}
+    for event in events:
+        away_raw = event.get("away_team") or ""
+        home_raw = event.get("home_team") or ""
+        if not away_raw or not home_raw:
+            continue
+
+        ml_away = []
+        ml_home = []
+        totals_rows = []  # (line, over_price, under_price)
+
+        for bm in event.get("bookmakers") or []:
+            for market in bm.get("markets") or []:
+                mkey = market.get("key")
+                outcomes = market.get("outcomes") or []
+                if mkey == "h2h":
+                    for o in outcomes:
+                        nm = o.get("name") or ""
+                        price = o.get("price")
+                        if price is None:
+                            continue
+                        if nm == away_raw:
+                            ml_away.append(float(price))
+                        elif nm == home_raw:
+                            ml_home.append(float(price))
+                elif mkey == "totals":
+                    line_v = None
+                    over_p = None
+                    under_p = None
+                    for o in outcomes:
+                        nm = (o.get("name") or "").lower()
+                        if nm == "over":
+                            over_p = int(o.get("price")) if o.get("price") is not None else None
+                            if o.get("point") is not None:
+                                line_v = float(o.get("point"))
+                        elif nm == "under":
+                            under_p = int(o.get("price")) if o.get("price") is not None else None
+                            if line_v is None and o.get("point") is not None:
+                                line_v = float(o.get("point"))
+                    if line_v is not None and over_p is not None and under_p is not None:
+                        totals_rows.append((line_v, over_p, under_p))
+
+        agg_total = {"line": None, "over_odds": None, "under_odds": None}
+        if totals_rows:
+            try:
+                med_line = statistics.median([t[0] for t in totals_rows])
+            except statistics.StatisticsError:
+                med_line = None
+            if med_line is not None:
+                near = [t for t in totals_rows if abs(t[0] - med_line) <= 0.5]
+                if near:
+                    agg_total["line"] = round(med_line * 2) / 2
+                    agg_total["over_odds"] = _median_american([t[1] for t in near])
+                    agg_total["under_odds"] = _median_american([t[2] for t in near])
+
+        odds_by_matchup[(_norm_team(away_raw), _norm_team(home_raw))] = {
+            "away_ml": _median_american(ml_away),
+            "home_ml": _median_american(ml_home),
+            "total": agg_total,
+        }
+
+    bm_label = "TheOddsAPI consensus (median, US books)"
+    return odds_by_matchup, bm_label, remaining, used
+
+
+# ---------- Build payload ----------
+
+def build_payload():
+    """Return (payload, remaining, used, matched_ml_count)."""
     now_et = datetime.now(ZoneInfo("America/New_York"))
     date_str = now_et.date().isoformat()
     sched = load_schedule_statsapi(now_et)
-    nsched = len(sched)
 
-    ml_pairs, totals_list, book_title = scrape_odds_pages(max_pairs_hint=nsched)
-    ml_assign = _assign_moneylines_and_total_indices(sched, ml_pairs)
+    api_key = _read_odds_api_key()
+    odds_lookup, book_title, remaining, used = fetch_odds_from_api(api_key)
 
-    games_out: list[dict] = []
-    for i, g in enumerate(sched):
+    games_out = []
+    matched_ml = 0
+    for g in sched:
         gid = str(g.get("game_id") or "")
         away = str(g.get("away_name") or "").strip()
         home = str(g.get("home_name") or "").strip()
         commence = str(g.get("game_datetime") or "")
-        hp = (g.get("home_probable_pitcher") or None) and str(g.get("home_probable_pitcher")).strip()
-        ap = (g.get("away_probable_pitcher") or None) and str(g.get("away_probable_pitcher")).strip()
+        hp_val = g.get("home_probable_pitcher") or None
+        ap_val = g.get("away_probable_pitcher") or None
+        hp = str(hp_val).strip() if hp_val else None
+        ap = str(ap_val).strip() if ap_val else None
 
-        ml = {"home_odds": None, "away_odds": None}
-        away_ml, home_ml, vi_idx = ml_assign[i]
-        if away_ml is not None:
-            ml["away_odds"] = away_ml
-        if home_ml is not None:
-            ml["home_odds"] = home_ml
-
-        total: dict[str, float | int | None] = {"line": None, "over_odds": None, "under_odds": None}
-        if vi_idx is not None and vi_idx < len(totals_list):
-            t = totals_list[vi_idx]
-            total["line"] = t.get("line")
-            total["over_odds"] = t.get("over_odds")
-            total["under_odds"] = t.get("under_odds")
+        ml_data = odds_lookup.get((_norm_team(away), _norm_team(home)))
+        if ml_data is None:
+            ml = {"home_odds": None, "away_odds": None}
+            total = {"line": None, "over_odds": None, "under_odds": None}
+        else:
+            ml = {"home_odds": ml_data["home_ml"], "away_odds": ml_data["away_ml"]}
+            total = ml_data["total"]
+            if ml_data["home_ml"] is not None and ml_data["away_ml"] is not None:
+                matched_ml += 1
 
         games_out.append(
             {
@@ -536,46 +318,33 @@ def build_payload() -> dict:
                 "commence_time": commence,
                 "home_team": home,
                 "away_team": away,
-                "home_pitcher": hp or None,
-                "away_pitcher": ap or None,
+                "home_pitcher": hp,
+                "away_pitcher": ap,
                 "bookmaker_title": book_title,
                 "moneyline": ml,
                 "total": total,
             }
         )
 
-    now = datetime.now(timezone.utc)
-    return {
-        "fetched_at_utc": now.isoformat().replace("+00:00", "Z"),
+    payload = {
+        "fetched_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "sport_key": SPORT_KEY,
-        "source": "statsapi_schedule+web_scrape",
+        "source": "statsapi_schedule+the_odds_api",
         "bookmaker_title": book_title,
         "games_date_et": date_str,
         "games": games_out,
     }
+    return payload, remaining, used, matched_ml
 
+
+# ---------- Main ----------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="MLB schedule + scraped consensus odds → live_mlb_odds.json")
-    parser.add_argument(
-        "--print-raw-vi",
-        action="store_true",
-        help="Fetch VegasInsider, print raw ML rows and pairs (before statsapi matching), then exit.",
+    parser = argparse.ArgumentParser(
+        description="MLB schedule + The Odds API consensus odds -> live_mlb_odds.json"
     )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Ignore 30m freshness guard and rewrite JSON.",
-    )
+    parser.add_argument("--force", action="store_true", help="Ignore 30m freshness guard.")
     args = parser.parse_args()
-
-    if args.print_raw_vi:
-        html = _fetch_html(VEGAS_INSIDER_MLB_ODDS)
-        if not html:
-            print("Failed to fetch VegasInsider HTML.", file=sys.stderr)
-            return 1
-        print_raw_vi_moneylines_for_verification(html)
-        return 0
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -584,19 +353,29 @@ def main() -> int:
         return 0
 
     try:
-        payload = build_payload()
+        payload, remaining, used, matched_ml = build_payload()
     except Exception as e:
         print(f"Fetch failed: {e}", file=sys.stderr)
         return 1
 
+    n = len(payload.get("games") or [])
+
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 
-    n = len(payload.get("games") or [])
-    print(f"Wrote {n} game(s) to {OUTPUT_PATH}")
+    print(f"Wrote {n} game(s) to {OUTPUT_PATH}  [moneylines: {matched_ml}/{n}]")
+    print(f"[odds_api] credits used: {used} | remaining: {remaining}")
+
+    if n > 0 and matched_ml == 0:
+        print(
+            "WARNING: API returned no moneylines for any scheduled game. "
+            "Check API key, team-name matching, or quota.",
+            file=sys.stderr,
+        )
+
     _archive_live_odds_copy(payload)
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
