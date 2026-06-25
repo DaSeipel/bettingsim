@@ -22,6 +22,7 @@ data/cache/mlb_archive/YYYY-MM-DD.json (same slate key as fetch_mlb_odds.py: val
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 import os
@@ -56,6 +57,8 @@ ODDS_PATH = ROOT / "data" / "odds" / "live_mlb_odds.json"
 WEATHER_PATH = ROOT / "data" / "cache" / "mlb_weather.json"
 OUT_PATH = ROOT / "data" / "cache" / "mlb_value_plays.json"
 CACHE_ARCHIVE_DIR = ROOT / "data" / "cache" / "mlb_archive"
+DECISION_LOG_DIR = ROOT / "data" / "cache" / "decision_log"
+DECISION_LOG_CSV = DECISION_LOG_DIR / "all_decisions.csv"
 PLAY_HISTORY_DB_PATH = ROOT / "data" / "espn.db"
 _SLATE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -207,6 +210,275 @@ def _archive_mlb_value_plays_json(slate_iso: str, plays: list) -> None:
     dest = CACHE_ARCHIVE_DIR / f"{slate_iso}.json"
     shutil.copy2(OUT_PATH, dest)
     print(f"Archived picks → data/cache/mlb_archive/{slate_iso}.json", flush=True)
+
+
+DECISION_LOG_COLUMNS = (
+    "run_timestamp",
+    "game_date",
+    "event_id",
+    "away_team",
+    "home_team",
+    "away_moneyline",
+    "home_moneyline",
+    "away_pitcher",
+    "home_pitcher",
+    "away_pitcher_id",
+    "home_pitcher_id",
+    "away_pitcher_fip",
+    "home_pitcher_fip",
+    "away_pitcher_xfip",
+    "home_pitcher_xfip",
+    "away_pitcher_ip",
+    "home_pitcher_ip",
+    "away_pitcher_source",
+    "home_pitcher_source",
+    "away_team_recent_win_pct",
+    "home_team_recent_win_pct",
+    "away_team_form_bonus",
+    "home_team_form_bonus",
+    "away_recent_ra_avg",
+    "home_recent_ra_avg",
+    "away_pitch_adj",
+    "home_pitch_adj",
+    "park_factor",
+    "weather_data_present",
+    "raw_model_prob_home",
+    "p_home",
+    "fair_home_prob",
+    "edge_h",
+    "edge_a",
+    "pick_team",
+    "pick_odds",
+    "pick_edge",
+    "verdict",
+    "verdict_detail",
+)
+
+
+def _pitcher_source_from_row(row, used_default: bool) -> str:
+    if used_default:
+        return "default"
+    season = row.get("season") if row is not None else None
+    if season is None or (isinstance(season, float) and season != season):
+        return "default"
+    s = str(season).strip()
+    return s if s else "default"
+
+
+def _pitcher_log_side(row, used_default: bool) -> dict[str, object]:
+    rates = _starter_pitcher_rates(row)
+    pid = None
+    if not used_default and row is not None:
+        try:
+            pv = row.get("player_id")
+            if pv is not None and str(pv).strip() not in ("", "nan"):
+                pid = int(float(pv))
+        except (TypeError, ValueError):
+            pid = None
+    return {
+        "pitcher_id": pid,
+        "pitcher_fip": float(rates["blended"]),
+        "pitcher_xfip": float(rates["xfip"]),
+        "pitcher_ip": float(rates["ip"]),
+        "pitcher_source": _pitcher_source_from_row(row, used_default),
+    }
+
+
+def _build_decision_row(
+    *,
+    run_timestamp: str,
+    game_date: str,
+    event_id: str,
+    away_team: str,
+    home_team: str,
+    away_moneyline: float | None,
+    home_moneyline: float | None,
+    away_pitcher: str,
+    home_pitcher: str,
+    away_pitcher_id: int | None,
+    home_pitcher_id: int | None,
+    away_pitcher_fip: float | None,
+    home_pitcher_fip: float | None,
+    away_pitcher_xfip: float | None,
+    home_pitcher_xfip: float | None,
+    away_pitcher_ip: float | None,
+    home_pitcher_ip: float | None,
+    away_pitcher_source: str,
+    home_pitcher_source: str,
+    away_team_recent_win_pct: float | None,
+    home_team_recent_win_pct: float | None,
+    away_team_form_bonus: float | None,
+    home_team_form_bonus: float | None,
+    away_recent_ra_avg: float | None,
+    home_recent_ra_avg: float | None,
+    away_pitch_adj: float | None,
+    home_pitch_adj: float | None,
+    park_factor: float | None,
+    weather_data_present: bool,
+    raw_model_prob_home: float | None,
+    p_home: float | None,
+    fair_home_prob: float | None,
+    edge_h: float | None,
+    edge_a: float | None,
+    pick_team: str,
+    pick_odds: float | None,
+    pick_edge: float | None,
+    verdict: str,
+    verdict_detail: str,
+) -> dict:
+    return {
+        "run_timestamp": run_timestamp,
+        "game_date": game_date,
+        "event_id": event_id,
+        "away_team": away_team,
+        "home_team": home_team,
+        "away_moneyline": away_moneyline,
+        "home_moneyline": home_moneyline,
+        "away_pitcher": away_pitcher,
+        "home_pitcher": home_pitcher,
+        "away_pitcher_id": away_pitcher_id,
+        "home_pitcher_id": home_pitcher_id,
+        "away_pitcher_fip": away_pitcher_fip,
+        "home_pitcher_fip": home_pitcher_fip,
+        "away_pitcher_xfip": away_pitcher_xfip,
+        "home_pitcher_xfip": home_pitcher_xfip,
+        "away_pitcher_ip": away_pitcher_ip,
+        "home_pitcher_ip": home_pitcher_ip,
+        "away_pitcher_source": away_pitcher_source,
+        "home_pitcher_source": home_pitcher_source,
+        "away_team_recent_win_pct": away_team_recent_win_pct,
+        "home_team_recent_win_pct": home_team_recent_win_pct,
+        "away_team_form_bonus": away_team_form_bonus,
+        "home_team_form_bonus": home_team_form_bonus,
+        "away_recent_ra_avg": away_recent_ra_avg,
+        "home_recent_ra_avg": home_recent_ra_avg,
+        "away_pitch_adj": away_pitch_adj,
+        "home_pitch_adj": home_pitch_adj,
+        "park_factor": park_factor,
+        "weather_data_present": weather_data_present,
+        "raw_model_prob_home": raw_model_prob_home,
+        "p_home": p_home,
+        "fair_home_prob": fair_home_prob,
+        "edge_h": edge_h,
+        "edge_a": edge_a,
+        "pick_team": pick_team,
+        "pick_odds": pick_odds,
+        "pick_edge": pick_edge,
+        "verdict": verdict,
+        "verdict_detail": verdict_detail,
+    }
+
+
+def _decision_row_csv_values(row: dict) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for col in DECISION_LOG_COLUMNS:
+        val = row.get(col)
+        if val is None:
+            out[col] = ""
+        elif isinstance(val, bool):
+            out[col] = "true" if val else "false"
+        else:
+            out[col] = str(val)
+    return out
+
+
+def _write_decision_log(decision_rows: list[dict], game_date: str) -> None:
+    """Overwrite daily JSON; dedupe same game_date in CSV then append batch."""
+    DECISION_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    json_path = DECISION_LOG_DIR / f"{game_date}.json"
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(decision_rows, fh, indent=2)
+
+    retained: list[dict[str, str]] = []
+    if DECISION_LOG_CSV.is_file():
+        with open(DECISION_LOG_CSV, newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            for old in reader:
+                if str(old.get("game_date", "")).strip() != game_date:
+                    retained.append({c: old.get(c, "") for c in DECISION_LOG_COLUMNS})
+
+    with open(DECISION_LOG_CSV, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=DECISION_LOG_COLUMNS)
+        writer.writeheader()
+        writer.writerows(retained)
+        for row in decision_rows:
+            writer.writerow(_decision_row_csv_values(row))
+
+
+def _decision_log_base_kwargs(
+    *,
+    run_timestamp: str,
+    game_date: str,
+    g: dict,
+    away: str,
+    home: str,
+    home_odds_am: float | None,
+    away_odds_am: float | None,
+    wx: Optional[dict],
+    hp_row,
+    hp_default: bool,
+    ap_row,
+    ap_default: bool,
+    bonus_h: float,
+    bonus_a: float,
+    rwp_h: float | None,
+    rwp_a: float | None,
+    pitch_h: float,
+    pitch_a: float,
+    raa_h: float | None,
+    raa_a: float | None,
+    p_home_model: float | None,
+    game_park_mult: float | None,
+    p_home: float | None,
+    fair_home: float | None,
+    edge_h: float | None,
+    edge_a: float | None,
+    pick: str,
+    odds_used: float | None,
+    pick_edge: float | None,
+) -> dict:
+    away_p = _pitcher_log_side(ap_row, ap_default)
+    home_p = _pitcher_log_side(hp_row, hp_default)
+    weather_ok = bool(wx and wx.get("temp_f") is not None)
+    return dict(
+        run_timestamp=run_timestamp,
+        game_date=game_date,
+        event_id=str(g.get("event_id") or ""),
+        away_team=away,
+        home_team=home,
+        away_moneyline=away_odds_am,
+        home_moneyline=home_odds_am,
+        away_pitcher=str(g.get("away_pitcher") or ""),
+        home_pitcher=str(g.get("home_pitcher") or ""),
+        away_pitcher_id=away_p["pitcher_id"],
+        home_pitcher_id=home_p["pitcher_id"],
+        away_pitcher_fip=away_p["pitcher_fip"],
+        home_pitcher_fip=home_p["pitcher_fip"],
+        away_pitcher_xfip=away_p["pitcher_xfip"],
+        home_pitcher_xfip=home_p["pitcher_xfip"],
+        away_pitcher_ip=away_p["pitcher_ip"],
+        home_pitcher_ip=home_p["pitcher_ip"],
+        away_pitcher_source=str(away_p["pitcher_source"]),
+        home_pitcher_source=str(home_p["pitcher_source"]),
+        away_team_recent_win_pct=rwp_a,
+        home_team_recent_win_pct=rwp_h,
+        away_team_form_bonus=bonus_a,
+        home_team_form_bonus=bonus_h,
+        away_recent_ra_avg=raa_a,
+        home_recent_ra_avg=raa_h,
+        away_pitch_adj=pitch_a,
+        home_pitch_adj=pitch_h,
+        park_factor=game_park_mult,
+        weather_data_present=weather_ok,
+        raw_model_prob_home=p_home_model,
+        p_home=p_home,
+        fair_home_prob=fair_home,
+        edge_h=edge_h,
+        edge_a=edge_a,
+        pick_team=pick,
+        pick_odds=odds_used,
+        pick_edge=pick_edge,
+    )
 
 
 def _juice_penalized_edge(edge: float, odds_am: float) -> float:
@@ -893,6 +1165,9 @@ def main() -> int:
 
     matched = 0
     plays: list[dict] = []
+    decision_rows: list[dict] = []
+    run_timestamp = datetime.now(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z")
+    game_date = _slate_date_iso_for_archive(blob)
 
     for g in games:
         if not isinstance(g, dict):
@@ -936,18 +1211,59 @@ def main() -> int:
         if away_odds_am is None:
             skip_parts.append("missing_or_invalid_away_moneyline")
         if skip_parts:
-            print(
-                f"{away} @ {home} | SKIP (before model/edges): {'; '.join(skip_parts)}",
-                flush=True,
+            detail = f"{away} @ {home} | SKIP (before model/edges): {'; '.join(skip_parts)}"
+            print(detail, flush=True)
+            decision_rows.append(
+                _build_decision_row(
+                    run_timestamp=run_timestamp,
+                    game_date=game_date,
+                    event_id=str(g.get("event_id") or ""),
+                    away_team=away,
+                    home_team=home,
+                    away_moneyline=away_odds_am,
+                    home_moneyline=home_odds_am,
+                    away_pitcher=str(g.get("away_pitcher") or ""),
+                    home_pitcher=str(g.get("home_pitcher") or ""),
+                    away_pitcher_id=None,
+                    home_pitcher_id=None,
+                    away_pitcher_fip=None,
+                    home_pitcher_fip=None,
+                    away_pitcher_xfip=None,
+                    home_pitcher_xfip=None,
+                    away_pitcher_ip=None,
+                    home_pitcher_ip=None,
+                    away_pitcher_source="",
+                    home_pitcher_source="",
+                    away_team_recent_win_pct=None,
+                    home_team_recent_win_pct=None,
+                    away_team_form_bonus=None,
+                    home_team_form_bonus=None,
+                    away_recent_ra_avg=None,
+                    home_recent_ra_avg=None,
+                    away_pitch_adj=None,
+                    home_pitch_adj=None,
+                    park_factor=None,
+                    weather_data_present=bool(wx and wx.get("temp_f") is not None),
+                    raw_model_prob_home=None,
+                    p_home=None,
+                    fair_home_prob=None,
+                    edge_h=None,
+                    edge_a=None,
+                    pick_team="",
+                    pick_odds=None,
+                    pick_edge=None,
+                    verdict="SKIP_MISSING_DATA",
+                    verdict_detail=detail,
+                )
             )
             continue
 
-        hp = _find_pitcher_row(pitcher_df, g.get("home_pitcher"))
-        ap = _find_pitcher_row(pitcher_df, g.get("away_pitcher"))
-        if hp is None:
-            hp = MISSING_PITCHER_STATS_ROW
-        if ap is None:
-            ap = MISSING_PITCHER_STATS_ROW
+        hp_row = _find_pitcher_row(pitcher_df, g.get("home_pitcher"))
+        ap_row = _find_pitcher_row(pitcher_df, g.get("away_pitcher"))
+        hp_default = hp_row is None
+        ap_default = ap_row is None
+        hp = hp_row if hp_row is not None else MISSING_PITCHER_STATS_ROW
+        ap = ap_row if ap_row is not None else MISSING_PITCHER_STATS_ROW
 
         _pitcher_blend_debug_line(str(g.get("away_pitcher") or "away"), ap)
         _pitcher_blend_debug_line(str(g.get("home_pitcher") or "home"), hp)
@@ -1019,59 +1335,129 @@ def main() -> int:
             summ = value_summary_moneyline(model_p, odds_used, float(home_odds_am))
 
         edge = float(summ["edge"])
+        pick_edge = edge
+        _dl = _decision_log_base_kwargs(
+            run_timestamp=run_timestamp,
+            game_date=game_date,
+            g=g,
+            away=away,
+            home=home,
+            home_odds_am=home_odds_am,
+            away_odds_am=away_odds_am,
+            wx=wx,
+            hp_row=hp,
+            hp_default=hp_default,
+            ap_row=ap,
+            ap_default=ap_default,
+            bonus_h=bonus_h,
+            bonus_a=bonus_a,
+            rwp_h=rwp_h,
+            rwp_a=rwp_a,
+            pitch_h=pitch_h,
+            pitch_a=pitch_a,
+            raa_h=raa_h,
+            raa_a=raa_a,
+            p_home_model=float(p_home_model),
+            game_park_mult=float(game_park_mult),
+            p_home=float(p_home),
+            fair_home=float(fair_home),
+            edge_h=edge_h,
+            edge_a=edge_a,
+            pick=pick,
+            odds_used=odds_used,
+            pick_edge=pick_edge,
+        )
         if odds_used <= MAX_FAVORITE_ODDS:
-            print(
-                f"SKIP_HEAVY_CHALK: {pick} at {odds_used:.0f} exceeds MAX_FAVORITE_ODDS={MAX_FAVORITE_ODDS}",
-                flush=True,
+            detail = (
+                f"SKIP_HEAVY_CHALK: {pick} at {odds_used:.0f} exceeds MAX_FAVORITE_ODDS={MAX_FAVORITE_ODDS}"
+            )
+            print(detail, flush=True)
+            decision_rows.append(
+                _build_decision_row(
+                    **_dl,
+                    verdict="SKIP_HEAVY_CHALK",
+                    verdict_detail=detail,
+                )
             )
             continue
         edge = _juice_penalized_edge(edge, odds_used)
-        # One line per game before edge / MIN_EDGE filtering (stdout so it shows even when stderr is quiet).
-        print(
+        summary_line = (
             f"{away} @ {home} | ho={home_odds_am} ao={away_odds_am} | "
             f"p_home={p_home:.3f} raw_model={float(p_home_model):.3f} fair_home={fair_home:.3f} | "
             f"park={game_park_mult:.3f} | "
-            f"edge_h={edge_h:.4f} edge_a={edge_a:.4f} | pick={pick} at {odds_used}",
-            flush=True,
+            f"edge_h={edge_h:.4f} edge_a={edge_a:.4f} | pick={pick} at {odds_used}"
         )
+        print(summary_line, flush=True)
 
         if model_p < MIN_MODEL_PROB:
-            print(
-                f"SKIP_LOW_PROB: {pick} | model_prob={model_p:.3f}",
-                flush=True,
+            detail = f"SKIP_LOW_PROB: {pick} | model_prob={model_p:.3f}"
+            print(detail, flush=True)
+            decision_rows.append(
+                _build_decision_row(
+                    **_dl,
+                    verdict="SKIP_LOW_PROB",
+                    verdict_detail=detail,
+                )
             )
             continue
 
         if edge > MAX_EDGE_DECIMAL:
-            print(
-                f"FLAGGED_HIGH_EDGE: {pick} | edge={edge:.3f} exceeds MAX",
-                flush=True,
+            detail = f"FLAGGED_HIGH_EDGE: {pick} | edge={edge:.3f} exceeds MAX"
+            print(detail, flush=True)
+            decision_rows.append(
+                _build_decision_row(
+                    **_dl,
+                    verdict="FLAGGED_HIGH_EDGE",
+                    verdict_detail=detail,
+                )
             )
             continue
 
         if edge < MIN_EDGE_DECIMAL:
             if edge_h < 0 and edge_a < 0:
-                print(
+                detail = (
                     f"{away} @ {home} | NO_PLAY: both edges negative "
-                    f"(edge_h={edge_h:.4f} edge_a={edge_a:.4f}); best_pick_edge={edge:.4f} < MIN {MIN_EDGE_DECIMAL}",
-                    flush=True,
+                    f"(edge_h={edge_h:.4f} edge_a={edge_a:.4f}); best_pick_edge={edge:.4f} < MIN {MIN_EDGE_DECIMAL}"
                 )
+                verdict = "NO_PLAY_BOTH_NEGATIVE"
             else:
-                print(
+                detail = (
                     f"{away} @ {home} | NO_PLAY: best_pick_edge={edge:.4f} < MIN {MIN_EDGE_DECIMAL} "
-                    f"(edge_h={edge_h:.4f} edge_a={edge_a:.4f})",
-                    flush=True,
+                    f"(edge_h={edge_h:.4f} edge_a={edge_a:.4f})"
                 )
-            continue
-
-        if odds_used < 0 and edge < MIN_FAVORITE_EDGE_DECIMAL:
-            print(
-                f"{away} @ {home} | SKIP_FAVORITE_LOW_EDGE: {pick} at {odds_used:.0f} | "
-                f"edge={edge:.3f} below MIN_FAVORITE_EDGE_DECIMAL={MIN_FAVORITE_EDGE_DECIMAL}",
-                flush=True,
+                verdict = "NO_PLAY_BELOW_MIN_EDGE"
+            print(detail, flush=True)
+            decision_rows.append(
+                _build_decision_row(
+                    **_dl,
+                    verdict=verdict,
+                    verdict_detail=detail,
+                )
             )
             continue
 
+        if odds_used < 0 and edge < MIN_FAVORITE_EDGE_DECIMAL:
+            detail = (
+                f"{away} @ {home} | SKIP_FAVORITE_LOW_EDGE: {pick} at {odds_used:.0f} | "
+                f"edge={edge:.3f} below MIN_FAVORITE_EDGE_DECIMAL={MIN_FAVORITE_EDGE_DECIMAL}"
+            )
+            print(detail, flush=True)
+            decision_rows.append(
+                _build_decision_row(
+                    **_dl,
+                    verdict="SKIP_FAVORITE_LOW_EDGE",
+                    verdict_detail=detail,
+                )
+            )
+            continue
+
+        decision_rows.append(
+            _build_decision_row(
+                **_dl,
+                verdict="PLAYED",
+                verdict_detail=summary_line,
+            )
+        )
         plays.append(
             {
                 "card_date": card_date,
@@ -1248,6 +1634,16 @@ def main() -> int:
 
     print(f"play_history summary: JSON written → {OUT_PATH}", flush=True)
     print(f"play_history summary: {ph_status}", flush=True)
+
+    try:
+        _write_decision_log(decision_rows, game_date)
+        print(
+            f"decision_log: wrote {len(decision_rows)} decisions to "
+            f"data/cache/decision_log/{game_date}.json (appended to all_decisions.csv)",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"MLB predict: decision_log write failed: {exc}", file=sys.stderr, flush=True)
 
     return 0
 
