@@ -83,6 +83,7 @@ ENABLE_TOTALS = False
 MIN_EDGE_DECIMAL = 0.05  # minimum 5% edge to qualify as a play
 MAX_EDGE_DECIMAL = 0.17  # skip plays above this; prints FLAGGED_HIGH_EDGE
 MIN_MODEL_PROB = 0.42  # skip picks below this win probability; prints SKIP_LOW_PROB
+MIN_PITCHER_IP_FOR_PICK = 10.0  # Both starters must have >= this IP in pitcher_stats.csv
 
 # Moneyline only: hard skip when the chosen side is this heavy or worse (more negative).
 MAX_FAVORITE_ODDS = -160
@@ -1267,6 +1268,70 @@ def main() -> int:
 
         _pitcher_blend_debug_line(str(g.get("away_pitcher") or "away"), ap)
         _pitcher_blend_debug_line(str(g.get("home_pitcher") or "home"), hp)
+
+        away_p_log = _pitcher_log_side(ap, ap_default)
+        home_p_log = _pitcher_log_side(hp, hp_default)
+        away_source = str(away_p_log["pitcher_source"])
+        home_source = str(home_p_log["pitcher_source"])
+        away_ip = float(away_p_log["pitcher_ip"])
+        home_ip = float(home_p_log["pitcher_ip"])
+        pitcher_data_bad = (
+            away_source == "default"
+            or home_source == "default"
+            or away_ip < MIN_PITCHER_IP_FOR_PICK
+            or home_ip < MIN_PITCHER_IP_FOR_PICK
+        )
+        if pitcher_data_bad:
+            detail = (
+                f"{away} @ {home} | SKIP_MISSING_PITCHER_DATA: "
+                f"away_source={away_source}, away_ip={away_ip:.1f}, "
+                f"home_source={home_source}, home_ip={home_ip:.1f}"
+            )
+            print(detail, flush=True)
+            decision_rows.append(
+                _build_decision_row(
+                    run_timestamp=run_timestamp,
+                    game_date=game_date,
+                    event_id=str(g.get("event_id") or ""),
+                    away_team=away,
+                    home_team=home,
+                    away_moneyline=away_odds_am,
+                    home_moneyline=home_odds_am,
+                    away_pitcher=str(g.get("away_pitcher") or ""),
+                    home_pitcher=str(g.get("home_pitcher") or ""),
+                    away_pitcher_id=away_p_log["pitcher_id"],
+                    home_pitcher_id=home_p_log["pitcher_id"],
+                    away_pitcher_fip=away_p_log["pitcher_fip"],
+                    home_pitcher_fip=home_p_log["pitcher_fip"],
+                    away_pitcher_xfip=away_p_log["pitcher_xfip"],
+                    home_pitcher_xfip=home_p_log["pitcher_xfip"],
+                    away_pitcher_ip=away_ip,
+                    home_pitcher_ip=home_ip,
+                    away_pitcher_source=away_source,
+                    home_pitcher_source=home_source,
+                    away_team_recent_win_pct=None,
+                    home_team_recent_win_pct=None,
+                    away_team_form_bonus=None,
+                    home_team_form_bonus=None,
+                    away_recent_ra_avg=None,
+                    home_recent_ra_avg=None,
+                    away_pitch_adj=None,
+                    home_pitch_adj=None,
+                    park_factor=None,
+                    weather_data_present=bool(wx and wx.get("temp_f") is not None),
+                    raw_model_prob_home=None,
+                    p_home=None,
+                    fair_home_prob=None,
+                    edge_h=None,
+                    edge_a=None,
+                    pick_team="",
+                    pick_odds=None,
+                    pick_edge=None,
+                    verdict="SKIP_MISSING_PITCHER_DATA",
+                    verdict_detail=detail,
+                )
+            )
+            continue
 
         bonus_h, rwp_h = _form_bonus_from_row(hr, form_by_team_id)
         bonus_a, rwp_a = _form_bonus_from_row(ar, form_by_team_id)
