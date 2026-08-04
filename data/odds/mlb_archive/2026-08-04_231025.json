@@ -1,6 +1,6 @@
 {
-  "fetched_at_utc": "2026-08-04T23:12:00.446460Z",
-  "odds_captured_at": "2026-08-04T23:12:00.446460Z",
+  "fetched_at_utc": "2026-08-04T23:10:25.140252Z",
+  "odds_captured_at": "2026-08-04T23:10:25.140252Z",
   "sport_key": "baseball_mlb",
   "source": "statsapi_schedule+the_odds_api",
   "bookmaker_title": "TheOddsAPI consensus (median, US books)",
@@ -15,13 +15,13 @@
       "away_pitcher": "Grayson Rodriguez",
       "bookmaker_title": "TheOddsAPI consensus (median, US books)",
       "moneyline": {
-        "home_odds": -172,
-        "away_odds": 139
+        "home_odds": -145,
+        "away_odds": 122
       },
       "total": {
         "line": 6.5,
-        "over_odds": -113,
-        "under_odds": -118
+        "over_odds": -123,
+        "under_odds": -106
       }
     },
     {
@@ -33,13 +33,13 @@
       "away_pitcher": "Sean Manaea",
       "bookmaker_title": "TheOddsAPI consensus (median, US books)",
       "moneyline": {
-        "home_odds": 285,
-        "away_odds": -382
+        "home_odds": 275,
+        "away_odds": -368
       },
       "total": {
         "line": 9.5,
-        "over_odds": -110,
-        "under_odds": -122
+        "over_odds": -100,
+        "under_odds": -132
       }
     },
     {
@@ -51,13 +51,13 @@
       "away_pitcher": "J.T. Ginn",
       "bookmaker_title": "TheOddsAPI consensus (median, US books)",
       "moneyline": {
-        "home_odds": -134,
-        "away_odds": 105
+        "home_odds": -138,
+        "away_odds": 115
       },
       "total": {
-        "line": 6.5,
-        "over_odds": -145,
-        "under_odds": 110
+        "line": 7.0,
+        "over_odds": -112,
+        "under_odds": -125
       }
     },
     {
@@ -69,12 +69,12 @@
       "away_pitcher": "Carson Palmquist",
       "bookmaker_title": "TheOddsAPI consensus (median, US books)",
       "moneyline": {
-        "home_odds": -490,
-        "away_odds": 353
+        "home_odds": -487,
+        "away_odds": 368
       },
       "total": {
         "line": 7.5,
-        "over_odds": -120,
+        "over_odds": -125,
         "under_odds": -111
       }
     },
@@ -87,13 +87,13 @@
       "away_pitcher": "Hunter Dobbins",
       "bookmaker_title": "TheOddsAPI consensus (median, US books)",
       "moneyline": {
-        "home_odds": -230,
-        "away_odds": 184
+        "home_odds": -205,
+        "away_odds": 170
       },
       "total": {
         "line": 8.0,
-        "over_odds": -125,
-        "under_odds": -105
+        "over_odds": -110,
+        "under_odds": -110
       }
     },
     {
@@ -105,13 +105,13 @@
       "away_pitcher": "Davis Martin",
       "bookmaker_title": "TheOddsAPI consensus (median, US books)",
       "moneyline": {
-        "home_odds": -155,
+        "home_odds": -148,
         "away_odds": 134
       },
       "total": {
         "line": 9.0,
         "over_odds": -105,
-        "under_odds": -114
+        "under_odds": -115
       }
     },
     {
@@ -231,13 +231,13 @@
       "away_pitcher": "Freddy Peralta",
       "bookmaker_title": "TheOddsAPI consensus (median, US books)",
       "moneyline": {
-        "home_odds": 154,
-        "away_odds": -171
+        "home_odds": 153,
+        "away_odds": -169
       },
       "total": {
         "line": 11.0,
-        "over_odds": -106,
-        "under_odds": -114
+        "over_odds": -102,
+        "under_odds": -118
       }
     },
     {
