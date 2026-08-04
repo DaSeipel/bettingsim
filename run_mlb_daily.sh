@@ -18,7 +18,7 @@ run_step() {
   "$@"
 }
 
-run_step 1 "Fetching odds" python3 scripts/fetch_mlb_odds.py --force
+run_step 1 "Fetching odds" python3 scripts/fetch_mlb_odds.py
 run_step 2 "Fetching pitchers" python3 scripts/fetch_mlb_pitchers.py
 run_step 3 "Fetching MLB stats" python3 scripts/fetch_mlb_stats.py --season-blend
 run_step 4 "Fetching recent form" python3 scripts/fetch_mlb_recent_form.py

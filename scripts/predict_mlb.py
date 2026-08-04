@@ -41,7 +41,7 @@ _MLB_DEBUG_TEAM_QUALITY = os.environ.get("MLB_DEBUG_TEAM_QUALITY", "").strip().l
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=r".*urllib3 v2 only supports OpenSSL.*")
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -60,7 +60,13 @@ CACHE_ARCHIVE_DIR = ROOT / "data" / "cache" / "mlb_archive"
 DECISION_LOG_DIR = ROOT / "data" / "cache" / "decision_log"
 DECISION_LOG_CSV = DECISION_LOG_DIR / "all_decisions.csv"
 PLAY_HISTORY_DB_PATH = ROOT / "data" / "espn.db"
+PITCHER_META_PATH = ROOT / "data" / "mlb" / "pitcher_stats_meta.json"
 _SLATE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Pre-selection: if odds snapshot is older than this, re-fetch before choosing plays.
+ODDS_MAX_AGE_SECONDS = 5 * 60
+# Post-selection: warn when American odds moved by more than this many cents.
+ODDS_MOVE_WARN_CENTS = 15.0
 
 # Staking for archive rows — must match app.py `_mlb_dataframe_for_play_history` / Save Picks.
 BANKROLL_FOR_STAKES = 1000.0
@@ -251,6 +257,14 @@ DECISION_LOG_COLUMNS = (
     "pick_team",
     "pick_odds",
     "pick_edge",
+    "odds_american",
+    "odds_american_fresh",
+    "edge",
+    "edge_at_fresh_odds",
+    "qualifies_at_fresh",
+    "odds_moved",
+    "odds_captured_at",
+    "pitchers_captured_at",
     "verdict",
     "verdict_detail",
 )
@@ -326,6 +340,14 @@ def _build_decision_row(
     pick_edge: float | None,
     verdict: str,
     verdict_detail: str,
+    odds_american: float | None = None,
+    odds_american_fresh: float | None = None,
+    edge: float | None = None,
+    edge_at_fresh_odds: float | None = None,
+    qualifies_at_fresh: bool | None = None,
+    odds_moved: bool = False,
+    odds_captured_at: str | None = None,
+    pitchers_captured_at: str | None = None,
 ) -> dict:
     return {
         "run_timestamp": run_timestamp,
@@ -365,6 +387,14 @@ def _build_decision_row(
         "pick_team": pick_team,
         "pick_odds": pick_odds,
         "pick_edge": pick_edge,
+        "odds_american": odds_american if odds_american is not None else pick_odds,
+        "odds_american_fresh": odds_american_fresh,
+        "edge": edge if edge is not None else pick_edge,
+        "edge_at_fresh_odds": edge_at_fresh_odds,
+        "qualifies_at_fresh": qualifies_at_fresh,
+        "odds_moved": odds_moved,
+        "odds_captured_at": odds_captured_at,
+        "pitchers_captured_at": pitchers_captured_at,
         "verdict": verdict,
         "verdict_detail": verdict_detail,
     }
@@ -494,6 +524,239 @@ def _juice_penalized_edge(edge: float, odds_am: float) -> float:
         return edge
     factor = 1.0 - JUICE_PENALTY_RATE * (abs(float(odds_am)) - 150.0)
     return edge * max(0.0, factor)
+
+
+def _load_pitchers_captured_at() -> str | None:
+    if not PITCHER_META_PATH.exists():
+        return None
+    try:
+        with open(PITCHER_META_PATH, encoding="utf-8") as fh:
+            meta = json.load(fh)
+        if isinstance(meta, dict):
+            raw = meta.get("pitchers_captured_at")
+            return str(raw).strip() if raw else None
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    return None
+
+
+def _parse_iso_z(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    s = str(ts).strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _odds_age_seconds(blob: dict) -> float | None:
+    """Age of odds snapshot in seconds, or None if unknown."""
+    ts = _parse_iso_z(blob.get("odds_captured_at") or blob.get("fetched_at_utc"))
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds())
+
+
+def _load_fetch_mlb_odds_module():
+    """Load scripts/fetch_mlb_odds.py without requiring scripts/ to be a package."""
+    import importlib.util
+
+    path = ROOT / "scripts" / "fetch_mlb_odds.py"
+    spec = importlib.util.spec_from_file_location("fetch_mlb_odds", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _ensure_fresh_odds_blob(blob: dict) -> dict:
+    """
+    If live odds are older than ODDS_MAX_AGE_SECONDS (or missing capture stamp),
+    re-call The Odds API via fetch_mlb_odds.refresh_live_odds and reload.
+    """
+    age = _odds_age_seconds(blob)
+    if age is not None and age <= ODDS_MAX_AGE_SECONDS:
+        print(
+            f"MLB predict: odds snapshot age={age:.0f}s (<= {ODDS_MAX_AGE_SECONDS}s) — using live file.",
+            flush=True,
+        )
+        return blob
+
+    reason = "missing odds_captured_at/fetched_at_utc" if age is None else f"age={age:.0f}s > {ODDS_MAX_AGE_SECONDS}s"
+    print(
+        f"MLB predict: odds stale ({reason}) — refreshing via The Odds API before selection.",
+        flush=True,
+    )
+    fodds = _load_fetch_mlb_odds_module()
+    try:
+        return fodds.refresh_live_odds()
+    except fodds.OddsApiError as exc:
+        print(f"MLB predict: fresh odds fetch failed: {exc}", file=sys.stderr, flush=True)
+        raise SystemExit(1) from exc
+
+
+def _crossed_even_money(old: float, new: float) -> bool:
+    """True when American odds flip dog <-> favorite (sign change across even)."""
+    return (old > 0 and new < 0) or (old < 0 and new > 0)
+
+
+def _stamp_decision_freshness_defaults(
+    decision_rows: list[dict],
+    *,
+    odds_captured_at: str | None,
+    pitchers_captured_at: str | None,
+) -> None:
+    """Ensure every decision row has freshness columns (null fresh fields for skips)."""
+    for row in decision_rows:
+        if row.get("odds_american") is None:
+            row["odds_american"] = row.get("pick_odds")
+        if row.get("edge") is None:
+            row["edge"] = row.get("pick_edge")
+        row.setdefault("odds_american_fresh", None)
+        row.setdefault("edge_at_fresh_odds", None)
+        row.setdefault("qualifies_at_fresh", None)
+        row["odds_moved"] = bool(row.get("odds_moved", False))
+        row["odds_captured_at"] = odds_captured_at
+        row["pitchers_captured_at"] = pitchers_captured_at
+
+
+def _recheck_plays_at_fresh_odds(
+    plays: list[dict],
+    decision_rows: list[dict],
+    *,
+    value_summary_moneyline,
+) -> None:
+    """
+    Re-pull current consensus moneylines and recompute edge for each moneyline play.
+    Mutates plays and matching PLAYED decision rows in place.
+    """
+    ml_plays = [p for p in plays if str(p.get("market", "")).strip().lower() == "moneyline"]
+    if not ml_plays:
+        return
+
+    fodds = _load_fetch_mlb_odds_module()
+    try:
+        odds_lookup, _, remaining, used = fodds.fetch_odds_from_api(fodds._read_odds_api_key())
+    except fodds.OddsApiError as exc:
+        print(
+            f"WARNING: ODDS_FRESHNESS_RECHECK failed — could not re-pull odds: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
+
+    print(
+        f"MLB predict: post-selection odds recheck "
+        f"(credits used={used} remaining={remaining}, plays={len(ml_plays)}).",
+        flush=True,
+    )
+
+    played_by_event: dict[str, dict] = {}
+    for row in decision_rows:
+        if str(row.get("verdict") or "") == "PLAYED":
+            played_by_event[str(row.get("event_id") or "")] = row
+
+    for play in ml_plays:
+        away = str(play.get("away_team") or "").strip()
+        home = str(play.get("home_team") or "").strip()
+        selection = str(play.get("selection") or "").strip()
+        old_odds = float(play.get("odds_american"))
+        model_p = float(play.get("model_prob"))
+        old_edge = float(play.get("edge"))
+        game_start = fodds._parse_iso_utc(play.get("commence_time"))
+
+        candidates = odds_lookup.get((fodds._norm_team(away), fodds._norm_team(home))) or []
+        ml_data = fodds.select_odds_candidate(
+            candidates,
+            game_start,
+            away=away,
+            home=home,
+            log=False,
+        )
+        if not ml_data:
+            print(
+                f"WARNING: ODDS_FRESHNESS_RECHECK no time-matched event for {away} @ {home}",
+                flush=True,
+            )
+            play["odds_american_fresh"] = None
+            play["edge_at_fresh_odds"] = None
+            play["qualifies_at_fresh"] = False
+            play["odds_moved"] = False
+            continue
+
+        fresh_home = ml_data.get("home_ml")
+        fresh_away = ml_data.get("away_ml")
+        if selection == home:
+            fresh_sel = fresh_home
+            fresh_other = fresh_away
+        elif selection == away:
+            fresh_sel = fresh_away
+            fresh_other = fresh_home
+        else:
+            fresh_sel = None
+            fresh_other = None
+
+        if fresh_sel is None or fresh_other is None:
+            print(
+                f"WARNING: ODDS_FRESHNESS_RECHECK missing ML for {away} @ {home} "
+                f"(selection={selection})",
+                flush=True,
+            )
+            play["odds_american_fresh"] = None
+            play["edge_at_fresh_odds"] = None
+            play["qualifies_at_fresh"] = False
+            play["odds_moved"] = False
+            continue
+
+        fresh_sel_f = float(fresh_sel)
+        fresh_other_f = float(fresh_other)
+        summ = value_summary_moneyline(model_p, fresh_sel_f, fresh_other_f)
+        fresh_edge = _juice_penalized_edge(float(summ["edge"]), fresh_sel_f)
+
+        moved = abs(fresh_sel_f - old_odds) > 1e-9
+        side_flip = _crossed_even_money(old_odds, fresh_sel_f)
+        edge_sign_flip = (old_edge > 0 and fresh_edge < 0) or (old_edge < 0 and fresh_edge > 0)
+        qualifies = (
+            fresh_edge >= MIN_EDGE_DECIMAL
+            and not side_flip
+            and not edge_sign_flip
+        )
+
+        play["odds_american_fresh"] = fresh_sel_f
+        play["edge_at_fresh_odds"] = float(fresh_edge)
+        play["qualifies_at_fresh"] = bool(qualifies)
+        play["odds_moved"] = bool(moved)
+
+        warn = (
+            not qualifies
+            or abs(fresh_sel_f - old_odds) > ODDS_MOVE_WARN_CENTS
+            or side_flip
+        )
+        if warn:
+            print(
+                f"WARNING: ODDS_MOVED {away} @ {home} | pick={selection} | "
+                f"old_line={old_odds:.0f} new_line={fresh_sel_f:.0f} | "
+                f"old_edge={old_edge:.4f} new_edge={fresh_edge:.4f} | "
+                f"qualifies_at_fresh={qualifies}",
+                flush=True,
+            )
+
+        drow = played_by_event.get(str(play.get("event_id") or ""))
+        if drow is not None:
+            drow["odds_american"] = old_odds
+            drow["odds_american_fresh"] = fresh_sel_f
+            drow["edge"] = old_edge
+            drow["edge_at_fresh_odds"] = float(fresh_edge)
+            drow["qualifies_at_fresh"] = bool(qualifies)
+            drow["odds_moved"] = bool(moved)
 
 
 def _american_to_float(x) -> float | None:
@@ -1105,7 +1368,17 @@ def main() -> int:
         return 1
 
     blob = load_live_mlb_odds(ODDS_PATH)
+    blob = _ensure_fresh_odds_blob(blob)
     card_date = _card_date_iso(blob)
+    odds_captured_at = (
+        str(blob.get("odds_captured_at") or blob.get("fetched_at_utc") or "").strip() or None
+    )
+    pitchers_captured_at = _load_pitchers_captured_at()
+    print(
+        f"MLB predict: odds_captured_at={odds_captured_at} "
+        f"pitchers_captured_at={pitchers_captured_at}",
+        flush=True,
+    )
 
     stats_path = DEFAULT_MLB_TEAM_STATS_CSV
     if not stats_path.exists():
@@ -1538,8 +1811,22 @@ def main() -> int:
                 "model_prob": float(model_p),
                 "edge": float(edge),
                 "park_mult": float(game_park_mult),
+                "odds_captured_at": odds_captured_at,
+                "pitchers_captured_at": pitchers_captured_at,
             }
         )
+
+    # Stamp freshness defaults on all decisions, then re-pull live lines for PLAYED moneylines.
+    _stamp_decision_freshness_defaults(
+        decision_rows,
+        odds_captured_at=odds_captured_at,
+        pitchers_captured_at=pitchers_captured_at,
+    )
+    _recheck_plays_at_fresh_odds(
+        plays,
+        decision_rows,
+        value_summary_moneyline=value_summary_moneyline,
+    )
 
     # ——— Totals (over/under) pass ———
     if ENABLE_TOTALS:
@@ -1658,6 +1945,8 @@ def main() -> int:
                     "park_mult": float(pm),
                     "predicted_total": round(float(pred_total), 2),
                     "total_line": float(market_line),
+                    "odds_captured_at": odds_captured_at,
+                    "pitchers_captured_at": pitchers_captured_at,
                 }
             )
 
@@ -1671,7 +1960,12 @@ def main() -> int:
     )
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"card_date": card_date, "plays": plays}
+    payload = {
+        "card_date": card_date,
+        "odds_captured_at": odds_captured_at,
+        "pitchers_captured_at": pitchers_captured_at,
+        "plays": plays,
+    }
     with open(OUT_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     print(f"Wrote {OUT_PATH} ({len(plays)} play(s)), card_date={card_date}.")

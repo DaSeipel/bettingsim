@@ -28,6 +28,7 @@ import json
 import sys
 import time
 import unicodedata
+from datetime import datetime, timezone
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -44,7 +45,17 @@ BASE = "https://statsapi.mlb.com/api/v1"
 APP_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ODDS_PATH = APP_ROOT / "data" / "odds" / "live_mlb_odds.json"
 OUTPUT_PATH = APP_ROOT / "data" / "mlb" / "pitcher_stats.csv"
+META_PATH = APP_ROOT / "data" / "mlb" / "pitcher_stats_meta.json"
 FIP_C_FGM = 3.10
+
+
+def _write_pitcher_stats_meta() -> str:
+    """Stamp when pitcher_stats.csv was last written (ISO-8601 Z)."""
+    captured = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    META_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(META_PATH, "w", encoding="utf-8") as fh:
+        json.dump({"pitchers_captured_at": captured}, fh, indent=2)
+    return captured
 
 # Blend weight for 2026 rate stats when both seasons are available.
 PITCHER_BLEND_2026_WEIGHT = 0.75  # All-Star break: 2026 samples mature (60-110 IP); raise from 0.60
@@ -343,7 +354,9 @@ def main() -> int:
                 "innings_pitched",
             ]
         ).to_csv(OUTPUT_PATH, index=False)
+        captured = _write_pitcher_stats_meta()
         print(f"Wrote empty {OUTPUT_PATH}")
+        print(f"Wrote {META_PATH} (pitchers_captured_at={captured})")
         return 0
 
     # Load existing CSV for cumulative upsert unless --rebuild is requested.
@@ -455,9 +468,11 @@ def main() -> int:
             merged_df[c] = None
     merged_df = merged_df[output_cols]
     merged_df.to_csv(OUTPUT_PATH, index=False)
+    captured = _write_pitcher_stats_meta()
 
     label = f"blended 2025+2026 ({PITCHER_BLEND_2026_WEIGHT:.0%}/{1 - PITCHER_BLEND_2026_WEIGHT:.0%})" if blend_2026 else f"season={season}"
     print(f"Saved {len(merged_df)} pitcher(s) to {OUTPUT_PATH} ({label})")
+    print(f"Wrote {META_PATH} (pitchers_captured_at={captured})")
     print(
         f"Run summary: fetched={len(fetched_df)} added={added} updated={updated} total_csv={len(merged_df)}"
     )
