@@ -86,7 +86,7 @@ RECENT_PITCH_RA_TARGET = 4.50
 ENABLE_TOTALS = False
 
 # Edge and probability filters (decimal edge = EV fraction, e.g. 0.05 = 5%).
-MIN_EDGE_DECIMAL = 0.05  # minimum 5% edge to qualify as a play
+MIN_EDGE_DECIMAL = 0.10  # minimum 10% edge to qualify as a play (raised 2026-08-12; see data/cache/calibration_log.md)
 MAX_EDGE_DECIMAL = 0.17  # skip plays above this; prints FLAGGED_HIGH_EDGE
 MIN_MODEL_PROB = 0.42  # skip picks below this win probability; prints SKIP_LOW_PROB
 MIN_PITCHER_IP_FOR_PICK = 10.0  # Both starters must have >= this IP in pitcher_stats.csv
