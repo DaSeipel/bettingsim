@@ -1,49 +1,6 @@
 {
-  "card_date": "2026-08-13",
-  "odds_captured_at": "2026-08-13T11:45:33.354538Z",
-  "pitchers_captured_at": "2026-08-13T11:45:47.688499Z",
-  "plays": [
-    {
-      "card_date": "2026-08-13",
-      "event_id": "824238",
-      "commence_time": "2026-08-13T17:10:00Z",
-      "home_team": "Detroit Tigers",
-      "away_team": "Cleveland Guardians",
-      "home_pitcher": "Keider Montero",
-      "away_pitcher": "Parker Messick",
-      "market": "moneyline",
-      "selection": "Detroit Tigers",
-      "odds_american": 113.0,
-      "model_prob": 0.5245578766867582,
-      "edge": 0.11730827734279492,
-      "park_mult": 0.97,
-      "odds_captured_at": "2026-08-13T11:45:33.354538Z",
-      "pitchers_captured_at": "2026-08-13T11:45:47.688499Z",
-      "odds_american_fresh": 113.0,
-      "edge_at_fresh_odds": 0.11730827734279492,
-      "qualifies_at_fresh": true,
-      "odds_moved": false
-    },
-    {
-      "card_date": "2026-08-13",
-      "event_id": "823915",
-      "commence_time": "2026-08-14T02:10:00Z",
-      "home_team": "Los Angeles Dodgers",
-      "away_team": "Milwaukee Brewers",
-      "home_pitcher": "Roki Sasaki",
-      "away_pitcher": "Shane Drohan",
-      "market": "moneyline",
-      "selection": "Milwaukee Brewers",
-      "odds_american": 125.0,
-      "model_prob": 0.5078709933484519,
-      "edge": 0.14270973503401674,
-      "park_mult": 0.94,
-      "odds_captured_at": "2026-08-13T11:45:33.354538Z",
-      "pitchers_captured_at": "2026-08-13T11:45:47.688499Z",
-      "odds_american_fresh": 125.0,
-      "edge_at_fresh_odds": 0.14270973503401674,
-      "qualifies_at_fresh": true,
-      "odds_moved": false
-    }
-  ]
+  "card_date": "2026-08-14",
+  "odds_captured_at": "2026-08-14T11:37:26.773720Z",
+  "pitchers_captured_at": "2026-08-14T11:37:46.962254Z",
+  "plays": []
 }
