@@ -5,12 +5,16 @@ before games start, so no play is lost after the dashboard refreshes.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+
+
+logger = logging.getLogger(__name__)
 
 
 def _data_dir() -> Path:
@@ -85,9 +89,24 @@ def archive_value_plays(
 
     conn = sqlite3.connect(path)
     n = 0
+    run_at = datetime.now(timezone.utc)
     try:
         _create_table(conn)
         for _, row in value_plays_df.iterrows():
+            commence_raw = row.get("commence_time")
+            if commence_raw is None or pd.isna(commence_raw) or not str(commence_raw).strip():
+                commence_raw = row.get("start_time")
+            if commence_raw is not None and not pd.isna(commence_raw) and str(commence_raw).strip():
+                commence_time = pd.to_datetime(commence_raw, errors="coerce", utc=True)
+                if not pd.isna(commence_time) and commence_time.to_pydatetime() <= run_at:
+                    logger.warning(
+                        "Skipping stale play archive: league=%s event=%s commence_time=%s run_at=%s",
+                        row.get("League", ""),
+                        row.get("Event", ""),
+                        commence_time.isoformat(),
+                        run_at.isoformat(),
+                    )
+                    continue
             sport = str(row.get("League", "")).strip() or "—"
             home_team = str(row.get("home_team", "")).strip() or "—"
             away_team = str(row.get("away_team", "")).strip() or "—"

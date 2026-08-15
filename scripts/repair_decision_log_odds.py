@@ -97,6 +97,35 @@ def _normalize_event_id(raw) -> str:
     return s
 
 
+def _latest_decision_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Return current-run rows; legacy pre-fix logs contain only each date's final run."""
+    if not rows:
+        return rows
+    if any(str(row.get("is_latest_run", "")).strip() for row in rows):
+        return [
+            row
+            for row in rows
+            if str(row.get("is_latest_run", "")).strip().lower() in ("1", "true", "yes")
+        ]
+    latest_timestamp = {
+        game_date: max(
+            str(row.get("run_timestamp", "")).strip()
+            for row in rows
+            if str(row.get("game_date", "")).strip() == game_date
+        )
+        for game_date in {
+            str(row.get("game_date", "")).strip()
+            for row in rows
+        }
+    }
+    return [
+        row
+        for row in rows
+        if str(row.get("run_timestamp", "")).strip()
+        == latest_timestamp[str(row.get("game_date", "")).strip()]
+    ]
+
+
 def _game_date_iso(game_date: str) -> str:
     return (game_date or "").strip()[:10]
 
@@ -504,7 +533,7 @@ def main() -> int:
     with DECISIONS_PATH.open(encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh)
         fieldnames = list(reader.fieldnames or [])
-        rows = list(reader)
+        rows = _latest_decision_rows(list(reader))
 
     extra = [
         "data_regime",

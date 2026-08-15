@@ -220,8 +220,10 @@ def _archive_mlb_value_plays_json(slate_iso: str, plays: list) -> None:
 
 
 DECISION_LOG_COLUMNS = (
-    "run_timestamp",
     "game_date",
+    "run_timestamp",
+    "run_sequence",
+    "is_latest_run",
     "event_id",
     "away_team",
     "home_team",
@@ -413,27 +415,108 @@ def _decision_row_csv_values(row: dict) -> dict[str, str]:
     return out
 
 
-def _write_decision_log(decision_rows: list[dict], game_date: str) -> None:
-    """Overwrite daily JSON; dedupe same game_date in CSV then append batch."""
-    DECISION_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    json_path = DECISION_LOG_DIR / f"{game_date}.json"
-    with open(json_path, "w", encoding="utf-8") as fh:
-        json.dump(decision_rows, fh, indent=2)
+def _write_decision_log(decision_rows: list[dict], game_date: str) -> tuple[int, Path]:
+    """
+    Append one immutable decision run.
 
-    retained: list[dict[str, str]] = []
+    Natural key: (game_date, run_timestamp, event_id). Pre-fix rows are retained
+    as sequence 1; they contain only the final run that survived the old writer.
+    """
+    if not decision_rows:
+        raise ValueError("decision_rows cannot be empty")
+    DECISION_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    run_timestamps = {
+        str(row.get("run_timestamp", "")).strip()
+        for row in decision_rows
+        if str(row.get("run_timestamp", "")).strip()
+    }
+    if len(run_timestamps) != 1:
+        raise ValueError("decision_rows must contain exactly one run_timestamp")
+    run_timestamp = next(iter(run_timestamps))
+
+    existing: list[dict[str, str]] = []
+    fieldnames: list[str] = list(DECISION_LOG_COLUMNS)
     if DECISION_LOG_CSV.is_file():
         with open(DECISION_LOG_CSV, newline="", encoding="utf-8") as fh:
             reader = csv.DictReader(fh)
+            for name in reader.fieldnames or []:
+                if name not in fieldnames:
+                    fieldnames.append(name)
             for old in reader:
-                if str(old.get("game_date", "")).strip() != game_date:
-                    retained.append({c: old.get(c, "") for c in DECISION_LOG_COLUMNS})
+                existing.append({c: old.get(c, "") for c in fieldnames})
 
-    with open(DECISION_LOG_CSV, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=DECISION_LOG_COLUMNS)
+    sequences_by_date: dict[str, dict[str, int]] = {}
+    for old in existing:
+        old_date = str(old.get("game_date", "")).strip()
+        old_ts = str(old.get("run_timestamp", "")).strip()
+        by_timestamp = sequences_by_date.setdefault(old_date, {})
+        try:
+            old_sequence = int(str(old.get("run_sequence", "")).strip())
+        except ValueError:
+            old_sequence = 0
+        if old_ts and old_ts not in by_timestamp:
+            by_timestamp[old_ts] = old_sequence or (len(by_timestamp) + 1)
+        old["run_sequence"] = str(by_timestamp.get(old_ts, old_sequence or 1))
+        if not str(old.get("is_latest_run", "")).strip():
+            old["is_latest_run"] = "true"
+
+    date_sequences = sequences_by_date.setdefault(game_date, {})
+    if run_timestamp in date_sequences:
+        run_sequence = date_sequences[run_timestamp]
+    else:
+        run_sequence = max(date_sequences.values(), default=0) + 1
+        date_sequences[run_timestamp] = run_sequence
+
+    existing_keys = {
+        (
+            str(row.get("game_date", "")).strip(),
+            str(row.get("run_timestamp", "")).strip(),
+            str(row.get("event_id", "")).strip(),
+        )
+        for row in existing
+    }
+    new_rows: list[dict[str, str]] = []
+    for row in decision_rows:
+        enriched = dict(row)
+        enriched["run_sequence"] = run_sequence
+        enriched["is_latest_run"] = True
+        csv_row = _decision_row_csv_values(enriched)
+        key = (game_date, run_timestamp, str(csv_row.get("event_id", "")).strip())
+        if key not in existing_keys:
+            new_rows.append({c: csv_row.get(c, "") for c in fieldnames})
+            existing_keys.add(key)
+
+    if new_rows:
+        for old in existing:
+            if str(old.get("game_date", "")).strip() == game_date:
+                old["is_latest_run"] = (
+                    "true"
+                    if str(old.get("run_timestamp", "")).strip() == run_timestamp
+                    else "false"
+                )
+
+    csv_tmp = DECISION_LOG_CSV.with_suffix(".csv.tmp")
+    with open(csv_tmp, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(retained)
+        writer.writerows(existing)
+        writer.writerows(new_rows)
+    os.replace(csv_tmp, DECISION_LOG_CSV)
+
+    safe_timestamp = re.sub(r"[^0-9A-Za-z]+", "", run_timestamp)
+    json_path = DECISION_LOG_DIR / (
+        f"{game_date}_run-{run_sequence:03d}_{safe_timestamp}.json"
+    )
+    if not json_path.exists():
+        json_rows = []
         for row in decision_rows:
-            writer.writerow(_decision_row_csv_values(row))
+            enriched = dict(row)
+            enriched["run_sequence"] = run_sequence
+            enriched["is_latest_run"] = True
+            json_rows.append(enriched)
+        with open(json_path, "x", encoding="utf-8") as fh:
+            json.dump(json_rows, fh, indent=2)
+    return run_sequence, json_path
 
 
 def _decision_log_base_kwargs(
@@ -1344,6 +1427,7 @@ def _mlb_plays_dicts_to_archive_df(plays: list[dict]) -> "pd.DataFrame":
                 "model_prob": mp,
                 "home_team": home,
                 "away_team": away,
+                "commence_time": r.get("commence_time", ""),
                 "point": point_val,
                 "Recommended Stake": rec_stake,
                 "confidence_tier": "Medium",
@@ -1995,10 +2079,10 @@ def main() -> int:
     print(f"play_history summary: {ph_status}", flush=True)
 
     try:
-        _write_decision_log(decision_rows, game_date)
+        run_sequence, decision_json_path = _write_decision_log(decision_rows, game_date)
         print(
-            f"decision_log: wrote {len(decision_rows)} decisions to "
-            f"data/cache/decision_log/{game_date}.json (appended to all_decisions.csv)",
+            f"decision_log: wrote run {run_sequence} ({len(decision_rows)} decisions) to "
+            f"{decision_json_path.relative_to(ROOT)} and appended to all_decisions.csv",
             flush=True,
         )
     except Exception as exc:

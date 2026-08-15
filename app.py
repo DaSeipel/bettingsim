@@ -1,8 +1,4 @@
-"""
-Bobby Bottle's Betting Model - Streamlit Dashboard
-Daily picks sheet: Play of the Day (NCAAB) and All Value Plays. Dark theme, NCAAB-focused.
-Live odds from The Odds API; stakes from fractional Kelly.
-"""
+"""Bobby Bottle's Betting Model — Streamlit dashboard and legacy model wiring."""
 
 import gc
 import json
@@ -76,6 +72,12 @@ from engine.betting_models import (
     consensus_totals,
     consensus_moneyline,
 )
+from ui.cfb import inject_cfb_styles, load_cfb_value_plays, render_cfb_plays_tab
+from ui.config import load_pipeline_cache, sport_is_in_season
+from ui.plays import render_mlb_plays_tab, render_ncaab_plays_tab
+from ui.record import render_cfb_record, render_overall_record
+from ui.styles import inject_dashboard_styles
+from ui.today import render_today
 
 def format_american(odds: float) -> str:
     """Format American odds for display: +150, -110. Returns "—" for missing/NaN/invalid."""
@@ -101,6 +103,9 @@ STRIP_DOWN_MODE = False
 # Scheduler and startup thread: kept disabled for stability; set True to re-enable.
 ENABLE_SCHEDULER = False
 ENABLE_STARTUP_THREAD = False
+
+inject_dashboard_styles()
+inject_cfb_styles()
 
 # Human-readable market labels (replaces h2h, spreads, totals in UI)
 MARKET_LABELS = {"h2h": "Winner", "spreads": "Spread", "totals": "Over/Under", "moneyline": "Moneyline"}
@@ -1000,7 +1005,7 @@ def _render_potd_card_html(
             et = odds_as_of.astimezone(ZoneInfo("America/New_York"))
             line_as_of = f"Line as of {et.strftime('%b %d, %I:%M %p ET')}"
         except Exception:
-            line_as_of = f"Line as of {odds_as_of.strftime('%b %d, %I:%M %p')}"
+            line_as_of = f"Line as of {odds_as_of.strftime('%b %d, %I:%M %p UTC')}"
     potd_march = ""
     if league and "NCAAB" in league:
         march_badges = _march_context_badges(r)
@@ -1040,7 +1045,9 @@ def format_start_time(commence_time: str) -> str:
         s = str(commence_time).replace("Z", "+00:00")
         dt_utc = datetime.fromisoformat(s)
         if dt_utc.tzinfo is None:
-            return dt_utc.strftime("%b %d, %I:%M %p")
+            return dt_utc.replace(tzinfo=timezone.utc).astimezone(
+                ZoneInfo("America/New_York")
+            ).strftime("%b %d, %I:%M %p ET")
         dt_et = dt_utc.astimezone(ZoneInfo("America/New_York"))
         return dt_et.strftime("%b %d, %I:%M %p ET")
     except (ValueError, TypeError):
@@ -2145,18 +2152,13 @@ def _load_mlb_value_plays_for_today() -> tuple[pd.DataFrame, list[dict]]:
 
 
 def _ncaab_season_includes_date(d: date) -> bool:
-    """Regular season + tournament: early November through the first week of April (inclusive through Apr 7)."""
-    m, day = d.month, d.day
-    if m in (11, 12, 1, 2, 3):
-        return True
-    if m == 4 and day <= 7:
-        return True
-    return False
+    """Compatibility wrapper around the dashboard's single season config."""
+    return sport_is_in_season("NCAAB", d)
 
 
 def _mlb_season_includes_date(d: date) -> bool:
-    """MLB Play of the Day window: April through October (regular season / playoffs)."""
-    return d.month in (4, 5, 6, 7, 8, 9, 10)
+    """Compatibility wrapper around the dashboard's single season config."""
+    return sport_is_in_season("MLB", d)
 
 
 def _mlb_row_to_potd_dict(row: pd.Series) -> dict:
@@ -2377,6 +2379,7 @@ def _mlb_dataframe_for_play_history(mlb_df: pd.DataFrame) -> pd.DataFrame:
                 "model_prob": mp,
                 "home_team": home,
                 "away_team": away,
+                "commence_time": r.get("commence_time", ""),
                 "point": point_val,
                 "Recommended Stake": rec_stake,
                 "confidence_tier": "Medium",
@@ -2421,7 +2424,7 @@ def _parse_backfill_mlb_stdout(stdout: str) -> tuple[int, int, int]:
 
 
 def _mark_results_sport_selection_mask(sport_series: pd.Series, allowed_sports: list[str]) -> pd.Series:
-    """True rows where sport is MLB or NCAAB-prefix, limited to labels in allowed_sports (e.g. ['MLB','NCAAB'])."""
+    """Rows matching selected dashboard sports (NCAAB includes its prefixed variants)."""
     if sport_series.empty:
         return pd.Series(dtype=bool)
     allowed = allowed_sports or []
@@ -2431,6 +2434,8 @@ def _mark_results_sport_selection_mask(sport_series: pd.Series, allowed_sports: 
     m = pd.Series(False, index=sport_series.index)
     if "MLB" in allowed:
         m |= u == "MLB"
+    if "CFB" in allowed:
+        m |= u == "CFB"
     if "NCAAB" in allowed:
         m |= u.str.startswith("NCAAB")
     return m
@@ -3078,6 +3083,7 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
         reason = _human_readable_potd_reason(home, away, pred_f, ms, pick_side)
     else:
         reason = _generic_potd_reason(selection, ms, pick_side)
+    historical_date = _normalize_date_to_iso(row.get("Date"))
     return {
         "League": label,
         "Event": f"{away} @ {home}",
@@ -3089,6 +3095,9 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
         "Recommended Stake": 0,
         "Start Time": "Today",
         "commence_time": "",
+        # Historical CSV rows have a game date but no tip time. Keep this
+        # archive-only timestamp separate so stale picks are not re-saved.
+        "archive_commence_time": f"{historical_date}T23:59:59+00:00" if historical_date else "",
         "Injury Alert": "—",
         "high_variance": False,
         "home_team": home,
@@ -3099,7 +3108,7 @@ def _historical_row_to_potd(row: pd.Series, label: str) -> dict:
     }
 
 
-# Load full historical CSV; sidebar "Select Slate Date" (default = today); filter to that date for Overview
+# Load full historical CSV; sidebar date remains available to historical tools.
 _historical_full_df = _load_historical_betting_performance_all()
 _unique_slate_dates = _historical_unique_dates(_historical_full_df)
 _today_iso = date.today().strftime("%Y-%m-%d")
@@ -3116,7 +3125,7 @@ _selected_slate_date = st.sidebar.selectbox(
     options=_unique_slate_dates,
     index=_default_slate_idx,
     key="select_slate_date",
-    help="Slate to show on Overview (POTD and value plays). Defaults to today.",
+    help="Slate date used by historical lookup tools. Defaults to today.",
 )
 _normalized_slate = _historical_full_df["Date"].astype(str).apply(_normalize_date_to_iso) if not _historical_full_df.empty else pd.Series(dtype=object)
 _historical_picks_df = _historical_full_df[_normalized_slate == _selected_slate_date].copy() if not _historical_full_df.empty else pd.DataFrame()
@@ -3154,6 +3163,7 @@ if not STRIP_DOWN_MODE and not st.session_state.get(_archive_key):
                 "Recommended Stake": _p.get("Recommended Stake"),
                 "home_team": _p.get("home_team", "—"),
                 "away_team": _p.get("away_team", "—"),
+                "commence_time": _p.get("commence_time") or _p.get("archive_commence_time", ""),
                 "model_prob": _p.get("model_prob", 0.5),
                 "confidence_tier": _p.get("confidence_tier", "Medium"),
                 "reasoning_summary": _p.get("reason") or _p.get("reasoning_summary"),
@@ -3233,9 +3243,6 @@ def _summary_bar_values(value_plays_df: pd.DataFrame) -> dict:
     }
 
 
-st.title("Bobby Bottle's Betting Model")
-st.caption("NCAAB & MLB — college basketball value plays and Play of the Day on Overview; MLB value plays on the **MLB** tab.")
-
 # Stat bar: date | plays found | NCAAB | top edge. Date is always today; stats use today's slate when selected.
 if not _historical_picks_df.empty and _selected_slate_date == _today_iso:
     _n_slate = len(_historical_picks_df)
@@ -3301,19 +3308,11 @@ _stat_bar_html = f"""
   <span><span class="stat-label">Top edge</span>{_html_escape(_summary['top_edge_label'])}</span>
 </div>
 """
-st.markdown(_stat_bar_html, unsafe_allow_html=True)
 _odds_meta = st.session_state.get("odds_source_meta") or {}
 if _odds_meta.get("used_espn_fallback"):
-    _n_plays = _summary.get("total_plays", 0)
-    st.caption(
-        f"Odds source: **ESPN (fallback)** — {_odds_meta.get('espn_games', 0)} games, {_odds_meta.get('espn_odds_rows', 0)} odds rows. "
-        f"**{_n_plays} play{'s' if _n_plays != 1 else ''}** generated (min edge 1.5%, min 1 book)."
-    )
+    pass
 if st.session_state.get("value_plays_pipeline_error"):
-    err_msg, err_tb = st.session_state["value_plays_pipeline_error"]
-    st.error("**Value plays pipeline failed** (showing 0 plays). Error: " + str(err_msg))
-    with st.expander("Traceback"):
-        st.code(err_tb)
+    pass
 
 def _bet_history_table(records: list) -> None:
     """Render bet history dataframe; records are dicts with step, event_name, odds, etc."""
@@ -3381,21 +3380,88 @@ if not _ph_all.empty:
         _stale_mask = _stale_mask & _mark_results_sport_selection_mask(_unresolved["sport"], _banner_allowed)
     _unresolved_stale = int(_stale_mask.sum())
 if _unresolved_stale > 0:
-    _n_plays = int(_unresolved_stale)
-    _plays_word = "play" if _n_plays == 1 else "plays"
-    _slim_alert_html = (
-        f'<div class="dashboard-slim-alert">'
-        f'⚠️ {_n_plays} {_plays_word} need results marked. '
-        f'<a href="#mark-results-section">Open Mark Results</a>'
-        f'</div>'
-    )
-    st.markdown(_slim_alert_html, unsafe_allow_html=True)
-st.markdown('<div id="play-history"></div>', unsafe_allow_html=True)
-tab_overview, tab_ncaab, tab_mlb, tab_mlb_record, tab_mark_results, tab_play_history, tab_manual_odds, tab_game_lookup = st.tabs(
-    ["Overview", "NCAAB", "MLB", "MLB Record", "Mark Results", "NCAAB Record", "Manual Odds", "Game Lookup"]
-)
+    pass
 
-with tab_overview:
+# Four stable top-level destinations; live/history/tool details sit one level down.
+tab_today, tab_plays, tab_record, tab_tools = st.tabs(["TODAY", "PLAYS", "RECORD", "TOOLS"])
+with tab_plays:
+    tab_cfb, tab_mlb, tab_ncaab = st.tabs(["CFB", "MLB", "NCAAB"])
+with tab_record:
+    tab_overall, tab_cfb_record, tab_mlb_record, tab_play_history, tab_mark_results = st.tabs(
+        ["Overall", "CFB", "MLB", "NCAAB", "Mark Results"]
+    )
+with tab_tools:
+    tab_manual_odds, tab_game_lookup = st.tabs(["Manual Odds", "Game Lookup"])
+
+_cfb_plays, _cfb_diagnostics = load_cfb_value_plays()
+_mlb_today_df, _mlb_today_raw = _load_mlb_value_plays_for_today()
+if not _mlb_today_df.empty and "market" in _mlb_today_df.columns:
+    _mlb_market = _mlb_today_df["market"].astype(str).str.strip().str.lower()
+    _mlb_today_df = _mlb_today_df[_mlb_market.isin(("moneyline", "h2h"))].copy()
+    _mlb_today_raw = [
+        play
+        for play in _mlb_today_raw
+        if str(play.get("market", "")).strip().lower() in ("moneyline", "h2h")
+    ]
+_mlb_cache_meta = load_pipeline_cache("MLB")
+_ncaab_cache_meta = load_pipeline_cache("NCAAB")
+_cfb_cache_meta = load_pipeline_cache("CFB")
+
+with tab_today:
+    render_today(
+        value_plays_df=value_plays_df,
+        mlb_plays=_mlb_today_raw,
+        mlb_meta=_mlb_cache_meta,
+        ncaab_meta=_ncaab_cache_meta,
+        cfb_plays=_cfb_plays,
+        cfb_meta=_cfb_cache_meta,
+        history=_ph_all,
+        format_american=format_american,
+        profit_for_result=_flat_bet_profit_usd,
+        unresolved_stale=_unresolved_stale,
+        pipeline_error=st.session_state.get("value_plays_pipeline_error"),
+    )
+
+with tab_cfb:
+    render_cfb_plays_tab(_cfb_plays)
+
+with tab_ncaab:
+    render_ncaab_plays_tab(
+        value_plays_df=value_plays_df,
+        already_started=_n_value_plays_already_started,
+        odds_api_key=odds_api_key,
+        march_madness_mode=march_madness_mode,
+        format_american=format_american,
+        market_labels=MARKET_LABELS,
+    )
+
+with tab_mlb:
+    render_mlb_plays_tab(
+        mlb_df=_mlb_today_df,
+        mlb_cache_name=MLB_VALUE_PLAYS_JSON_PATH.name,
+        format_american=format_american,
+        kelly_fraction=kelly_fraction,
+        kelly_frac=kelly_frac,
+        bankroll=BANKROLL_FOR_STAKES,
+        park_lookup=_load_mlb_park_runs_lookup(),
+        park_home_display=_mlb_home_display_with_park,
+        confidence_from_edge=_mlb_confidence_from_edge_pct,
+        edge_row_style=_mlb_edge_tier_row_style,
+        render_top_card=_render_mlb_top_play_card_html,
+        dataframe_for_history=_mlb_dataframe_for_play_history,
+        archive_value_plays=archive_value_plays,
+        clear_history_cache=_load_play_history_cached.clear,
+    )
+
+with tab_overall:
+    render_overall_record(_ph_all, profit_for_result=_flat_bet_profit_usd)
+
+with tab_cfb_record:
+    render_cfb_record(_ph_all, profit_for_result=_flat_bet_profit_usd)
+
+# Legacy tab bodies remain below for record-keeping, results, and tools. The three
+# replaced plays/overview bodies stay disabled until their helpers are removed.
+if False:
     st.markdown(POTD_CARD_CSS, unsafe_allow_html=True)
     # ——— Yesterday's Results (slim strip: two POTD badges W/L) ———
     yesterday_rows = _get_yesterday_potd_results()
@@ -3500,7 +3566,7 @@ with tab_overview:
         if mlb_pod_1 is None and mlb_pod_2 is None:
             st.caption("No MLB plays in cache for today. Open the **MLB** tab to run the model or update the cache.")
 
-    st.divider()
+    st.markdown('<div class="section-heading">Pending plays</div>', unsafe_allow_html=True)
 
     # ——— All Value Plays (spread only; totals picks hidden pending further model calibration) ———
     st.subheader("All Value Plays")
@@ -3586,7 +3652,7 @@ with tab_overview:
         else:
             st.info("Set Odds API key in the sidebar or run **scripts/predict_games.py** with an odds CSV to load value plays.")
 
-with tab_ncaab:
+if False:
     st.subheader("NCAAB")
     st.caption("Today's NCAAB value plays ranked by edge. Picks powered by XGBoost multi-feature model.")
     if _n_value_plays_already_started > 0:
@@ -3662,7 +3728,7 @@ with tab_ncaab:
         else:
             st.info("Set Odds API key in the sidebar to load today's NCAAB games and value plays.")
 
-with tab_mlb:
+if False:
     st.subheader("MLB")
     st.caption(
         "Today's **moneyline** value plays from the local cache (`data/cache/mlb_value_plays.json`). "
@@ -3970,7 +4036,7 @@ with tab_mark_results:
     st.markdown('<span id="mark-results-section"></span>', unsafe_allow_html=True)
     st.subheader("Mark Results")
     st.caption(
-        "Mark Win / Loss / Push for **NCAAB** and **MLB** plays with **Pending** results only (ignores slate date). "
+        "Mark Win / Loss / Push for **CFB**, **NCAAB**, and **MLB** plays with **Pending** results only (ignores slate date). "
         "Includes pending plays through today so same-day MLB finals can be logged immediately."
     )
     _mr_ag_ok = st.session_state.pop("mr_autograde_banner", None)
@@ -4017,12 +4083,12 @@ with tab_mark_results:
         _load_play_history_cached.clear()
         st.rerun()
 
-    st.divider()
+    st.markdown('<div class="section-heading">Pending plays</div>', unsafe_allow_html=True)
     _mr_ctrl_left, _mr_ctrl_right = st.columns([3, 1])
     with _mr_ctrl_left:
         st.multiselect(
             "Show pending plays for sport(s)",
-            options=["MLB", "NCAAB"],
+            options=["CFB", "MLB", "NCAAB"],
             key="mr_pending_sports",
             help="Filter which sports appear below. Default hides off-season NCAAB until you include it.",
         )
@@ -4042,7 +4108,11 @@ with tab_mark_results:
     if not _mr_history.empty:
         _mr_history = _mr_history.copy()
         _mr_sport_u = _mr_history["sport"].astype(str).str.strip().str.upper()
-        _mr_history = _mr_history[_mr_sport_u.str.startswith("NCAAB") | (_mr_sport_u == "MLB")]
+        _mr_history = _mr_history[
+            _mr_sport_u.str.startswith("NCAAB")
+            | (_mr_sport_u == "MLB")
+            | (_mr_sport_u == "CFB")
+        ]
         _mr_history["result_clean"] = _mr_history["result"].apply(
             lambda x: str(x).strip().upper() if x is not None and not pd.isna(x) else None
         )
@@ -4654,7 +4724,7 @@ with tab_manual_odds:
                 }
                 existing.append(entry)
                 _manual_odds_path.write_text(json.dumps(existing, indent=2))
-                st.success(f"Saved **{_away} @ {_home}** ({_sport}). Run **Refresh** on the Overview tab to include this game in value plays.")
+                st.success(f"Saved **{_away} @ {_home}** ({_sport}). Run **Refresh** under Plays → NCAAB to include this game.")
 
     if _manual_odds_path.exists():
         try:
@@ -4840,8 +4910,7 @@ with tab_game_lookup:
         if kp_data:
             kp_df = pd.DataFrame(kp_data)
             st.dataframe(kp_df.set_index(""), use_container_width=True, hide_index=True)
-        st.markdown("---")
-        st.markdown("**Head to Head**")
+        st.markdown('<div class="section-heading">Head to head</div>', unsafe_allow_html=True)
         h2h = _get_head_to_head(home_team, away_team)
         if not h2h.empty:
             st.caption("Meetings this season (from espn.db):")

@@ -1373,6 +1373,7 @@ def run_pipeline_to_cache(
                     "Recommended Stake": p.get("Recommended Stake"),
                     "home_team": p.get("home_team", "—"),
                     "away_team": p.get("away_team", "—"),
+                    "commence_time": p.get("commence_time") or p.get("archive_commence_time", ""),
                     "model_prob": p.get("model_prob", 0),
                     "confidence_tier": p.get("confidence_tier", "Medium"),
                     "reasoning_summary": p.get("reasoning_summary"),
