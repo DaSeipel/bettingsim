@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Callable
 
 import pandas as pd
 import streamlit as st
 
 from ui.config import season_bounds
+
+# Match the MLB Record tab tracked universe (display/query filter only — do not alter espn.db).
+MLB_PIPELINE_START_DATE = date(2026, 5, 3)
+MLB_RECORD_MIN_EDGE_PCT = 5.0
+MLB_MONEYLINE_SENTINEL = -999.0
 
 
 def _clean_results(history: pd.DataFrame) -> pd.DataFrame:
@@ -20,11 +26,46 @@ def _clean_results(history: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _dedupe_play_history_natural_key(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep last row per play_history UNIQUE key (same game + bet may be re-archived)."""
+    if frame.empty:
+        return frame
+    cols = [
+        "date_generated",
+        "sport",
+        "home_team",
+        "away_team",
+        "bet_type",
+        "recommended_side",
+        "spread_or_total",
+    ]
+    if not all(column in frame.columns for column in cols):
+        return frame
+    return frame.drop_duplicates(subset=cols, keep="last")
+
+
+def _filter_mlb_tracked_universe(frame: pd.DataFrame) -> pd.DataFrame:
+    """Same filter as the MLB Record tab: ML, edge ≥ 5%, date ≥ 2026-05-03, dedupe keep-last."""
+    if frame.empty:
+        return frame
+    out = _dedupe_play_history_natural_key(frame)
+    if "spread_or_total" not in out.columns or "my_edge_pct" not in out.columns:
+        return out.iloc[0:0].copy()
+    sot = pd.to_numeric(out["spread_or_total"], errors="coerce")
+    ml_ok = (sot - MLB_MONEYLINE_SENTINEL).abs() <= 0.01
+    edge_ok = pd.to_numeric(out["my_edge_pct"], errors="coerce") >= MLB_RECORD_MIN_EDGE_PCT
+    dates = pd.to_datetime(out["date_generated"], errors="coerce").dt.date
+    date_ok = dates >= MLB_PIPELINE_START_DATE
+    return out[ml_ok & edge_ok & date_ok].copy()
+
+
 def _fixed_pl(
     frame: pd.DataFrame,
     profit_for_result: Callable[[Any, str, float], float],
+    *,
+    results: tuple[str, ...] = ("W", "L", "P"),
 ) -> tuple[pd.DataFrame, float, float]:
-    resolved = frame[frame["result_clean"].isin(("W", "L", "P"))].copy()
+    resolved = frame[frame["result_clean"].isin(results)].copy()
     if resolved.empty:
         return resolved, 0.0, 0.0
     resolved["pnl"] = resolved.apply(
@@ -82,9 +123,20 @@ def calculate_record_summary(
         ].copy()
         if window.empty:
             continue
-        resolved, total, roi = _fixed_pl(window, profit_for_result)
+        # MLB Overall row must match the MLB Record tab tracked universe (not all season rows).
+        resolved_results: tuple[str, ...] = ("W", "L", "P")
+        sport_start = start
+        if sport == "MLB":
+            window = _filter_mlb_tracked_universe(window)
+            resolved_results = ("W", "L")  # MLB tab headline excludes pushes
+            sport_start = max(start, MLB_PIPELINE_START_DATE)
+        if window.empty:
+            continue
+        resolved, total, roi = _fixed_pl(
+            window, profit_for_result, results=resolved_results
+        )
         resolved_frames.append(resolved)
-        included_starts.append(start)
+        included_starts.append(sport_start)
         sport_summaries[sport] = {
             "frame": resolved,
             "plays": len(window),
@@ -93,7 +145,7 @@ def calculate_record_summary(
             "pushes": int((resolved["result_clean"] == "P").sum()) if not resolved.empty else 0,
             "pl": total,
             "roi": roi,
-            "start_date": start,
+            "start_date": sport_start,
             "end_date": min(end, on_date),
         }
 
