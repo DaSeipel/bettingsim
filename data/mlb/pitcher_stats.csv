@@ -14,9 +14,9 @@ Sandy Alcantara,645261,Sandy Alcantara,blend,3.98,3.899,3.835,1.195,7.11,2.467,1
 Matt Waldron,663362,Matt Waldron,blend,7.71,6.625,6.844,1.958,6.654,6.074,18.667
 Jameson Taillon,592791,Jameson Taillon,blend,5.18,6.069,6.461,1.292,7.73,3.04,84.0
 Brandon Williamson,682227,Brandon Williamson,2026,6.11,6.064,6.09,1.64,6.11,6.43,28.0
-Tomoyuki Sugano,608372,Tomoyuki Sugano,blend,4.542,5.383,5.579,1.278,5.345,2.143,107.667
+Tomoyuki Sugano,608372,Tomoyuki Sugano,blend,4.482,5.398,5.607,1.27,5.443,2.06,113.667
 Bubba Chandler,696149,Bubba Chandler,blend,4.2,3.786,3.644,1.267,8.203,3.887,116.333
-Andre Pallante,669467,Andre Pallante,blend,4.05,3.965,3.856,1.275,6.433,2.875,124.0
+Andre Pallante,669467,Andre Pallante,blend,3.922,3.972,3.855,1.275,6.312,2.935,130.0
 David Peterson,656849,David Peterson,blend,5.067,3.931,3.825,1.468,7.603,3.605,106.0
 Cade Cavalli,676917,Cade Cavalli,blend,3.74,3.834,3.808,1.345,9.245,2.74,128.667
 JR Ritchie,702275,JR Ritchie,2026,4.5,5.507,5.597,1.41,8.17,5.5,54.0
@@ -24,7 +24,7 @@ Tarik Skubal,669373,Tarik Skubal,blend,2.75,2.712,2.641,0.92,10.8,1.505,107.667
 Brandon Sproat,687075,Brandon Sproat,blend,4.985,4.586,4.597,1.345,8.84,4.115,92.667
 Eduardo Rodriguez,593958,Eduardo Rodriguez,blend,3.28,4.024,3.958,1.308,6.84,3.088,143.333
 Luis Severino,622663,Luis Severino,blend,4.354,4.218,4.174,1.384,8.348,3.82,61.667
-Michael Wacha,608379,Michael Wacha,blend,3.545,3.933,3.871,1.167,6.893,2.507,144.0
+Michael Wacha,608379,Michael Wacha,blend,3.56,3.917,3.858,1.167,6.885,2.425,150.667
 Aaron Ashby,676879,Aaron Ashby,blend,2.334,2.468,2.245,1.32,12.942,4.536,18.333
 Aaron Civale,650644,Aaron Civale,blend,4.868,5.036,5.182,1.452,7.07,2.802,62.667
 Aaron Nola,605400,Aaron Nola,blend,5.605,4.966,5.205,1.425,9.28,2.993,125.0
@@ -32,11 +32,11 @@ Adrian Houser,605288,Adrian Houser,blend,4.648,4.615,4.616,1.436,6.47,3.088,65.0
 Andrew Abbott,671096,Andrew Abbott,blend,3.657,4.431,4.416,1.33,7.205,3.785,128.667
 Andrew Painter,691725,Andrew Painter,2026,6.27,5.117,5.261,1.53,7.73,3.47,80.333
 Anthony Kay,641743,Anthony Kay,2026,3.96,4.816,4.805,1.34,7.29,3.34,116.0
-Bailey Ober,641927,Bailey Ober,blend,4.613,4.622,4.704,1.24,6.42,2.217,93.0
+Bailey Ober,641927,Bailey Ober,blend,4.755,4.813,4.94,1.248,6.412,2.18,99.0
 Brady Singer,663903,Brady Singer,blend,4.503,4.752,4.84,1.383,7.803,3.052,119.667
 Brandon Pfaadt,694297,Brandon Pfaadt,blend,3.833,4.071,3.999,1.232,6.125,2.36,85.667
 Brandon Woodruff,605540,Brandon Woodruff,blend,3.08,3.213,3.183,0.898,9.87,1.83,36.0
-Brandon Young,687064,Brandon Young,blend,4.133,4.317,4.323,1.368,7.415,3.243,107.667
+Brandon Young,687064,Brandon Young,blend,4.058,4.308,4.303,1.375,7.355,3.295,113.667
 Braxton Ashcraft,677952,Braxton Ashcraft,blend,3.737,3.429,3.389,1.182,9.688,2.41,132.333
 Braydon Fisher,680755,Braydon Fisher,blend,3.33,3.955,3.849,1.177,9.098,4.508,61.0
 Brennan Bernardino,657514,Brennan Bernardino,blend,1.682,2.735,2.396,1.122,7.688,3.09,12.667
@@ -47,7 +47,7 @@ Bryce Elder,693821,Bryce Elder,blend,4.348,4.582,4.648,1.285,7.42,3.045,131.667
 Cade Horton,690990,Cade Horton,blend,2.538,4.18,4.132,0.924,5.906,2.478,7.333
 Cade Povich,700249,Cade Povich,blend,4.625,4.771,4.876,1.417,7.5,2.978,22.333
 Cam Schlittler,693645,Cam Schlittler,blend,2.397,2.888,2.795,1.002,10.967,2.38,146.667
-Carmen Mlodzinski,669387,Carmen Mlodzinski,blend,3.52,3.548,3.409,1.345,7.362,2.832,97.333
+Carmen Mlodzinski,669387,Carmen Mlodzinski,blend,3.73,3.592,3.449,1.375,7.303,2.982,99.667
 Casey Mize,663554,Casey Mize,blend,3.503,3.148,3.03,1.135,8.572,2.23,96.0
 Chad Patrick,694477,Chad Patrick,blend,2.954,3.965,3.837,1.262,6.904,3.712,28.0
 Chase Burns,695505,Chase Burns,blend,3.1,3.124,3.054,1.17,11.265,3.335,124.0
@@ -64,7 +64,7 @@ Colin Rea,607067,Colin Rea,blend,4.49,4.661,4.694,1.362,6.81,3.038,111.667
 Connelly Early,813349,Connelly Early,blend,3.086,3.182,3.1,1.186,10.818,2.718,87.667
 Connor Prielipp,687570,Connor Prielipp,2026,4.79,4.044,4.043,1.32,9.58,3.48,82.667
 Cristian Javier,664299,Cristian Javier,blend,6.532,4.916,4.896,1.69,8.712,5.66,21.333
-Cristopher Sánchez,650911,Cristopher Sánchez,blend,2.612,2.659,2.514,1.18,10.207,2.065,149.667
+Cristopher Sánchez,650911,Cristopher Sánchez,blend,2.53,2.602,2.452,1.157,10.207,2.005,155.667
 Davis Martin,663436,Davis Martin,blend,4.152,3.773,3.673,1.32,7.565,2.842,123.0
 Dean Kremer,665152,Dean Kremer,blend,4.985,4.934,5.166,1.18,8.467,2.562,48.0
 Didier Fuentes,800311,Didier Fuentes,blend,8.54,5.367,5.685,1.69,10.524,3.46,9.0
@@ -76,7 +76,7 @@ Emerson Hancock,676106,Emerson Hancock,blend,3.738,4.07,4.073,1.185,7.795,2.447,
 Emmet Sheehan,686218,Emmet Sheehan,blend,4.418,4.028,4.104,1.18,10.305,2.79,92.667
 Eury Pérez,691587,Eury Pérez,blend,3.605,3.677,3.628,1.095,9.88,3.297,116.667
 Foster Griffin,656492,Foster Griffin,2026,3.31,4.218,4.283,1.11,8.24,2.16,133.333
-Framber Valdez,664285,Framber Valdez,blend,4.043,3.872,3.756,1.338,7.652,3.183,127.333
+Framber Valdez,664285,Framber Valdez,blend,4.11,3.984,3.874,1.353,7.57,3.333,133.0
 Freddy Peralta,642547,Freddy Peralta,blend,4.673,4.34,4.389,1.395,9.22,3.577,123.333
 Garrett Crochet,676979,Garrett Crochet,blend,4.816,3.721,3.757,1.294,11.132,2.788,30.0
 George Klassen,691946,George Klassen,2026,7.27,7.369,7.321,2.88,9.35,14.54,8.667
@@ -92,7 +92,7 @@ Jacob deGrom,594798,Jacob deGrom,blend,3.645,3.373,3.405,1.077,10.6,2.192,118.66
 Jacob Lopez,682052,Jacob Lopez,blend,5.055,4.963,5.058,1.487,8.915,4.52,82.0
 Jacob Misiorowski,694819,Jacob Misiorowski,blend,2.41,2.534,2.453,0.865,13.315,2.58,133.0
 Jake Irvin,663623,Jake Irvin,blend,5.768,5.057,5.18,1.347,8.367,3.67,65.333
-Janson Junk,676083,Janson Junk,blend,4.515,4.057,4.044,1.305,6.698,2.163,81.667
+Janson Junk,676083,Janson Junk,blend,4.35,3.984,3.949,1.275,6.503,2.11,87.667
 Javier Assad,665871,Javier Assad,blend,3.725,4.668,4.713,1.175,6.048,2.478,69.667
 Jeffrey Springs,605488,Jeffrey Springs,blend,5.497,5.663,5.946,1.367,7.47,3.208,102.667
 Jesse Scholtens,669947,Jesse Scholtens,blend,4.134,4.08,4.086,1.278,9.33,3.27,27.333
@@ -123,11 +123,11 @@ Logan Gilbert,669302,Logan Gilbert,blend,3.425,3.519,3.538,1.008,10.0,2.085,139.
 Logan Henderson,701656,Logan Henderson,blend,2.605,3.27,3.314,0.93,11.195,2.03,56.333
 Logan Webb,657277,Logan Webb,blend,3.498,3.108,2.931,1.12,7.662,2.127,133.0
 Luinder Avila,679883,Luinder Avila,blend,4.035,3.775,3.595,1.41,8.49,4.872,67.333
-Luis Castillo,622491,Luis Castillo,blend,4.86,4.392,4.45,1.352,7.943,2.718,103.667
+Luis Castillo,622491,Luis Castillo,blend,4.605,4.228,4.264,1.308,8.175,2.71,110.667
 Luis Gil,661563,Luis Gil,blend,4.958,6.862,7.1,1.364,5.102,5.156,19.333
 Luis Morales,806960,Luis Morales,blend,8.618,9.362,10.063,2.176,6.864,7.224,7.333
 MacKenzie Gore,669022,MacKenzie Gore,blend,4.365,3.745,3.726,1.268,10.115,3.37,134.0
-Martín Pérez,527048,Martín Pérez,blend,3.24,4.221,4.155,1.14,7.018,3.577,100.333
+Martín Pérez,527048,Martín Pérez,blend,3.105,4.209,4.131,1.14,6.845,3.615,106.333
 Mason Englert,669438,Mason Englert,blend,3.822,4.225,4.321,1.33,8.383,2.092,30.667
 Mason Fluharty,689254,Mason Fluharty,blend,5.016,3.274,3.145,1.296,10.668,4.16,15.0
 Mason Montgomery,682254,Mason Montgomery,blend,3.99,3.069,2.953,1.428,12.858,4.872,15.667
@@ -149,7 +149,7 @@ Nick Martinez,607259,Nick Martinez,blend,3.1,4.085,4.05,1.127,5.393,1.62,129.0
 Nick Pivetta,601713,Nick Pivetta,blend,3.848,2.118,1.889,1.074,11.864,3.02,16.0
 Noah Cameron,702070,Noah Cameron,blend,4.085,3.83,3.777,1.243,8.013,2.89,129.333
 Noah Schultz,702273,Noah Schultz,2026,6.04,5.288,5.357,1.46,7.78,4.61,56.667
-Nolan McLean,690997,Nolan McLean,blend,3.147,3.363,3.276,1.13,10.727,3.232,130.667
+Nolan McLean,690997,Nolan McLean,blend,3.08,3.421,3.339,1.107,10.525,3.218,136.667
 Parker Messick,800048,Parker Messick,blend,2.607,3.139,3.04,1.107,8.875,2.215,136.667
 Patrick Corbin,571578,Patrick Corbin,blend,4.598,4.418,4.404,1.462,6.96,3.1,64.667
 Paul Skenes,694973,Paul Skenes,blend,3.462,2.774,2.656,1.078,11.02,2.377,129.667
@@ -161,7 +161,7 @@ Randy Vásquez,681190,Randy Vásquez,blend,4.298,4.76,4.779,1.433,5.857,3.005,95
 Ranger Suarez,624133,Ranger Suarez,blend,3.29,2.835,2.654,1.182,9.24,2.508,103.0
 Reid Detmers,672282,Reid Detmers,blend,3.99,3.373,3.332,1.15,10.628,3.035,135.0
 Reynaldo López,625643,Reynaldo López,blend,4.08,4.871,4.929,1.555,6.667,3.63,71.667
-Rhett Lowder,695076,Rhett Lowder,2026,5.26,4.516,4.489,1.48,7.38,3.94,89.0
+Rhett Lowder,695076,Rhett Lowder,2026,5.15,4.52,4.504,1.48,7.35,3.82,94.333
 Riley Martin,702303,Riley Martin,2026,2.16,2.98,2.944,0.84,10.8,2.16,8.333
 Robbie Ray,592662,Robbie Ray,blend,3.343,4.35,4.325,1.3,8.055,4.178,127.667
 Roki Sasaki,808963,Roki Sasaki,blend,4.52,5.168,5.324,1.317,8.553,3.935,105.0
@@ -173,10 +173,10 @@ Sean Burke,680732,Sean Burke,blend,3.298,3.724,3.703,1.17,9.788,2.997,135.667
 Seth Lugo,607625,Seth Lugo,blend,4.345,4.457,4.463,1.35,7.148,3.155,134.667
 Shane Baz,669358,Shane Baz,blend,4.037,3.611,3.506,1.323,8.32,3.145,136.333
 Shane Drohan,675660,Shane Drohan,2026,3.87,3.358,3.259,1.25,9.0,2.71,93.0
-Shane McClanahan,663556,Shane McClanahan,2026,3.16,3.353,3.2,1.15,8.41,3.07,91.0
+Shane McClanahan,663556,Shane McClanahan,2026,3.09,3.363,3.194,1.12,8.27,3.18,99.0
 Shane Smith,681343,Shane Smith,blend,8.004,4.998,4.957,1.992,10.696,7.26,8.333
 Shohei Ohtani,660271,Shohei Ohtani,blend,2.03,2.338,2.112,0.944,10.466,2.302,73.667
-Shota Imanaga,684007,Shota Imanaga,blend,3.633,4.499,4.665,1.065,8.18,1.883,132.667
+Shota Imanaga,684007,Shota Imanaga,blend,3.738,4.641,4.838,1.073,8.21,1.83,137.333
 Simeon Woods Richardson,680573,Simeon Woods Richardson,blend,5.768,5.499,5.637,1.544,6.088,3.702,39.0
 Slade Cecconi,677944,Slade Cecconi,blend,4.525,4.505,4.559,1.385,7.197,2.758,103.667
 Sonny Gray,543243,Sonny Gray,blend,3.163,3.54,3.483,1.17,8.412,2.243,125.667
@@ -190,7 +190,7 @@ Trevor Rogers,669432,Trevor Rogers,blend,3.61,3.415,3.295,1.163,7.865,2.515,119.
 Trey Yesavage,702056,Trey Yesavage,blend,3.6,3.632,3.492,1.227,9.27,4.44,91.667
 Tyler Mahle,641816,Tyler Mahle,blend,4.168,3.97,3.93,1.302,8.283,3.37,100.667
 Walbert Ureña,700712,Walbert Ureña,2026,2.83,3.818,3.617,1.29,8.59,4.87,101.667
-Walker Buehler,621111,Walker Buehler,blend,5.035,4.693,4.713,1.475,7.56,3.895,108.333
+Walker Buehler,621111,Walker Buehler,blend,4.893,4.636,4.642,1.453,7.545,3.865,114.333
 Will Warren,701542,Will Warren,blend,4.245,3.905,3.902,1.37,9.12,3.09,114.0
 Yoshinobu Yamamoto,808967,Yoshinobu Yamamoto,blend,2.61,3.315,3.227,0.915,8.755,2.317,139.333
 Zac Gallen,668678,Zac Gallen,blend,5.748,4.985,5.099,1.446,6.568,2.88,92.0
@@ -212,7 +212,7 @@ Jake Bennett,687562,Jake Bennett,2026,3.17,3.257,3.073,1.04,6.46,1.88,76.667
 Nick Lodolo,666157,Nick Lodolo,blend,4.478,5.036,5.135,1.365,7.812,3.182,66.667
 Ben Brown,676962,Ben Brown,blend,3.412,3.031,2.88,1.158,9.406,2.74,62.0
 Burch Smith,572143,Burch Smith,2026,1.59,1.335,0.975,1.15,12.71,3.18,11.333
-Blake Snell,605483,Blake Snell,blend,9.588,1.99,1.663,2.317,13.893,5.455,3.0
+Blake Snell,605483,Blake Snell,blend,4.338,1.24,0.913,1.312,13.893,3.205,9.0
 Keegan Akin,669211,Keegan Akin,blend,8.036,5.514,5.896,1.712,8.116,1.876,5.667
 Spencer Miles,693686,Spencer Miles,2026,2.85,3.017,2.837,1.1,8.55,2.85,60.0
 Andrew Morris,702193,Andrew Morris,2026,4.07,3.059,2.81,1.52,8.14,3.33,24.333
@@ -280,7 +280,7 @@ Hunter Dobbins,690928,Hunter Dobbins,blend,3.582,4.134,4.11,1.302,7.96,3.177,45.
 Gabriel Hughes,687312,Gabriel Hughes,2026,5.61,3.278,3.079,1.28,8.29,3.21,33.667
 Carson Palmquist,687223,Carson Palmquist,blend,8.01,5.0,4.96,1.845,7.973,4.945,16.333
 Hunter Greene,668881,Hunter Greene,blend,5.235,3.226,3.332,1.105,13.505,2.612,16.333
-Mitch Bratt,683352,Mitch Bratt,2026,3.9,5.522,5.552,1.52,6.83,5.86,27.667
+Mitch Bratt,683352,Mitch Bratt,2026,3.74,5.328,5.369,1.4,6.68,5.08,33.667
 Eduardo Rivera,700842,Eduardo Rivera,2026,2.89,3.85,3.779,0.96,8.68,3.86,9.333
 Randy Dobnak,677976,Randy Dobnak,blend,1.922,4.521,4.401,1.185,3.985,3.47,36.0
 Patrick Sandoval,663776,Patrick Sandoval,2026,3.3,3.867,3.777,1.7,8.7,3.9,30.0
@@ -288,7 +288,7 @@ Owen Murphy,702566,Owen Murphy,2026,2.25,1.85,1.49,0.25,9.0,0.0,4.0
 Logan Allen,671106,Logan Allen,blend,1.062,1.347,1.065,1.475,13.565,2.578,4.0
 Ronel Blanco,669854,Ronel Blanco,blend,7.1,6.835,7.382,1.195,10.335,4.98,10.0
 Beck Way,694360,Beck Way,2026,3.22,4.891,5.015,1.52,8.46,4.03,22.333
-Mason Barnett,686930,Mason Barnett,blend,5.883,5.5,5.707,1.45,8.96,4.482,34.0
+Mason Barnett,686930,Mason Barnett,blend,6.332,6.24,6.558,1.502,8.21,4.662,38.0
 Kohl Drake,684442,Kohl Drake,2026,4.85,5.869,6.132,1.46,8.31,3.46,13.0
 Carson Whisenhunt,687931,Carson Whisenhunt,blend,6.69,5.957,6.133,1.745,7.588,5.688,22.333
 Eddy Yean,678868,Eddy Yean,2026,0.0,2.725,2.365,0.56,6.75,3.38,5.333
@@ -303,3 +303,6 @@ Bryan King,687911,Bryan King,blend,3.567,4.407,4.433,1.28,7.758,2.69,49.333
 Daniel Lynch IV,663738,Daniel Lynch IV,blend,2.603,3.506,3.311,1.098,6.74,2.845,47.667
 Jackson Jobe,695549,Jackson Jobe,blend,1.055,2.86,2.597,0.673,7.19,2.59,5.0
 Brad Lord,695418,Brad Lord,blend,3.928,4.103,4.061,1.208,7.987,3.035,61.667
+Kent Emanuel,592288,Kent Emanuel,2026,3.6,3.9,3.54,1.6,7.2,5.4,5.0
+Quinn Mathews,687273,Quinn Mathews,2026,3.0,4.322,4.262,1.56,10.0,6.0,9.0
+Alec Gamboa,687941,Alec Gamboa,2026,1.59,3.335,3.134,1.12,6.35,2.65,17.0
