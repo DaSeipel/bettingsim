@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 
 CFB_SHADOW_MODE = True
+CFB_MODEL_STATUS = "failed_gate_2026_08_19"
 EASTERN = ZoneInfo("America/New_York")
 PIPELINE_FRESH_HOURS = 6
 APP_ROOT = Path(__file__).resolve().parents[1]

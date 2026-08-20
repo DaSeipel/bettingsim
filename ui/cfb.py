@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from ui.config import CFB_SHADOW_MODE, SPORT_CONFIG, season_note, sport_is_in_season
+from ui.config import CFB_MODEL_STATUS, CFB_SHADOW_MODE, SPORT_CONFIG, season_note, sport_is_in_season
 
 
 CFB_CACHE_PATH = Path(__file__).resolve().parents[1] / "data" / "cache" / "cfb_value_plays.json"
@@ -153,11 +153,10 @@ def render_cfb_card(play: dict, *, muted: bool = CFB_SHADOW_MODE) -> str:
 
 def render_cfb_plays_tab(plays: list[dict]) -> None:
     st.subheader("College Football")
-    if CFB_SHADOW_MODE:
+    if CFB_SHADOW_MODE and CFB_MODEL_STATUS == "failed_gate_2026_08_19":
         st.markdown(
-            '<div class="cfb-shadow-banner"><strong>SHADOW MODE — Weeks 0-5.</strong> '
-            "Logging only, no bets. Model has not cleared live calibration. "
-            "Review scheduled after Week 5.</div>",
+            '<div class="cfb-shadow-banner"><strong>No model — Phase 1 failed calibration gate '
+            "2026-08-19.</strong> Data layer retained.</div>",
             unsafe_allow_html=True,
         )
     if not sport_is_in_season("CFB"):

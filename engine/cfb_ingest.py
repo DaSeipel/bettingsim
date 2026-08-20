@@ -234,9 +234,9 @@ def ingest_lines_for_season(conn: sqlite3.Connection, client: CFBDClient, season
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO cfb_lines
-                        (game_id, provider, spread, spread_open, over_under,
+                        (game_id, provider, spread, spread_open, over_under, over_under_open,
                          home_moneyline, away_moneyline, captured_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             game_id,
@@ -244,6 +244,11 @@ def ingest_lines_for_season(conn: sqlite3.Connection, client: CFBDClient, season
                             _safe_float(line.get("spread")),
                             _safe_float(line.get("spreadOpen") if "spreadOpen" in line else line.get("spread_open")),
                             _safe_float(line.get("overUnder") if "overUnder" in line else line.get("over_under")),
+                            _safe_float(
+                                line.get("overUnderOpen")
+                                if "overUnderOpen" in line
+                                else line.get("over_under_open")
+                            ),
                             _safe_float(line.get("homeMoneyline") if "homeMoneyline" in line else line.get("home_moneyline")),
                             _safe_float(line.get("awayMoneyline") if "awayMoneyline" in line else line.get("away_moneyline")),
                             captured_at,

@@ -33,17 +33,49 @@ CREATE TABLE IF NOT EXISTS cfb_game_stats (
     PRIMARY KEY (game_id, team)
 );
 
+CREATE TABLE IF NOT EXISTS cfb_game_stats_adv (
+    game_id INTEGER NOT NULL,
+    team TEXT NOT NULL,
+    is_home INTEGER NOT NULL,
+    off_ppa REAL,
+    off_success_rate REAL,
+    off_explosiveness REAL,
+    off_line_yards REAL,
+    def_ppa REAL,
+    def_success_rate REAL,
+    def_explosiveness REAL,
+    def_line_yards REAL,
+    stats_json TEXT,
+    PRIMARY KEY (game_id, team)
+);
+
 CREATE TABLE IF NOT EXISTS cfb_lines (
     game_id INTEGER NOT NULL,
     provider TEXT NOT NULL,
     spread REAL,
     spread_open REAL,
+    spread_home REAL,
     over_under REAL,
+    over_under_open REAL,
     home_moneyline REAL,
     away_moneyline REAL,
     captured_at TEXT NOT NULL,
     is_backtest_reference INTEGER NOT NULL DEFAULT 0,
+    opener_suspect INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (game_id, provider)
+);
+
+CREATE TABLE IF NOT EXISTS cfb_team_ratings_pit (
+    season INTEGER NOT NULL,
+    week INTEGER NOT NULL,
+    team TEXT NOT NULL,
+    rating REAL,
+    off_rating REAL,
+    def_rating REAL,
+    games_used INTEGER,
+    prior_weight REAL,
+    computed_through_week INTEGER,
+    PRIMARY KEY (season, week, team)
 );
 
 CREATE TABLE IF NOT EXISTS cfb_team_stats_adv (
@@ -138,6 +170,7 @@ CREATE INDEX IF NOT EXISTS idx_cfb_games_season_team_home ON cfb_games(season, h
 CREATE INDEX IF NOT EXISTS idx_cfb_games_season_team_away ON cfb_games(season, away_team);
 CREATE INDEX IF NOT EXISTS idx_cfb_game_stats_season_lookup ON cfb_game_stats(game_id);
 CREATE INDEX IF NOT EXISTS idx_cfb_lines_game_id ON cfb_lines(game_id);
+CREATE INDEX IF NOT EXISTS idx_cfb_team_ratings_pit_season_week ON cfb_team_ratings_pit(season, week);
 CREATE INDEX IF NOT EXISTS idx_cfb_team_stats_adv_season_team ON cfb_team_stats_adv(season, team);
 CREATE INDEX IF NOT EXISTS idx_cfb_ppa_season_team ON cfb_ppa(season, team);
 CREATE INDEX IF NOT EXISTS idx_cfb_ratings_sp_season_team ON cfb_ratings_sp(season, team);
@@ -157,4 +190,17 @@ def ensure_cfb_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(CFB_TABLES_SQL)
     _ensure_column(conn, "cfb_team_alias", "match_method", "match_method TEXT")
     _ensure_column(conn, "cfb_lines", "is_backtest_reference", "is_backtest_reference INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "cfb_lines", "spread_home", "spread_home REAL")
+    _ensure_column(conn, "cfb_lines", "opener_suspect", "opener_suspect INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "cfb_lines", "over_under_open", "over_under_open REAL")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS cfb_game_projections (
+            game_id INTEGER PRIMARY KEY,
+            projected_margin REAL,
+            projected_margin_pts REAL,
+            calibration_train_seasons TEXT
+        );
+        """
+    )
     conn.commit()
