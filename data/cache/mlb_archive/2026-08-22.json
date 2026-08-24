@@ -1,0 +1,28 @@
+{
+  "card_date": "2026-08-22",
+  "odds_captured_at": "2026-08-22T13:14:32.797468Z",
+  "pitchers_captured_at": "2026-08-22T13:14:55.974444Z",
+  "plays": [
+    {
+      "card_date": "2026-08-22",
+      "event_id": "823831",
+      "commence_time": "2026-08-22T20:10:00Z",
+      "home_team": "Miami Marlins",
+      "away_team": "Washington Nationals",
+      "home_pitcher": "Eury P\u00e9rez",
+      "away_pitcher": "Jake Irvin",
+      "market": "moneyline",
+      "selection": "Washington Nationals",
+      "odds_american": 156.0,
+      "model_prob": 0.4407449634194144,
+      "edge": 0.1283071063537009,
+      "park_mult": 1.06,
+      "odds_captured_at": "2026-08-22T13:14:32.797468Z",
+      "pitchers_captured_at": "2026-08-22T13:14:55.974444Z",
+      "odds_american_fresh": 156.0,
+      "edge_at_fresh_odds": 0.1283071063537009,
+      "qualifies_at_fresh": true,
+      "odds_moved": false
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "card_date": "2026-08-23",
+  "odds_captured_at": "2026-08-23T15:50:57.594067Z",
+  "pitchers_captured_at": "2026-08-23T15:51:21.529425Z",
+  "plays": [
+    {
+      "card_date": "2026-08-23",
+      "event_id": "822856",
+      "commence_time": "2026-08-23T18:35:00Z",
+      "home_team": "Texas Rangers",
+      "away_team": "Los Angeles Angels",
+      "home_pitcher": "Cal Quantrill",
+      "away_pitcher": "Yusei Kikuchi",
+      "market": "moneyline",
+      "selection": "Los Angeles Angels",
+      "odds_american": 140.0,
+      "model_prob": 0.4661702490590881,
+      "edge": 0.1188085977418114,
+      "park_mult": 1.02,
+      "odds_captured_at": "2026-08-23T15:50:57.594067Z",
+      "pitchers_captured_at": "2026-08-23T15:51:21.529425Z",
+      "odds_american_fresh": 140.0,
+      "edge_at_fresh_odds": 0.1188085977418114,
+      "qualifies_at_fresh": true,
+      "odds_moved": false
+    }
+  ]
+}
