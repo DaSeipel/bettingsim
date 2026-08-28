@@ -1,0 +1,136 @@
+{
+  "fetched_at_utc": "2026-08-27T11:50:12.944524Z",
+  "odds_captured_at": "2026-08-27T11:50:12.944524Z",
+  "sport_key": "baseball_mlb",
+  "source": "statsapi_schedule+the_odds_api",
+  "bookmaker_title": "TheOddsAPI consensus (median, US books)",
+  "games_date_et": "2026-08-27",
+  "games": [
+    {
+      "event_id": "822694",
+      "commence_time": "2026-08-27T17:05:00Z",
+      "home_team": "Washington Nationals",
+      "away_team": "Colorado Rockies",
+      "home_pitcher": "Jake Irvin",
+      "away_pitcher": "Gabriel Hughes",
+      "bookmaker_title": "TheOddsAPI consensus (median, US books)",
+      "moneyline": {
+        "home_odds": -124,
+        "away_odds": 110
+      },
+      "total": {
+        "line": 9.5,
+        "over_odds": -106,
+        "under_odds": -115
+      }
+    },
+    {
+      "event_id": "823014",
+      "commence_time": "2026-08-27T18:15:00Z",
+      "home_team": "St. Louis Cardinals",
+      "away_team": "Baltimore Orioles",
+      "home_pitcher": null,
+      "away_pitcher": "Trevor Rogers",
+      "bookmaker_title": "TheOddsAPI consensus (median, US books)",
+      "moneyline": {
+        "home_odds": 103,
+        "away_odds": -119
+      },
+      "total": {
+        "line": 8.0,
+        "over_odds": -115,
+        "under_odds": -106
+      }
+    },
+    {
+      "event_id": "823503",
+      "commence_time": "2026-08-27T23:05:00Z",
+      "home_team": "New York Yankees",
+      "away_team": "Houston Astros",
+      "home_pitcher": "Gerrit Cole",
+      "away_pitcher": "Hayden Wesneski",
+      "bookmaker_title": "TheOddsAPI consensus (median, US books)",
+      "moneyline": {
+        "home_odds": -157,
+        "away_odds": 139
+      },
+      "total": {
+        "line": 8.0,
+        "over_odds": -118,
+        "under_odds": -100
+      }
+    },
+    {
+      "event_id": "822771",
+      "commence_time": "2026-08-27T23:07:00Z",
+      "home_team": "Toronto Blue Jays",
+      "away_team": "Kansas City Royals",
+      "home_pitcher": "Spencer Arrighetti",
+      "away_pitcher": "Noah Cameron",
+      "bookmaker_title": "TheOddsAPI consensus (median, US books)",
+      "moneyline": {
+        "home_odds": -101,
+        "away_odds": -109
+      },
+      "total": {
+        "line": 8.0,
+        "over_odds": -118,
+        "under_odds": -101
+      }
+    },
+    {
+      "event_id": "823581",
+      "commence_time": "2026-08-27T23:10:00Z",
+      "home_team": "New York Mets",
+      "away_team": "Milwaukee Brewers",
+      "home_pitcher": "Sean Manaea",
+      "away_pitcher": "Jacob Misiorowski",
+      "bookmaker_title": "TheOddsAPI consensus (median, US books)",
+      "moneyline": {
+        "home_odds": 190,
+        "away_odds": -216
+      },
+      "total": {
+        "line": 7.0,
+        "over_odds": -115,
+        "under_odds": -105
+      }
+    },
+    {
+      "event_id": "824879",
+      "commence_time": "2026-08-27T23:15:00Z",
+      "home_team": "Atlanta Braves",
+      "away_team": "Los Angeles Dodgers",
+      "home_pitcher": "Chris Sale",
+      "away_pitcher": "Yoshinobu Yamamoto",
+      "bookmaker_title": "TheOddsAPI consensus (median, US books)",
+      "moneyline": {
+        "home_odds": -112,
+        "away_odds": -101
+      },
+      "total": {
+        "line": 7.0,
+        "over_odds": -114,
+        "under_odds": -111
+      }
+    },
+    {
+      "event_id": "823179",
+      "commence_time": "2026-08-28T01:45:00Z",
+      "home_team": "San Francisco Giants",
+      "away_team": "Arizona Diamondbacks",
+      "home_pitcher": "Landen Roupp",
+      "away_pitcher": "Jose Cabrera",
+      "bookmaker_title": "TheOddsAPI consensus (median, US books)",
+      "moneyline": {
+        "home_odds": -106,
+        "away_odds": -110
+      },
+      "total": {
+        "line": 8.0,
+        "over_odds": -105,
+        "under_odds": -115
+      }
+    }
+  ]
+}
